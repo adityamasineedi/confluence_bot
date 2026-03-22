@@ -1,0 +1,70 @@
+{
+  "name": "confluence_bot — signal alert workflow",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Signal Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "path": "confluence-signal",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "responseData": "allEntries"
+      }
+    },
+    {
+      "id": "parse-signal",
+      "name": "Parse Signal",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "name": "symbol",    "value": "={{ $json.symbol }}",    "type": "string" },
+            { "name": "regime",    "value": "={{ $json.regime }}",    "type": "string" },
+            { "name": "direction", "value": "={{ $json.direction }}", "type": "string" },
+            { "name": "score",     "value": "={{ $json.score }}",     "type": "number" },
+            { "name": "signals",   "value": "={{ $json.signals }}",   "type": "object" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "telegram-alert",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🔔 *{{ $json.symbol }}* — {{ $json.regime }} {{ $json.direction }}\nScore: {{ $json.score }}\nSignals: {{ JSON.stringify($json.signals) }}",
+        "parseMode": "Markdown"
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Signal Webhook": {
+      "main": [
+        [{ "node": "Parse Signal", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Signal": {
+      "main": [
+        [{ "node": "Send Telegram Alert", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["confluence_bot", "trading", "alerts"]
+}

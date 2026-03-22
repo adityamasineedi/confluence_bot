@@ -1,0 +1,23 @@
+[Unit]
+Description=confluence_bot — multi-regime crypto trading bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=confluence
+WorkingDirectory=/opt/confluence_bot
+EnvironmentFile=/opt/confluence_bot/.env
+ExecStart=/opt/confluence_bot/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=confluence_bot
+
+# Safety limits
+MemoryMax=1G
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target

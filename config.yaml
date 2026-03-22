@@ -1,0 +1,123 @@
+# confluence_bot configuration
+# API keys must NEVER be placed here — use .env / environment variables
+
+# ── Symbols & timeframes ────────────────────────────────────────────────────
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+
+timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  - 4h
+
+# How often (seconds) the main evaluation loop runs
+loop_interval_seconds: 60
+
+# ── Regime detection ─────────────────────────────────────────────────────────
+regime:
+  # ── RegimeDetector (class-based, hysteresis) ─────────────────────────────
+  adx_range_threshold: 20         # all 3 recent ADX readings < this → enter RANGE
+  adx_trend_threshold: 25         # ADX > this while in RANGE → exit RANGE (hysteresis)
+  range_size_max_pct: 0.12        # max (high-low)/mid over 20×4H bars to confirm RANGE
+  crash_weekly_drop: -0.12        # 7-day close change < this (−12 %) → crash candidate
+  ema_crash_period: 50            # EMA period for crash baseline
+  trend_tf: "4h"                  # timeframe used for ADX
+
+  # ── Legacy fields (kept for backward compat) ────────────────────────────
+  crash_drawdown_pct: 15.0
+  crash_window_candles: 24
+  trend_adx_threshold: 25.0
+  range_atr_ratio_max: 0.02
+  min_range_candles: 20
+
+# ── Score thresholds ─────────────────────────────────────────────────────────
+thresholds:
+  trend_long_fire: 0.65
+  trend_short_fire: 0.65
+  range_long_fire: 0.60
+  range_short_fire: 0.60
+  crash_short_fire: 0.75          # higher bar for crash shorts
+
+# ── Signal weights (trend LONG) ──────────────────────────────────────────────
+weights:
+  trend_long:
+    cvd_bullish:   0.20
+    liq_sweep:     0.15
+    oi_funding:    0.15
+    vpvr_support:  0.15
+    htf_structure: 0.15
+    order_block:   0.10
+    options_flow:  0.05
+    whale_flow:    0.05
+
+  range_long:
+    absorption:      0.25
+    wyckoff_spring:  0.20
+    perp_basis:      0.10
+    options_skew:    0.10
+    anchored_vwap:   0.15
+    time_distribution: 0.10
+    call_skew_roc:   0.10
+
+  range_short:
+    ask_absorption: 0.25
+    upthrust:       0.25
+    perp_basis:     0.10
+    options_skew:   0.10
+    anchored_vwap:  0.15
+    time_distribution: 0.15
+
+  bear:
+    cvd_bearish:     0.20
+    bear_ob:         0.15
+    oi_flush:        0.20
+    htf_lower_high:  0.20
+    funding_extreme: 0.15
+    whale_inflow:    0.10
+
+  crash:
+    dead_cat:       0.30
+    liq_grab_short: 0.30
+    cvd_bearish:    0.15
+    oi_flush:       0.15
+    whale_inflow:   0.10
+
+# ── Risk management ──────────────────────────────────────────────────────────
+risk:
+  risk_per_trade: 0.01            # 1% account risk per trade
+  max_open_positions: 3
+  max_position_size_usdt: 5000
+  rr_ratio: 2.5                   # Risk:Reward ratio (TP = entry ± stop_dist * rr_ratio)
+  leverage: 5                     # Binance Futures leverage
+
+# ── Hard filters ─────────────────────────────────────────────────────────────
+filters:
+  min_24h_volume_usdt: 50000000   # ignore illiquid markets
+  max_spread_pct: 0.05            # max bid/ask spread as % of price
+  news_blackout_minutes: 15       # no entries within N min of major news
+
+# ── CVD settings ─────────────────────────────────────────────────────────────
+cvd:
+  slope_window: 20                # candles to compute slope over
+  divergence_window: 50
+  min_delta_ratio: 0.3            # delta / avg_volume threshold
+
+# ── Funding rate ─────────────────────────────────────────────────────────────
+funding:
+  extreme_positive: 0.001         # 0.1% per 8h (bearish contrarian)
+  extreme_negative: -0.001        # -0.1% (crash panic)
+  neutral_band: 0.0003            # ±0.03% = neutral for range
+
+# ── VPVR ─────────────────────────────────────────────────────────────────────
+vpvr:
+  lookback_candles: 200
+  hvn_tolerance_pct: 0.5          # price within 0.5% of HVN to trigger
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  db_path: "confluence_bot.db"
+  metrics_host: "0.0.0.0"
+  metrics_port: 8000
