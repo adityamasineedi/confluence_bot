@@ -16,9 +16,11 @@ with open(_CONFIG_PATH) as _f:
 
 class Regime(StrEnum):
     """Market regime.  StrEnum so comparisons against plain strings still work."""
-    TREND = "TREND"
-    RANGE = "RANGE"
-    CRASH = "CRASH"
+    TREND    = "TREND"
+    RANGE    = "RANGE"
+    CRASH    = "CRASH"
+    PUMP     = "PUMP"       # parabolic upside — mirror of CRASH
+    BREAKOUT = "BREAKOUT"   # price just left a RANGE boundary with momentum
 
 
 # ── Numpy math helpers ────────────────────────────────────────────────────────
@@ -179,39 +181,59 @@ class RegimeDetector:
     _RANGE_4H_BARS  = 20   # candles for range-size check
     _DAILY_WINDOW   = 60   # daily candles for crash / EMA
 
+    _BREAKOUT_WINDOW = 3   # bars after range exit where BREAKOUT can fire (tight window)
+
     def __init__(self) -> None:
         # symbol -> list of last 3 ADX float readings (oldest first)
         self._adx_history: dict[str, list[float]] = {}
         # symbol -> True while locked in RANGE mode
         self._in_range: dict[str, bool] = {}
+        # Breakout tracking — populated when we exit RANGE
+        self._range_exit_countdown: dict[str, int]                = {}
+        self._range_bounds_at_exit: dict[str, tuple[float, float]] = {}
+        self._breakout_direction:   dict[str, str]                = {}
+        # PUMP: transition-based — only fires on the bar where pump starts
+        self._pump_active: dict[str, bool] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def detect(self, symbol: str, cache) -> Regime:
-        """Classify the current regime.  Never raises; returns RANGE on data gaps."""
+        """Classify the current regime.  Never raises; returns TREND on data gaps."""
         rcfg = _cfg.get("regime", {})
 
         adx_range_thr    = float(rcfg.get("adx_range_threshold",  20.0))
         adx_trend_thr    = float(rcfg.get("adx_trend_threshold",   25.0))
         range_size_max   = float(rcfg.get("range_size_max_pct",     0.12))
         crash_drop_thr   = float(rcfg.get("crash_weekly_drop",     -0.12))
-        ema_period       = int(rcfg.get("ema_crash_period",          50))
+        pump_gain_thr    = float(rcfg.get("pump_weekly_gain",        0.12))
+        ema_period       = int(rcfg.get("ema_crash_period",           50))
 
-        # ── Step 1: Crash check ───────────────────────────────────────────────
+        # ── Step 1: PUMP — transition-based (only fires on the FIRST bar of a
+        #            new pump cycle to avoid re-firing every bar during bull runs) ─
+        was_pumping = self._pump_active.get(symbol, False)
+        is_pumping  = self._is_pump(symbol, cache, ema_period, pump_gain_thr)
+        self._pump_active[symbol] = is_pumping
+        if is_pumping and not was_pumping:
+            # Just crossed into pump territory — fire PUMP this bar only
+            return Regime.PUMP
+        # If still pumping after first bar → fall through to TREND (handled as TREND LONG)
+
+        # ── Step 2: Crash check ───────────────────────────────────────────────
         if self._is_crash(symbol, cache, ema_period, crash_drop_thr):
             return Regime.CRASH
 
-        # ── Step 2: ADX on 4H ────────────────────────────────────────────────
+        # ── Step 3: ADX on 4H ────────────────────────────────────────────────
         adx_info = self._get_adx(symbol, cache)
         adx      = adx_info["adx"]
 
-        # ── Step 3: ADX hysteresis ────────────────────────────────────────────
+        # ── Step 4: ADX hysteresis — track was_ranging BEFORE update ─────────
+        was_ranging = self._in_range.get(symbol, False)
         self._update_adx_history(symbol, adx)
         history = self._adx_history[symbol]
 
-        currently_ranging = self._in_range.get(symbol, False)
+        currently_ranging = was_ranging   # start from prior state
 
-        if not currently_ranging:
+        if not was_ranging:
             # Enter RANGE only when all 3 recent readings are below the entry threshold
             if len(history) == 3 and all(v < adx_range_thr for v in history):
                 self._in_range[symbol] = True
@@ -222,9 +244,22 @@ class RegimeDetector:
                 self._in_range[symbol] = False
                 currently_ranging = False
 
-        # ── Step 4: Range size confirmation ──────────────────────────────────
+        # ── Step 5: Capture range bounds on range exit (for breakout window) ─
+        if was_ranging and not currently_ranging:
+            rng_high = cache.get_range_high(symbol)
+            rng_low  = cache.get_range_low(symbol)
+            if rng_high is not None and rng_low is not None:
+                self._range_exit_countdown[symbol] = self._BREAKOUT_WINDOW
+                self._range_bounds_at_exit[symbol] = (float(rng_high), float(rng_low))
+
+        # ── Step 6: Range size confirmation ──────────────────────────────────
         if currently_ranging and self._is_tight_range(symbol, cache, range_size_max):
             return Regime.RANGE
+
+        # ── Step 7: Breakout window (only active for _BREAKOUT_WINDOW bars
+        #            after exiting a confirmed RANGE) ──────────────────────────
+        if self._check_breakout(symbol, cache, rcfg):
+            return Regime.BREAKOUT
 
         return Regime.TREND
 
@@ -264,6 +299,91 @@ class RegimeDetector:
             and change_7d < crash_drop_thr
             and price < recent_min
         )
+
+    # ── Pump detection (mirror of crash) ─────────────────────────────────────
+
+    def _is_pump(
+        self,
+        symbol: str,
+        cache,
+        ema_period: int,
+        pump_gain_thr: float,
+    ) -> bool:
+        """True when price is in a parabolic upside move.
+
+        Conditions (all must hold):
+        1. Price above the EMA-50 on 1D (confirmed uptrend baseline)
+        2. 7-day % gain > pump_gain_thr (e.g. +12%) — violent upside momentum
+        3. Price making new highs vs prior 4 daily bars (no exhaustion / reversal)
+        """
+        closes_1d = np.array(cache.get_closes(symbol, window=self._DAILY_WINDOW, tf="1d"))
+        if len(closes_1d) < ema_period + 1:
+            return False
+
+        ema   = _np_ema(closes_1d, ema_period)
+        ema50 = ema[-1]
+        if ema50 == 0.0:
+            return False
+
+        price = closes_1d[-1]
+
+        # Must be above EMA50 (trending up, not a dead-cat bounce)
+        if price <= ema50:
+            return False
+
+        # 7-day % gain must exceed threshold
+        if len(closes_1d) < 8:
+            return False
+        change_7d = (price - closes_1d[-8]) / closes_1d[-8]
+        if change_7d < pump_gain_thr:
+            return False
+
+        # Still making new highs (momentum not exhausted)
+        if len(closes_1d) < 5:
+            return False
+        recent_max = float(closes_1d[-5:-1].max())
+        return price > recent_max
+
+    # ── Breakout detection ─────────────────────────────────────────────────────
+
+    def _check_breakout(self, symbol: str, cache, rcfg: dict) -> bool:
+        """Return True if we're within the breakout window and price confirmed the break.
+
+        The breakout window opens for _BREAKOUT_WINDOW bars after a RANGE is exited.
+        Direction is stored in _breakout_direction[symbol] for the scorer to read.
+        """
+        countdown = self._range_exit_countdown.get(symbol, 0)
+        if countdown <= 0:
+            return False
+
+        # Decrement countdown — regardless of whether breakout fires this bar
+        self._range_exit_countdown[symbol] = countdown - 1
+
+        bounds = self._range_bounds_at_exit.get(symbol)
+        if not bounds:
+            return False
+
+        rng_high, rng_low = bounds
+        margin = float(rcfg.get("breakout_margin_pct", 0.003))
+
+        # Use closes on 1h for the most current price
+        price_data = cache.get_closes(symbol, window=1, tf="1h")
+        if not price_data:
+            return False
+        price = price_data[-1]
+
+        if price > rng_high * (1.0 + margin):
+            self._breakout_direction[symbol] = "LONG"
+            return True
+        elif price < rng_low * (1.0 - margin):
+            self._breakout_direction[symbol] = "SHORT"
+            return True
+
+        return False
+
+    def get_breakout_direction(self, symbol: str) -> str:
+        """Return 'LONG', 'SHORT', or 'NEUTRAL' for the most recent breakout."""
+        return self._breakout_direction.get(symbol, "NEUTRAL")
 
     # ── ADX computation ───────────────────────────────────────────────────────
 
@@ -325,6 +445,10 @@ class RegimeDetector:
         """Clear all state for *symbol* (e.g. after a data reload)."""
         self._adx_history.pop(symbol, None)
         self._in_range.pop(symbol, None)
+        self._range_exit_countdown.pop(symbol, None)
+        self._range_bounds_at_exit.pop(symbol, None)
+        self._breakout_direction.pop(symbol, None)
+        self._pump_active.pop(symbol, None)
 
 
 # ── Module-level singleton + backward-compat functions ───────────────────────
@@ -355,7 +479,7 @@ def get_trend_bias(symbol: str, cache) -> Literal["LONG", "SHORT", "NEUTRAL"]:
         [c["c"] for c in ohlcv],
         period=period,
     )
-    if abs(info["plus_di"] - info["minus_di"]) < 2.0:
+    if abs(info["plus_di"] - info["minus_di"]) < 5.0:
         return "NEUTRAL"
     return "LONG" if info["plus_di"] > info["minus_di"] else "SHORT"
 
@@ -373,3 +497,48 @@ def get_adx_info(symbol: str, cache, tf: str = "4h") -> dict:
         [c["c"] for c in ohlcv],
         period=period,
     )
+
+
+def get_adx_series(symbol: str, cache, tf: str = "4h", n: int = 4) -> list[float]:
+    """Return the last *n* ADX readings (oldest first).  Empty list on insufficient data.
+
+    Used to compute ADX slope — whether momentum is accelerating or exhausting.
+    Requires window = n + 2*period bars, so for n=4, period=14: 32 bars.
+    """
+    period = 14
+    window = n + 2 * period
+    ohlcv  = cache.get_ohlcv(symbol, window=window, tf=tf)
+    if len(ohlcv) < period * 2 + 1:
+        return []
+
+    h = np.array([c["h"] for c in ohlcv])
+    l = np.array([c["l"] for c in ohlcv])
+    c = np.array([c["c"] for c in ohlcv])
+
+    prev_c = c[:-1]
+    h1, l1 = h[1:], l[1:]
+    tr       = np.maximum(h1 - l1, np.maximum(np.abs(h1 - prev_c), np.abs(l1 - prev_c)))
+    up       = h[1:] - h[:-1]
+    dn       = l[:-1] - l[1:]
+    plus_dm  = np.where((up > dn) & (up > 0), up, 0.0)
+    minus_dm = np.where((dn > up) & (dn > 0), dn, 0.0)
+
+    s_tr  = _np_wilder_smooth(tr, period)
+    s_pdm = _np_wilder_smooth(plus_dm, period)
+    s_mdm = _np_wilder_smooth(minus_dm, period)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        plus_di  = np.where(s_tr > 0, 100.0 * s_pdm / s_tr, 0.0)
+        minus_di = np.where(s_tr > 0, 100.0 * s_mdm / s_tr, 0.0)
+
+    di_sum = plus_di + minus_di
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dx = np.where(di_sum > 0, 100.0 * np.abs(plus_di - minus_di) / di_sum, 0.0)
+
+    dx_valid = dx[period - 1:]
+    s_adx    = _np_wilder_smooth(dx_valid, period)
+    valid    = s_adx[period - 1:]   # values with full Wilder warmup
+
+    if len(valid) == 0:
+        return []
+    return list(valid[-n:] if len(valid) >= n else valid)

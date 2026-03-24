@@ -1,4 +1,8 @@
-"""Crash SHORT scorer — aggregates crash signals for high-conviction short setups."""
+"""Crash SHORT scorer — aggregates crash signals for high-conviction short setups.
+
+Uses normalised scoring: signals backed by unavailable data sources are excluded
+from the denominator.
+"""
 import os
 import yaml
 
@@ -20,6 +24,28 @@ _THRESHOLD = _cfg["thresholds"]["crash_short_fire"]
 _MANDATORY = {"dead_cat"}
 
 
+def _available_signals(symbol: str, cache) -> set[str]:
+    # dead_cat, liq_grab_short, oi_flush use OHLCV only — always available
+    available = {"dead_cat", "liq_grab_short", "oi_flush"}
+    if cache.get_cvd(symbol, 1, "5m"):
+        available.add("cvd_bearish")
+    if cache.get_exchange_inflow(symbol) is not None:
+        available.add("whale_inflow")
+    return available
+
+
+def _normalised_score(
+    signals: dict[str, bool],
+    weights: dict[str, float],
+    available: set[str],
+) -> float:
+    denom = sum(w for k, w in weights.items() if k in available)
+    if denom == 0.0:
+        return 0.0
+    numer = sum(w for k, w in weights.items() if k in available and signals.get(k, False))
+    return numer / denom
+
+
 async def score(symbol: str, cache) -> dict:
     """Score a symbol for a CRASH SHORT setup.
 
@@ -35,10 +61,8 @@ async def score(symbol: str, cache) -> dict:
         "whale_inflow":   check_whale_exchange_inflow(symbol, cache),
     }
 
-    score_val = sum(
-        _WEIGHTS.get(name, 0.0) for name, hit in signals.items() if hit
-    )
-
+    avail        = _available_signals(symbol, cache)
+    score_val    = _normalised_score(signals, _WEIGHTS, avail)
     mandatory_ok = all(signals[m] for m in _MANDATORY)
     fire = (
         score_val >= _THRESHOLD

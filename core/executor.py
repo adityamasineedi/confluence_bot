@@ -56,9 +56,15 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
         log.warning("RR compute failed for %s %s — skipping", direction, symbol)
         return None
 
-    # Gate: RR ≥ 2.5
     stop_dist = abs(entry - stop)
-    tp_dist   = abs(tp - entry)
+
+    # PUMP and BREAKOUT: extend TP to 5× and flag trailing stop
+    use_trailing = regime in ("PUMP", "BREAKOUT")
+    if use_trailing:
+        tp = (entry + stop_dist * 5.0) if direction == "LONG" else (entry - stop_dist * 5.0)
+
+    # Gate: RR ≥ 2.5 (trailing trades always pass since TP set to 5×)
+    tp_dist = abs(tp - entry)
     if stop_dist == 0 or tp_dist / stop_dist < _cfg["risk"]["rr_ratio"]:
         log.debug("RR below threshold for %s %s — skipping", direction, symbol)
         return None
@@ -80,6 +86,7 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
             "take_profit": tp,
             "qty":         qty,
             "regime":      regime,
+            "trailing":    use_trailing,
         }
         log.info(
             "[PAPER] %s %s qty=%.4f entry=%.4f sl=%.4f tp=%.4f",
@@ -103,12 +110,18 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
         order["qty"]         = qty
         order["regime"]      = regime
 
-    # Log and mark active
+    # Log, notify, mark active
     try:
         from logging_.logger import TradeLogger
         await TradeLogger().log_trade(score_dict, order)
     except Exception as exc:
         log.warning("TradeLogger.log_trade failed: %s", exc)
+
+    try:
+        from notifications.telegram import send_signal_alert
+        await send_signal_alert(score_dict, order)
+    except Exception as exc:
+        log.warning("Telegram alert failed: %s", exc)
 
     _active_deals.add(deal_key)
     log.info("Position opened: %s %s — active deals: %d", direction, symbol, len(_active_deals))
@@ -119,3 +132,11 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
 def close_deal(symbol: str, direction: str) -> None:
     """Remove a closed/cancelled position from the active set."""
     _active_deals.discard((symbol, direction))
+
+
+def restore_active_deals(deals: list[tuple[str, str]]) -> None:
+    """Repopulate _active_deals from persisted DB state on startup."""
+    for deal in deals:
+        _active_deals.add(deal)
+    if deals:
+        log.info("Restored %d active deal(s) from DB: %s", len(deals), deals)

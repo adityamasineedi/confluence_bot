@@ -117,10 +117,18 @@ class BinanceRestPoller:
             self._fetch_funding(session, symbol),
             self._fetch_klines(session, symbol, "1w", 5),
             self._fetch_klines(session, symbol, "1d", 60 if load_history else 2),
+            # 4H: need 210 bars for EMA200 + ADX warmup on startup; 2 bars to stay current
+            self._fetch_klines(session, symbol, "4h", 210 if load_history else 2),
+            self._fetch_klines(session, symbol, "1h", 100 if load_history else 2),
+            self._fetch_klines(session, symbol, "15m", 30 if load_history else 2),
             self._fetch_bybit_oi(session, symbol),
             self._fetch_okx_oi(session, symbol),
             return_exceptions=True,
         )
+        # Compute synthetic liq clusters from OHLCV swing pivots (free alternative
+        # to CoinGlass paid-tier liquidation heatmap). This enables check_liq_sweep()
+        # and provides approximate stop-cluster levels for signal scoring.
+        self._update_synthetic_liq_clusters(symbol)
 
     # ── Binance endpoints ─────────────────────────────────────────────────────
 
@@ -133,7 +141,7 @@ class BinanceRestPoller:
                 data = await resp.json()
             ts = int(data["time"])
             oi = float(data["openInterest"])
-            self._cache.push_oi(symbol, ts, oi)
+            self._cache.push_oi(symbol, ts, oi, exchange="binance")
             log.debug("OI %s: %.2f", symbol, oi)
         except Exception as exc:
             log.warning("_fetch_oi(%s) failed: %s", symbol, exc)
@@ -173,6 +181,53 @@ class BinanceRestPoller:
         except Exception as exc:
             log.warning("_fetch_klines(%s, %s) failed: %s", symbol, interval, exc)
 
+    # ── Synthetic liquidation clusters ───────────────────────────────────────
+
+    def _update_synthetic_liq_clusters(self, symbol: str) -> None:
+        """Derive liq clusters from 4H OHLCV swing pivots.
+
+        Real liq clusters (CoinGlass paid) show where leveraged stops concentrate.
+        This approximation uses the classic observation that stops accumulate at
+        recent swing highs (shorts stop out above) and swing lows (longs stop out
+        below).  A 5-bar pivot rule identifies pivots; volume × price gives a
+        rough cluster size in USDT.
+
+        Clusters are refreshed every poll cycle (~60 s) using the current 4H data.
+        """
+        try:
+            candles = self._cache.get_ohlcv(symbol, window=60, tf="4h")
+            if len(candles) < 10:
+                return
+
+            clusters: list[dict] = []
+            # 5-bar pivot: centre bar must be the local extremum over ±2 neighbours
+            for i in range(2, len(candles) - 2):
+                bar   = candles[i]
+                hi    = bar["h"]
+                lo    = bar["l"]
+                price = bar["c"]
+                size  = bar["v"] * price  # approximate USDT notional
+
+                is_swing_high = (
+                    hi >= candles[i - 1]["h"] and hi >= candles[i - 2]["h"] and
+                    hi >= candles[i + 1]["h"] and hi >= candles[i + 2]["h"]
+                )
+                is_swing_low = (
+                    lo <= candles[i - 1]["l"] and lo <= candles[i - 2]["l"] and
+                    lo <= candles[i + 1]["l"] and lo <= candles[i + 2]["l"]
+                )
+
+                if is_swing_high:
+                    clusters.append({"price": hi,  "size_usd": size, "side": "sell"})
+                if is_swing_low:
+                    clusters.append({"price": lo, "size_usd": size, "side": "buy"})
+
+            if clusters:
+                self._cache.set_liq_clusters(symbol, clusters)
+                log.debug("Synthetic liq clusters %s: %d pivots", symbol, len(clusters))
+        except Exception as exc:
+            log.debug("_update_synthetic_liq_clusters(%s) failed: %s", symbol, exc)
+
     # ── Cross-exchange OI ─────────────────────────────────────────────────────
 
     async def _fetch_bybit_oi(self, session: aiohttp.ClientSession, symbol: str) -> None:
@@ -193,7 +248,7 @@ class BinanceRestPoller:
             ts  = int(entry["timestamp"])
             # Store with the same symbol key; OI series mixes exchange snapshots.
             # Signal functions use the series for trend/direction, not absolute level.
-            self._cache.push_oi(symbol, ts, oi)
+            self._cache.push_oi(symbol, ts, oi, exchange="bybit")
             log.debug("Bybit OI %s: %.2f", symbol, oi)
         except Exception as exc:
             log.debug("_fetch_bybit_oi(%s) failed: %s", symbol, exc)
@@ -213,7 +268,7 @@ class BinanceRestPoller:
             entry = body["data"][0]
             oi = float(entry["oiCcy"])   # OI in base coin units (e.g. BTC)
             ts = int(entry["ts"])
-            self._cache.push_oi(symbol, ts, oi)
+            self._cache.push_oi(symbol, ts, oi, exchange="okx")
             log.debug("OKX OI %s: %.4f", symbol, oi)
         except Exception as exc:
             log.debug("_fetch_okx_oi(%s) failed: %s", symbol, exc)

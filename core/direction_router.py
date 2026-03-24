@@ -139,11 +139,9 @@ class DirectionRouter:
 async def route_direction(symbol: str, cache, regime: Regime) -> list[dict]:
     """Run the appropriate scorer(s) for the given regime concurrently.
 
-    This function handles scorer orchestration (which scorers fire and
-    whether they pass thresholds).  For pre-scorer direction gating,
-    use DirectionRouter.get_direction() instead.
-
-    Returns only score dicts where fire=True.
+    Returns ALL score dicts (fire=True and fire=False) so callers can log
+    every evaluation for observability.  Callers check score_dict["fire"]
+    to decide whether to execute.
     """
     coros = _build_coros(symbol, cache, regime)
     if not coros:
@@ -151,24 +149,28 @@ async def route_direction(symbol: str, cache, regime: Regime) -> list[dict]:
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
-    fired: list[dict] = []
+    results: list[dict] = []
     for result in raw:
         if isinstance(result, Exception):
             log.error("Scorer raised for %s [%s]: %s", symbol, regime, result)
             continue
-        if result.get("fire"):
-            fired.append(result)
+        results.append(result)
 
-    return fired
+    return results
 
 
 def _build_coros(symbol: str, cache, regime: Regime) -> list:
-    if regime == "TREND":
+    r = str(regime)
+    if r == "TREND":
         return _trend_coros(symbol, cache)
-    if regime == "RANGE":
+    if r == "RANGE":
         return _range_coros(symbol, cache)
-    if regime == "CRASH":
+    if r == "CRASH":
         return _crash_coros(symbol, cache)
+    if r == "PUMP":
+        return _pump_coros(symbol, cache)
+    if r == "BREAKOUT":
+        return _breakout_coros(symbol, cache, regime)
     return []
 
 
@@ -181,7 +183,8 @@ def _trend_coros(symbol: str, cache) -> list:
         return [trend_long(symbol, cache)]
     if bias == "SHORT":
         return [bear_short(symbol, cache)]
-    return [trend_long(symbol, cache), bear_short(symbol, cache)]
+    # NEUTRAL — DI lines not aligned; no edge, no signal
+    return []
 
 
 def _range_coros(symbol: str, cache) -> list:
@@ -195,3 +198,22 @@ def _crash_coros(symbol: str, cache) -> list:
     from .crash_scorer import score as crash_short
 
     return [crash_short(symbol, cache)]
+
+
+def _pump_coros(symbol: str, cache) -> list:
+    from .pump_scorer import score as pump_long
+
+    return [pump_long(symbol, cache)]
+
+
+def _breakout_coros(symbol: str, cache, regime: Regime) -> list:
+    from .breakout_scorer import score_long, score_short
+    from .regime_detector import _detector
+
+    bdir = _detector.get_breakout_direction(symbol)
+    if bdir == "LONG":
+        return [score_long(symbol, cache)]
+    if bdir == "SHORT":
+        return [score_short(symbol, cache)]
+    # Direction not yet determined — score both and let fire decide
+    return [score_long(symbol, cache), score_short(symbol, cache)]

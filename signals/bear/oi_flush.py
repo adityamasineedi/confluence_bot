@@ -1,7 +1,7 @@
 """OI flush signal — open interest liquidation cascade (bearish)."""
 
 _OI_PEAK_WINDOW = 12     # look back N readings to find the recent OI peak
-_OI_DROP_MIN    = 0.05   # OI must have dropped ≥ 5 % from peak (flush in progress)
+_OI_DROP_MIN    = 0.03   # OI must have dropped ≥ 3 % from peak (5% was too restrictive)
 _PRICE_DROP_MIN = 0.01   # price must also be down ≥ 1 % from the OI-peak candle
 
 

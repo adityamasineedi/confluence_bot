@@ -62,7 +62,8 @@ class DataCache:
         self._account_balance: float = 0.0
 
         # Rolling deques via defaultdict (created on first write)
-        self._oi:         defaultdict[str, deque] = defaultdict(
+        # OI keyed by (symbol, exchange) — prevents mixing incomparable units
+        self._oi:         defaultdict[tuple, deque] = defaultdict(
             lambda: deque(maxlen=_OI_MAXLEN))
         self._basis:      defaultdict[str, deque] = defaultdict(
             lambda: deque(maxlen=_BASIS_MAXLEN))
@@ -164,9 +165,9 @@ class DataCache:
 
     # ── Open Interest ─────────────────────────────────────────────────────────
 
-    def get_oi(self, symbol: str, offset_hours: int = 0) -> float | None:
-        """Return OI value `offset_hours` ago (0 = latest). None if unavailable."""
-        dq = self._oi.get(symbol)
+    def get_oi(self, symbol: str, offset_hours: int = 0, exchange: str = "binance") -> float | None:
+        """Return OI value `offset_hours` ago (0 = latest) for a specific exchange."""
+        dq = self._oi.get((symbol, exchange))
         if not dq:
             return None
         snap = list(dq)
@@ -176,13 +177,22 @@ class DataCache:
         except IndexError:
             return snap[0]["oi"] if snap else None
 
-    def get_oi_history(self, symbol: str, window: int) -> list[float]:
-        """Return last `window` OI floats, oldest→newest. [] if unavailable."""
-        dq = self._oi.get(symbol)
+    def get_oi_history(self, symbol: str, window: int, exchange: str = "binance") -> list[float]:
+        """Return last `window` OI floats for a specific exchange, oldest→newest."""
+        dq = self._oi.get((symbol, exchange))
         if not dq:
             return []
         snap = list(dq)
         return [e["oi"] for e in snap[-window:]]
+
+    def get_oi_all_exchanges(self, symbol: str) -> dict[str, float]:
+        """Return latest OI per exchange. {} if no data."""
+        result = {}
+        for exchange in ("binance", "bybit", "okx"):
+            dq = self._oi.get((symbol, exchange))
+            if dq:
+                result[exchange] = list(dq)[-1]["oi"]
+        return result
 
     # ── Funding Rate ──────────────────────────────────────────────────────────
 
@@ -316,10 +326,10 @@ class DataCache:
         with self._lock:
             self._cvd_buf(symbol, tf).append(float(value))
 
-    def push_oi(self, symbol: str, ts: int, oi: float) -> None:
-        """Append an OI snapshot {ts, oi}."""
+    def push_oi(self, symbol: str, ts: int, oi: float, exchange: str = "binance") -> None:
+        """Append an OI snapshot {ts, oi} for a specific exchange."""
         with self._lock:
-            self._oi[symbol].append({"ts": ts, "oi": float(oi)})
+            self._oi[(symbol, exchange)].append({"ts": ts, "oi": float(oi)})
 
     def set_funding_rate(self, symbol: str, rate: float) -> None:
         with self._lock:

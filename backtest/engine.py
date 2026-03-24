@@ -10,15 +10,46 @@ import logging
 
 log = logging.getLogger(__name__)
 
-_RR_RATIO      = 2.5    # must match config.yaml risk.rr_ratio
-_MAX_HOLD_BARS = 48     # force-close after 48 × 1h bars (2 days)
-_WARMUP_BARS   = 210    # bars to skip for indicator warmup
+_RR_RATIO           = 2.5    # must match config.yaml risk.rr_ratio
+_PUMP_RR_MAX        = 5.0    # PUMP regime: let winners run to 5× before hard cap
+_MAX_HOLD_BARS      = 48     # force-close after 48 × 1h bars (2 days)
+_WARMUP_BARS        = 210    # bars to skip for indicator warmup
+_TRAIL_ACTIVATE_RR  = 1.0    # trailing stop activates once 1R in profit (locks in 0R min)
+_TRAIL_DIST_MULT    = 1.0    # trailing distance = 1× stop dist
+
+
+def _update_trailing(trade: dict, bar: dict) -> None:
+    """Update trailing stop in-place for PUMP trades.
+
+    Activates once the trade is _TRAIL_ACTIVATE_RR × risk in profit.
+    Tracks the extreme price (high for LONG, low for SHORT) and ratchets
+    the stop up / down — never in the adverse direction.
+    """
+    if not trade.get("trailing"):
+        return
+
+    stop_dist = trade["trail_dist"]
+
+    if trade["direction"] == "LONG":
+        trade["trail_extreme"] = max(trade.get("trail_extreme", trade["entry"]), bar["h"])
+        # Only activate once price has moved TRAIL_ACTIVATE_RR × stop_dist above entry
+        if trade["trail_extreme"] >= trade["entry"] + stop_dist * _TRAIL_ACTIVATE_RR:
+            new_sl = trade["trail_extreme"] - stop_dist * _TRAIL_DIST_MULT
+            if new_sl > trade["sl"]:
+                trade["sl"] = round(new_sl, 8)
+    else:
+        trade["trail_extreme"] = min(trade.get("trail_extreme", trade["entry"]), bar["l"])
+        if trade["trail_extreme"] <= trade["entry"] - stop_dist * _TRAIL_ACTIVATE_RR:
+            new_sl = trade["trail_extreme"] + stop_dist * _TRAIL_DIST_MULT
+            if new_sl < trade["sl"]:
+                trade["sl"] = round(new_sl, 8)
 
 
 def _check_exit(trade: dict, bar: dict) -> dict | None:
     """Check SL/TP hit using bar high/low. SL wins on simultaneous hit."""
-    h, l = bar["h"], bar["l"]
-    risk = trade["risk_amount"]
+    h, l   = bar["h"], bar["l"]
+    risk   = trade["risk_amount"]
+    rr     = _PUMP_RR_MAX if trade.get("trailing") else _RR_RATIO
 
     if trade["direction"] == "LONG":
         sl_hit = l <= trade["sl"]
@@ -31,11 +62,18 @@ def _check_exit(trade: dict, bar: dict) -> dict | None:
         sl_hit, tp_hit = True, False   # worst-case: SL first
 
     if sl_hit:
+        # For trailing trades, calculate actual PnL from current SL (not entry)
+        if trade.get("trailing") and trade["sl"] > trade["entry"] and trade["direction"] == "LONG":
+            stop_dist = trade.get("trail_dist") or abs(trade["entry"] - trade["sl"])
+            actual_pnl = (trade["sl"] - trade["entry"]) / stop_dist * risk if stop_dist > 0 else -risk
+            actual_pnl = max(actual_pnl, -risk)
+            return {**trade, "exit_ts": bar["ts"], "outcome": "WIN" if actual_pnl > 0 else "LOSS",
+                    "pnl": round(actual_pnl, 2)}
         return {**trade, "exit_ts": bar["ts"], "outcome": "LOSS",
                 "pnl": round(-risk, 2)}
     if tp_hit:
         return {**trade, "exit_ts": bar["ts"], "outcome": "WIN",
-                "pnl": round(risk * _RR_RATIO, 2)}
+                "pnl": round(risk * rr, 2)}
     return None
 
 
@@ -84,6 +122,8 @@ async def run(
         score_trend_long, score_trend_short,
         score_range_long, score_range_short,
         score_crash,
+        score_pump,
+        score_breakout_long, score_breakout_short,
     )
 
     cache    = BacktestCache(ohlcv, oi, funding)
@@ -107,6 +147,12 @@ async def run(
     closed_trades: list[dict] = []
     bar_count = 0
 
+    # Consecutive-loss cooldown: after 2 back-to-back losses on the same symbol,
+    # pause new entries for 48 bars (2 days) to avoid chasing bad conditions.
+    _COOLDOWN_BARS   = 48
+    consec_losses:   dict[str, int] = {s: 0 for s in symbols}
+    cooldown_until:  dict[str, int] = {s: 0 for s in symbols}   # bar_ts epoch ms
+
     for bar in eval_bars:
         bar_ts = bar["ts"]
         cache.advance(bar_ts)
@@ -120,23 +166,35 @@ async def run(
         # ── Resolve open trades ───────────────────────────────────────────────
         still_open: list[dict] = []
         for trade in open_trades:
-            sym_bar = cache.get_ohlcv(trade["symbol"], window=1, tf="1h")
+            sym      = trade["symbol"]
+            sym_bar  = cache.get_ohlcv(sym, window=1, tf="1h")
             if not sym_bar:
                 still_open.append(trade)
                 continue
 
             current_bar = sym_bar[-1]
+            _update_trailing(trade, current_bar)   # ratchet SL for PUMP trades
             result      = _check_exit(trade, current_bar)
 
             if result is not None:
                 equity += result["pnl"]
                 result["equity_after"] = round(equity, 2)
                 closed_trades.append(result)
+                # Track consecutive losses for cooldown
+                if result["outcome"] == "LOSS":
+                    consec_losses[sym] = consec_losses.get(sym, 0) + 1
+                    if consec_losses[sym] >= 2:
+                        cooldown_until[sym] = bar_ts + _COOLDOWN_BARS * 3_600_000
+                        log.debug("Cooldown on %s until %s (2 consecutive losses)",
+                                  sym, _ts_str(cooldown_until[sym]))
+                else:
+                    consec_losses[sym] = 0   # any win/timeout resets streak
             elif bar_ts - trade["entry_ts"] >= _MAX_HOLD_BARS * 3_600_000:
                 closed = _force_close(trade, current_bar)
                 equity += closed["pnl"]
                 closed["equity_after"] = round(equity, 2)
                 closed_trades.append(closed)
+                consec_losses[sym] = 0   # timeout resets streak
             else:
                 still_open.append(trade)
 
@@ -145,6 +203,10 @@ async def run(
         # ── Score each symbol ─────────────────────────────────────────────────
         for symbol in symbols:
             if any(t["symbol"] == symbol for t in open_trades):
+                continue
+
+            # Skip if symbol is in consecutive-loss cooldown
+            if cooldown_until.get(symbol, 0) > bar_ts:
                 continue
 
             try:
@@ -162,6 +224,16 @@ async def run(
                     ]
                 elif regime == "CRASH":
                     candidates = [await score_crash(symbol, cache)]
+                elif regime == "PUMP":
+                    candidates = [await score_pump(symbol, cache)]
+                elif regime == "BREAKOUT":
+                    bdir = detector.get_breakout_direction(symbol)
+                    if bdir == "LONG":
+                        candidates = [await score_breakout_long(symbol, cache)]
+                    elif bdir == "SHORT":
+                        candidates = [await score_breakout_short(symbol, cache)]
+                    else:
+                        continue
                 else:
                     continue
 
@@ -185,19 +257,30 @@ async def run(
                     continue
 
                 risk_amount = round(equity * risk_pct, 4)
+                regime_str  = score_dict["regime"]
 
-                open_trades.append({
+                # PUMP and BREAKOUT trades use trailing stop + extended TP cap
+                use_trailing = regime_str in ("PUMP", "BREAKOUT")
+                stop_dist    = abs(entry - sl)
+
+                trade_rec = {
                     "symbol":      symbol,
-                    "regime":      score_dict["regime"],
+                    "regime":      regime_str,
                     "direction":   direction,
                     "entry":       entry,
                     "sl":          sl,
-                    "tp":          tp,
+                    "tp":          entry + stop_dist * _PUMP_RR_MAX if use_trailing and direction == "LONG"
+                                   else entry - stop_dist * _PUMP_RR_MAX if use_trailing
+                                   else tp,
                     "entry_ts":    bar_ts,
                     "score":       score_dict["score"],
                     "signals":     score_dict.get("signals", {}),
                     "risk_amount": risk_amount,
-                })
+                    "trailing":    use_trailing,
+                    "trail_dist":  stop_dist,
+                    "trail_extreme": entry,
+                }
+                open_trades.append(trade_rec)
                 break   # one trade per symbol per bar
 
     # Force-close remaining open trades at the final bar

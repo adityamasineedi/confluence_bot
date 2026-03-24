@@ -1,6 +1,6 @@
 """Upthrust signal — Wyckoff upthrust at range resistance (SHORT)."""
 
-_THRUST_DEPTH_MAX = 0.005   # wick may exceed range_high by up to 0.5 %
+_THRUST_DEPTH_MAX = 0.020   # wick may exceed range_high by up to 2 % (crypto wicks are deep)
 _VOL_SPIKE_MULT   = 1.5     # upthrust candle volume ≥ 1.5× vol MA
 
 

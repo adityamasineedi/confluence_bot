@@ -10,6 +10,7 @@ _RR_RATIO          = _cfg["risk"]["rr_ratio"]            # 2.5
 _RISK_PER_TRADE    = _cfg["risk"]["risk_per_trade"]       # 0.01 (1%)
 _MAX_SIZE_USDT     = _cfg["risk"]["max_position_size_usdt"]  # 5000
 _STOP_ATR_MULT     = 1.5   # stop = entry ± ATR × multiplier
+_PAPER_DEFAULT_BAL = 10_000.0  # default paper balance when no API key is set
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -66,7 +67,11 @@ def position_size(entry: float, stop: float, cache) -> float:
 
     balance = cache.get_account_balance()
     if balance <= 0.0:
-        return 0.0
+        paper_mode = os.environ.get("PAPER_MODE", "0") == "1"
+        if paper_mode:
+            balance = _PAPER_DEFAULT_BAL
+        else:
+            return 0.0
 
     risk_usdt = balance * _RISK_PER_TRADE
     size = risk_usdt / abs(entry - stop)

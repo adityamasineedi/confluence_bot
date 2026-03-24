@@ -230,6 +230,29 @@ class BinanceWebSocket:
 
 # ── Module-level convenience wrapper ─────────────────────────────────────────
 
+# Registry so external modules (metrics_api, health_check) can query CVD warmup
+_ws_instance: BinanceWebSocket | None = None
+
+
+def get_cvd_warmup_remaining(symbol: str) -> float:
+    """Return seconds until CVD is trusted for *symbol*. 0.0 = ready.
+
+    Thread-safe: reads from a plain dict (GIL-protected scalar read).
+    """
+    if _ws_instance is None:
+        return 0.0
+    return _ws_instance.cvd_warmup_remaining(symbol)
+
+
+def is_cvd_ready(symbol: str) -> bool:
+    """True once the post-reconnect warmup has elapsed for *symbol*."""
+    if _ws_instance is None:
+        return False
+    return _ws_instance.is_cvd_ready(symbol)
+
+
 async def start_streams(symbols: list[str], cache: DataCache) -> None:
     """Instantiate BinanceWebSocket and run.  Drop-in for main.py task creation."""
-    await BinanceWebSocket(symbols, cache).run()
+    global _ws_instance
+    _ws_instance = BinanceWebSocket(symbols, cache)
+    await _ws_instance.run()

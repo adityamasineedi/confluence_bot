@@ -1,4 +1,8 @@
-"""Bear / trend SHORT scorer — aggregates bear signals for a trend short setup."""
+"""Bear / trend SHORT scorer — aggregates bear signals for a trend short setup.
+
+Uses normalised scoring: signals backed by unavailable data sources are excluded
+from the denominator.
+"""
 import os
 import yaml
 
@@ -18,6 +22,27 @@ _WEIGHTS   = _cfg["weights"]["bear"]
 _THRESHOLD = _cfg["thresholds"]["trend_short_fire"]
 
 
+def _available_signals(symbol: str, cache) -> set[str]:
+    available = {"bear_ob", "oi_flush", "htf_lower_high", "funding_extreme"}
+    if cache.get_cvd(symbol, 1, "5m"):
+        available.add("cvd_bearish")
+    if cache.get_exchange_inflow(symbol) is not None:
+        available.add("whale_inflow")
+    return available
+
+
+def _normalised_score(
+    signals: dict[str, bool],
+    weights: dict[str, float],
+    available: set[str],
+) -> float:
+    denom = sum(w for k, w in weights.items() if k in available)
+    if denom == 0.0:
+        return 0.0
+    numer = sum(w for k, w in weights.items() if k in available and signals.get(k, False))
+    return numer / denom
+
+
 async def score(symbol: str, cache) -> dict:
     """Score a symbol for a TREND SHORT (BEAR) setup.
 
@@ -32,11 +57,9 @@ async def score(symbol: str, cache) -> dict:
         "whale_inflow":    check_whale_exchange_inflow(symbol, cache),
     }
 
-    score_val = sum(
-        _WEIGHTS.get(name, 0.0) for name, hit in signals.items() if hit
-    )
-
-    fire = score_val >= _THRESHOLD and passes_trend_short_filters(symbol, cache)
+    avail     = _available_signals(symbol, cache)
+    score_val = _normalised_score(signals, _WEIGHTS, avail)
+    fire      = score_val >= _THRESHOLD and passes_trend_short_filters(symbol, cache)
 
     return {
         "symbol":    symbol,
@@ -44,5 +67,6 @@ async def score(symbol: str, cache) -> dict:
         "direction": "SHORT",
         "score":     round(score_val, 4),
         "signals":   signals,
+        "available": sorted(avail),
         "fire":      fire,
     }

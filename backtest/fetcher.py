@@ -44,9 +44,14 @@ _MS = {
 # Approximate Binance Futures launch timestamps (ms) per symbol.
 # Spot API is used for any history before this date.
 _FUTURES_LAUNCH_MS: dict[str, int] = {
-    "BTCUSDT": 1568592000000,   # 2019-09-16
-    "ETHUSDT": 1574035200000,   # 2019-11-18
-    "SOLUSDT": 1607904000000,   # 2020-12-14
+    "BTCUSDT":  1568592000000,   # 2019-09-16
+    "ETHUSDT":  1574035200000,   # 2019-11-18
+    "ADAUSDT":  1577836800000,   # 2020-01-01
+    "XRPUSDT":  1577836800000,   # 2020-01-01
+    "BNBUSDT":  1581292800000,   # 2020-02-10
+    "LINKUSDT": 1594080000000,   # 2020-07-07
+    "SOLUSDT":  1607904000000,   # 2020-12-14
+    "AVAXUSDT": 1630454400000,   # 2021-09-01
 }
 
 

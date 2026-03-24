@@ -5,6 +5,12 @@
 symbols:
   - BTCUSDT
   - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  - AVAXUSDT
+  - LINKUSDT
+  - ADAUSDT
+  - XRPUSDT
 
 timeframes:
   - 1m
@@ -23,8 +29,11 @@ regime:
   adx_trend_threshold: 25         # ADX > this while in RANGE → exit RANGE (hysteresis)
   range_size_max_pct: 0.12        # max (high-low)/mid over 20×4H bars to confirm RANGE
   crash_weekly_drop: -0.12        # 7-day close change < this (−12 %) → crash candidate
-  ema_crash_period: 50            # EMA period for crash baseline
+  pump_weekly_gain:   0.12        # 7-day close change > this (+12 %) → pump candidate
+  ema_crash_period: 50            # EMA period for crash baseline (also used for pump)
   trend_tf: "4h"                  # timeframe used for ADX
+  breakout_window_bars: 6         # bars after range exit during which breakout can fire
+  breakout_margin_pct: 0.010      # price must be 1.0% beyond range boundary to confirm
 
   # ── Legacy fields (kept for backward compat) ────────────────────────────
   crash_drawdown_pct: 15.0
@@ -36,54 +45,74 @@ regime:
 # ── Score thresholds ─────────────────────────────────────────────────────────
 thresholds:
   trend_long_fire: 0.65
-  trend_short_fire: 0.65
+  trend_short_fire: 0.82          # raised: bear signals fire rarely and have 10% WR in backtest
   range_long_fire: 0.60
-  range_short_fire: 0.60
+  range_short_fire: 0.65          # raised: upthrust/ask_absorption fire rarely
   crash_short_fire: 0.75          # higher bar for crash shorts
+  pump_long_fire: 0.50            # htf_structure alone = score 0.55 → fires; backtest shows 82% WR
+  breakout_long_fire: 0.60
+  breakout_short_fire: 0.75       # raised: breakout short had 0% WR in backtest
 
 # ── Signal weights (trend LONG) ──────────────────────────────────────────────
+# Backtest validation: htf_structure = +45% edge, vpvr_support = -22% edge
+# oi_funding fired only 2x in backtest (almost never True)
 weights:
   trend_long:
-    cvd_bullish:   0.20
+    cvd_bullish:   0.25           # untested live signal, keep high
     liq_sweep:     0.15
-    oi_funding:    0.15
-    vpvr_support:  0.15
-    htf_structure: 0.15
-    order_block:   0.10
+    htf_structure: 0.30           # raised: dominant predictor (+45% edge in backtest)
+    vpvr_support:  0.05           # reduced: -22% edge — hurts when fires
+    oi_funding:    0.10           # reduced: fired only 2x in backtest
+    order_block:   0.05           # reduced: rare + slight negative edge
     options_flow:  0.05
     whale_flow:    0.05
 
   range_long:
-    absorption:      0.25
-    wyckoff_spring:  0.20
-    perp_basis:      0.10
+    absorption:      0.25         # keep: primary range long signal (fires in backtest)
+    wyckoff_spring:  0.20         # keep: ideal range entry but rarely fires in backtest
+    perp_basis:      0.15         # raised: live perp basis signal
     options_skew:    0.10
-    anchored_vwap:   0.15
-    time_distribution: 0.10
+    anchored_vwap:   0.15         # keep: strong live signal
+    time_distribution: 0.05       # reduced: -33% edge in backtest
     call_skew_roc:   0.10
 
   range_short:
-    ask_absorption: 0.25
-    upthrust:       0.25
+    ask_absorption: 0.25          # keep original: if raised alone it fires with bad edge
+    upthrust:       0.25          # keep: needs both ask_absorption + upthrust ideally
     perp_basis:     0.10
-    options_skew:   0.10
-    anchored_vwap:  0.15
-    time_distribution: 0.15
+    options_skew:   0.15          # raised: live skew signal
+    anchored_vwap:  0.15          # keep
+    time_distribution: 0.10       # keep: negative edge but needed for min scoring
 
   bear:
-    cvd_bearish:     0.20
-    bear_ob:         0.15
-    oi_flush:        0.20
-    htf_lower_high:  0.20
+    cvd_bearish:     0.30         # raised: untested live signal, likely best bear predictor
+    bear_ob:         0.10         # reduced: -65% edge in backtest (10% WR when fires)
+    oi_flush:        0.25         # raised: when it fires should be strongest bear signal
+    htf_lower_high:  0.10         # reduced: -65% edge in backtest (10% WR when fires)
     funding_extreme: 0.15
     whale_inflow:    0.10
 
   crash:
     dead_cat:       0.30
     liq_grab_short: 0.30
-    cvd_bearish:    0.15
+    cvd_bearish:    0.20          # raised slightly
     oi_flush:       0.15
-    whale_inflow:   0.10
+    whale_inflow:   0.05          # reduced
+
+  pump:
+    htf_structure: 0.55           # raised: dominant signal, +45% edge, drives pump WR
+    oi_funding:    0.20           # reduced: fired only 2x in backtest
+    order_block:   0.25           # keep: confluence entry point
+
+  breakout_long:
+    htf_structure: 0.55           # raised: dominant signal
+    oi_funding:    0.20           # reduced: rarely fires
+    absorption:    0.25           # keep
+
+  breakout_short:
+    htf_lower_high: 0.45          # raised: most important bear signal
+    oi_flush:       0.40          # raised: must see OI flush to confirm
+    ask_absorption: 0.15          # reduced: supplementary
 
 # ── Risk management ──────────────────────────────────────────────────────────
 risk:
@@ -121,3 +150,12 @@ logging:
   db_path: "confluence_bot.db"
   metrics_host: "0.0.0.0"
   metrics_port: 8000
+
+# ── Telegram alerts ───────────────────────────────────────────────────────────
+# Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in environment (.env / shell).
+# The bot silently no-ops when either variable is missing.
+telegram:
+  # alert_on_signal: true    — alert every time a trade fires (default: always on)
+  # alert_on_regime_change: true — alert when regime switches
+  alert_on_signal: true
+  alert_on_regime_change: true

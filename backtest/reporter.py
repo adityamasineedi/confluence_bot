@@ -125,6 +125,35 @@ def compute_monthly_returns(
     return rows
 
 
+def compute_signal_stats(trades: list[dict]) -> list[dict]:
+    """Return per-signal predictiveness: win rate when signal was True vs False."""
+    signal_names: set[str] = set()
+    for t in trades:
+        signal_names.update(t.get("signals", {}).keys())
+
+    rows = []
+    for sig in sorted(signal_names):
+        with_true  = [t for t in trades if t.get("signals", {}).get(sig)]
+        with_false = [t for t in trades if not t.get("signals", {}).get(sig)]
+
+        def wr(group):
+            if not group:
+                return None
+            return sum(1 for t in group if t["outcome"] == "WIN") / len(group)
+
+        rows.append({
+            "signal":       sig,
+            "n_true":       len(with_true),
+            "n_false":      len(with_false),
+            "wr_true":      wr(with_true),
+            "wr_false":     wr(with_false),
+            "edge":         (wr(with_true) or 0) - (wr(with_false) or 0),
+        })
+
+    rows.sort(key=lambda r: r["edge"], reverse=True)
+    return rows
+
+
 def compute_stats(trades: list[dict], starting_capital: float = 1_000.0) -> dict:
     if not trades:
         return {"total": _bucket_stats([]), "by_regime": {}, "by_symbol": {},
@@ -148,6 +177,7 @@ def compute_stats(trades: list[dict], starting_capital: float = 1_000.0) -> dict
         "by_regime":         {k: _bucket_stats(v) for k, v in by_regime.items()},
         "by_symbol":         {k: _bucket_stats(v) for k, v in by_symbol.items()},
         "monthly":           compute_monthly_returns(trades, starting_capital),
+        "signal_stats":      compute_signal_stats(trades),
         "starting_capital":  starting_capital,
     }
 
@@ -242,6 +272,20 @@ def print_report(
 
         # Annual summaries
         _print_annual_summary(monthly)
+
+    # ── Signal validation ─────────────────────────────────────────────────────
+    sig_stats = stats.get("signal_stats", [])
+    if sig_stats:
+        print()
+        print("  SIGNAL VALIDATION  (win rate when signal True vs False)")
+        print(_line())
+        print(f"  {'Signal':<22} {'N(T)':>6} {'WR(T)':>7} {'N(F)':>6} {'WR(F)':>7} {'Edge':>7}")
+        print("  " + "-" * 58)
+        for s in sig_stats:
+            wt = f"{s['wr_true']*100:.0f}%"  if s["wr_true"]  is not None else "  -"
+            wf = f"{s['wr_false']*100:.0f}%" if s["wr_false"] is not None else "  -"
+            edge = f"{s['edge']*100:+.0f}%"
+            print(f"  {s['signal']:<22} {s['n_true']:>6} {wt:>7} {s['n_false']:>6} {wf:>7} {edge:>7}")
 
     # ── Last 15 trades ────────────────────────────────────────────────────────
     if trades:

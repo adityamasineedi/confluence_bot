@@ -25,8 +25,8 @@ log = logging.getLogger("backtest")
 def main() -> None:
     parser = argparse.ArgumentParser(description="confluence_bot backtester")
     parser.add_argument(
-        "--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT",
-        help="Comma-separated symbols (default: BTCUSDT,ETHUSDT,SOLUSDT)",
+        "--symbols", default="BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,AVAXUSDT,LINKUSDT,ADAUSDT,XRPUSDT",
+        help="Comma-separated symbols (default: all 8 configured symbols)",
     )
     parser.add_argument(
         "--refresh", action="store_true",
@@ -92,6 +92,19 @@ def main() -> None:
     from backtest.reporter import compute_stats, print_report
     stats = compute_stats(trades, starting_capital=args.capital)
     print_report(stats, trades=trades, starting_capital=args.capital)
+
+    # ── Step 4: save results for dashboard ────────────────────────────────────
+    import json, os
+    result_path = os.path.join(os.path.dirname(__file__), "results.json")
+    with open(result_path, "w") as f:
+        json.dump({
+            "stats":   stats,
+            "trades":  trades,
+            "symbols": symbols,
+            "capital": args.capital,
+            "risk_pct": args.risk_pct,
+        }, f, default=str)
+    print(f"Results saved to {result_path}")
 
 
 if __name__ == "__main__":

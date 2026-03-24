@@ -44,8 +44,10 @@ def check_anchored_vwap(symbol: str, cache) -> bool:
     if avwap == 0.0:
         return False
 
-    prev_close = anchored[-2]["c"]
     curr_close = anchored[-1]["c"]
+    if curr_close <= avwap:
+        return False
 
-    # Price was at or below AVWAP and now closes above it
-    return prev_close <= avwap and curr_close > avwap
+    # Price is above AVWAP and was below it within the last 3 bars (recent reclaim)
+    recent_closes = [c["c"] for c in anchored[-4:-1]]
+    return any(c <= avwap for c in recent_closes)

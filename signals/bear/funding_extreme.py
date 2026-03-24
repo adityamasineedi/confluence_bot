@@ -1,7 +1,8 @@
 """Funding rate extreme — extremely positive funding as contrarian short signal."""
 
 # From config.yaml: funding.extreme_positive = 0.001 (0.1 % per 8 h)
-_EXTREME_THRESHOLD = 0.001
+# Lowered to 0.0005 (0.05%/8h) — real Binance peaks rarely exceed 0.07%
+_EXTREME_THRESHOLD = 0.0005
 
 
 def check_funding_extreme_positive(symbol: str, cache) -> bool:

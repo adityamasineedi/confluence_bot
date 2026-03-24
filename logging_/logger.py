@@ -47,6 +47,16 @@ class TradeLogger:
         """Persist a regime classification event."""
         await asyncio.to_thread(self._insert_regime, symbol, regime)
 
+    async def load_active_deals(self) -> list[tuple[str, str]]:
+        """Return [(symbol, direction)] for all trades with status='OPEN'."""
+        return await asyncio.to_thread(self._query_open_deals)
+
+    async def close_deal(
+        self, symbol: str, direction: str, exit_price: float, pnl_usdt: float
+    ) -> None:
+        """Mark all OPEN trades for (symbol, direction) as FILLED."""
+        await asyncio.to_thread(self._update_closed, symbol, direction, exit_price, pnl_usdt)
+
     # ── Blocking helpers (run in thread) ──────────────────────────────────────
 
     def _insert_signal(self, d: dict) -> None:
@@ -94,4 +104,21 @@ class TradeLogger:
             conn.execute(
                 "INSERT INTO regimes (ts, symbol, regime) VALUES (?, ?, ?)",
                 (_utcnow(), symbol, regime),
+            )
+
+    def _query_open_deals(self) -> list[tuple[str, str]]:
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT symbol, direction FROM trades WHERE status = 'OPEN'"
+            ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def _update_closed(
+        self, symbol: str, direction: str, exit_price: float, pnl_usdt: float
+    ) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """UPDATE trades SET status='FILLED', exit_price=?, pnl_usdt=?, closed_ts=?
+                   WHERE symbol=? AND direction=? AND status='OPEN'""",
+                (exit_price, pnl_usdt, _utcnow(), symbol, direction),
             )

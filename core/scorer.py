@@ -1,4 +1,9 @@
-"""Trend LONG scorer — aggregates trend signals into a confluence score."""
+"""Trend LONG scorer — aggregates trend signals into a confluence score.
+
+Uses normalised scoring: signals backed by unavailable data sources (no WebSocket
+CVD, no CoinGlass key, no Deribit) are excluded from the denominator so the score
+represents confluence *of available data*, not diluted by structural gaps.
+"""
 import os
 import yaml
 
@@ -20,11 +25,50 @@ _WEIGHTS   = _cfg["weights"]["trend_long"]
 _THRESHOLD = _cfg["thresholds"]["trend_long_fire"]
 
 
+def _available_signals(symbol: str, cache) -> set[str]:
+    """Return signal names that have live data backing them.
+
+    Signals are excluded from scoring denominator when their data source
+    is structurally absent (empty cache, stub returns no data).
+    """
+    available = {"oi_funding", "vpvr_support", "htf_structure", "order_block"}
+
+    # CVD requires aggTrade WebSocket warmup; check if any CVD values exist
+    if cache.get_cvd(symbol, 1, "5m"):
+        available.add("cvd_bullish")
+
+    # Liq clusters from CoinGlass (paid) OR synthetic pivots (BinanceRestPoller)
+    if cache.get_liq_clusters(symbol):
+        available.add("liq_sweep")
+
+    # Deribit options flow — skew history must be non-empty
+    if cache.get_skew_history(symbol, 1):
+        available.add("options_flow")
+
+    # CryptoQuant whale inflow — exchange inflow must be non-None
+    if cache.get_exchange_inflow(symbol) is not None:
+        available.add("whale_flow")
+
+    return available
+
+
+def _normalised_score(
+    signals: dict[str, bool],
+    weights: dict[str, float],
+    available: set[str],
+) -> float:
+    denom = sum(w for k, w in weights.items() if k in available)
+    if denom == 0.0:
+        return 0.0
+    numer = sum(w for k, w in weights.items() if k in available and signals.get(k, False))
+    return numer / denom
+
+
 async def score(symbol: str, cache) -> dict:
     """Score a symbol for a TREND LONG setup.
 
     Returns a dict: {symbol, regime, direction, score, signals, fire}
-    where score is the weighted sum of True signals / sum of all weights,
+    where score is the normalised weighted sum over *available* signals only,
     and fire is True when score ≥ threshold AND all hard filters pass.
     """
     signals: dict[str, bool] = {
@@ -38,11 +82,9 @@ async def score(symbol: str, cache) -> dict:
         "whale_flow":    check_whale_flow(symbol, cache),
     }
 
-    score_val = sum(
-        _WEIGHTS.get(name, 0.0) for name, hit in signals.items() if hit
-    )
-
-    fire = score_val >= _THRESHOLD and passes_trend_long_filters(symbol, cache)
+    avail     = _available_signals(symbol, cache)
+    score_val = _normalised_score(signals, _WEIGHTS, avail)
+    fire      = score_val >= _THRESHOLD and passes_trend_long_filters(symbol, cache)
 
     return {
         "symbol":    symbol,
@@ -50,5 +92,6 @@ async def score(symbol: str, cache) -> dict:
         "direction": "LONG",
         "score":     round(score_val, 4),
         "signals":   signals,
+        "available": sorted(avail),
         "fire":      fire,
     }
