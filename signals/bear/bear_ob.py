@@ -1,7 +1,7 @@
 """Bearish Order Block — institutional supply zone retest for short entries."""
 
-_IMPULSE_CANDLES = 3     # number of consecutive bearish candles that define an impulse
-_IMPULSE_MIN_PCT = 0.01  # each impulse candle must be at least 1 % body
+_IMPULSE_CANDLES = 2     # number of consecutive bearish candles that define an impulse
+_IMPULSE_MIN_PCT = 0.005 # each impulse candle must be at least 0.5 % body
 _LOOKBACK        = 60    # 1H candles to scan for bearish impulse
 
 

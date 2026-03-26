@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Iterator
 
@@ -12,9 +13,12 @@ from .cache import DataCache
 
 log = logging.getLogger(__name__)
 
-_WS_BASE          = "wss://fstream.binance.com/stream"
+_WS_BASE          = os.environ.get("BINANCE_WS_BASE", "wss://fstream.binance.com") + "/stream"
 _KLINE_TFS        = ("1m", "5m", "15m", "1h", "4h")
 _MAX_STREAMS      = 200          # Binance limit per connection (actual limit is 1024; 200 is conservative)
+_DEPTH_LEVELS     = 5            # @depth5 — top 5 bids/asks
+_DEPTH_UPDATE_MS  = 100          # 100ms update cadence
+_MIN_LIQ_USD      = 10_000       # ignore tiny forceOrder events (< $10k)
 _BACKOFF_INIT_S   = 5.0
 _BACKOFF_MAX_S    = 60.0
 _BACKOFF_RESET_S  = 10.0         # connected this long → reset backoff on next reconnect
@@ -58,10 +62,10 @@ class BinanceWebSocket:
         if not urls:
             log.warning("BinanceWebSocket: no symbols configured")
             return
-        if len(urls) == 1:
-            await self._run_with_backoff(urls[0])
-        else:
-            await asyncio.gather(*(self._run_with_backoff(u) for u in urls))
+        # Also connect to the global forced-liquidation stream
+        liq_url = f"{_WS_BASE}?streams=!forceOrder@arr"
+        all_urls = urls + [liq_url]
+        await asyncio.gather(*(self._run_with_backoff(u) for u in all_urls))
 
     # ── CVD warmup queries (called by signal functions) ───────────────────────
 
@@ -81,6 +85,7 @@ class BinanceWebSocket:
         for sym in self._symbols:
             s = sym.lower()
             streams.append(f"{s}@aggTrade")
+            streams.append(f"{s}@depth{_DEPTH_LEVELS}@{_DEPTH_UPDATE_MS}ms")
             for tf in _KLINE_TFS:
                 streams.append(f"{s}@kline_{tf}")
 
@@ -150,6 +155,10 @@ class BinanceWebSocket:
             self._handle_agg_trade(data)
         elif e_type == "kline":
             self._handle_kline(data)
+        elif e_type == "depthUpdate":
+            self._handle_depth(data)
+        elif e_type == "forceOrder":
+            self._handle_force_order(data)
         # "ping" events at the application level are informational;
         # WebSocket-level pings are handled transparently by the library.
 
@@ -198,6 +207,46 @@ class BinanceWebSocket:
 
         if is_closed:
             self._flush_cvd(symbol, tf)
+
+    # ── Depth (L2 order book) handler ─────────────────────────────────────────
+
+    def _handle_depth(self, data: dict) -> None:
+        """Store top-of-book snapshot from @depth5 stream."""
+        symbol = data.get("s")
+        if not symbol:
+            return
+        bids = [(float(p), float(q)) for p, q in data.get("b", [])]
+        asks = [(float(p), float(q)) for p, q in data.get("a", [])]
+        self._cache.push_order_book(symbol, bids, asks)
+
+    # ── Forced liquidation handler ─────────────────────────────────────────────
+
+    def _handle_force_order(self, data: dict) -> None:
+        """Store large forced-liquidation events from !forceOrder@arr stream.
+
+        Binance forceOrder side convention:
+          'BUY'  = a SHORT position was liquidated (engine buys to close)
+          'SELL' = a LONG  position was liquidated (engine sells to close)
+        """
+        o = data.get("o", {})
+        symbol = o.get("s")
+        if not symbol:
+            return
+        try:
+            side   = o["S"]           # "BUY" or "SELL"
+            qty    = float(o["q"])
+            price  = float(o["p"])
+            ts_ms  = int(o["T"])
+        except (KeyError, ValueError, TypeError):
+            return
+
+        notional = qty * price
+        if notional < _MIN_LIQ_USD:
+            return   # ignore noise
+
+        self._cache.push_liquidation(symbol, side, qty, price, ts_ms)
+        log.debug("ForceOrder %s %s qty=%.3f price=%.2f ($%.0f)",
+                  symbol, side, qty, price, notional)
 
     def _flush_cvd(self, symbol: str, tf: str) -> None:
         """Commit accumulated delta for the just-closed candle, then reset."""

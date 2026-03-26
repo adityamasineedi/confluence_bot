@@ -107,10 +107,13 @@ def passes_trend_long_filters(symbol: str, cache) -> bool:
     1. BTC 4H close above 200-period EMA (macro must be bullish)
     2. Symbol 4H +DI > -DI by at least _DI_MIN_EDGE (4H trend direction is up)
     3. 4H ADX is rising (trend accelerating, not exhausting)
-    4. Last daily bar is green (price moving up on daily timeframe)
-    5. BTC not parabolic (< EMA200 × 1.15)
-    6. Funding rate not overheated (< 0.0003)
-    7. 24H volume above minimum liquidity threshold
+    4. BTC not parabolic (< EMA200 × 1.15)
+    5. Funding rate not overheated (< 0.0003)
+    6. 24H volume above minimum liquidity threshold
+
+    Note: daily bar green gate removed — blocks 40% of valid entry days
+    (in a trend, pullback days produce red daily bars but are ideal entries).
+    ADX slope (Gate 3) provides the exhaustion guard instead.
     """
     # Gate 1: BTC macro bullish
     if not _btc_above_ema200(cache):
@@ -128,26 +131,21 @@ def passes_trend_long_filters(symbol: str, cache) -> bool:
         log.info("TREND LONG filter BLOCKED %s: Gate3 ADX declining", symbol)
         return False
 
-    # Gate 4: Daily bar confirms up direction
-    if not _daily_bar_confirms_long(symbol, cache):
-        log.info("TREND LONG filter BLOCKED %s: Gate4 daily bar red", symbol)
-        return False
-
-    # Gate 5: BTC not in parabolic overextension
+    # Gate 4: BTC not in parabolic overextension
     if not _btc_not_overextended(cache):
-        log.info("TREND LONG filter BLOCKED %s: Gate5 BTC overextended", symbol)
+        log.info("TREND LONG filter BLOCKED %s: Gate4 BTC overextended", symbol)
         return False
 
-    # Gate 6: Funding not overheated
+    # Gate 5: Funding not overheated
     funding = cache.get_funding_rate(symbol)
     if funding is not None and funding >= _FUNDING_MAX_LONG:
-        log.info("TREND LONG filter BLOCKED %s: Gate6 funding=%.5f overheated", symbol, funding)
+        log.info("TREND LONG filter BLOCKED %s: Gate5 funding=%.5f overheated", symbol, funding)
         return False
 
-    # Gate 7: Liquidity
+    # Gate 6: Liquidity
     vol_24h = cache.get_vol_24h(symbol)
     if vol_24h is not None and vol_24h < _MIN_24H_VOL:
-        log.info("TREND LONG filter BLOCKED %s: Gate7 vol_24h=%.0f too low", symbol, vol_24h)
+        log.info("TREND LONG filter BLOCKED %s: Gate6 vol_24h=%.0f too low", symbol, vol_24h)
         return False
 
     return True

@@ -1,7 +1,7 @@
 """Bullish Order Block detection — institutional demand zones."""
 
-_IMPULSE_CANDLES = 3     # consecutive bullish candles that define an impulse
-_IMPULSE_MIN_PCT = 0.01  # each impulse candle body ≥ 1 % of open price
+_IMPULSE_CANDLES = 2     # consecutive bullish candles that define an impulse
+_IMPULSE_MIN_PCT = 0.005 # each impulse candle body ≥ 0.5 % of open price
 _LOOKBACK        = 60    # 1H candles to scan
 
 
@@ -35,9 +35,17 @@ def check_order_block(symbol: str, cache) -> bool:
         ob_high   = ob_candle["h"]
         ob_low    = ob_candle["l"]
 
-        # Invalidate if any close below ob_low after the OB
+        # Invalidate only if ≥2 consecutive closes below ob_low (not a wick/spike)
         post_ob = ohlcv[i + 1 :]
-        if any(c["c"] < ob_low for c in post_ob[:-1]):
+        consec_below = 0
+        for c in post_ob[:-1]:
+            if c["c"] < ob_low:
+                consec_below += 1
+                if consec_below >= 2:
+                    break
+            else:
+                consec_below = 0
+        if consec_below >= 2:
             continue
 
         ob_zone = (ob_low, ob_high)

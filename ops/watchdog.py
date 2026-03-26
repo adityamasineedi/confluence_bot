@@ -5,6 +5,7 @@ Usage:
 
 Keeps running forever, restarting main.py whenever it exits.
 Logs restart events to logs/watchdog.log.
+Bot stdout/stderr is appended to logs/bot.log.
 Press Ctrl+C to stop both the watchdog and the bot.
 """
 import subprocess
@@ -44,12 +45,16 @@ def run() -> None:
         log.info("Starting confluence_bot  (python=%s)", _PYTHON)
         start_ts = time.monotonic()
 
+        bot_log_path = os.path.join(_LOG_DIR, "bot.log")
         try:
-            proc = subprocess.Popen(
-                [_PYTHON, _MAIN],
-                cwd=_BOT_DIR,
-            )
-            proc.wait()
+            with open(bot_log_path, "a") as bot_log_fh:
+                proc = subprocess.Popen(
+                    [_PYTHON, _MAIN],
+                    cwd=_BOT_DIR,
+                    stdout=bot_log_fh,
+                    stderr=bot_log_fh,
+                )
+                proc.wait()
         except KeyboardInterrupt:
             log.info("Watchdog stopped by user (Ctrl+C).")
             try:

@@ -19,9 +19,9 @@ import sys
 import urllib.request
 from datetime import datetime, timezone
 
-_METRICS_URL  = os.environ.get("METRICS_URL", "http://localhost:8000/health")
+_METRICS_URL  = os.environ.get("METRICS_URL", "http://localhost:8001/health")
 _DB_PATH      = os.environ.get("DB_PATH", "confluence_bot.db")
-_MAX_SIGNAL_AGE_MINUTES = 10
+_MAX_SIGNAL_AGE_MINUTES = 20
 
 # Prevent Telegram alert spam — track last alert time
 _last_alert_ts: float = 0.0
@@ -114,7 +114,8 @@ async def run_silent_check() -> None:
         return  # already alerted recently
 
     _last_alert_ts = now
-    failed = [msg for ok, msg in results if not ok]
+    import html as _html
+    failed = [_html.escape(msg) for ok, msg in results if not ok]
     alert_text = (
         "⚠️ <b>confluence_bot health check FAILED</b>\n\n"
         + "\n".join(f"• {m}" for m in failed)

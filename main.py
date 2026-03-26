@@ -73,7 +73,14 @@ async def main() -> None:
     logger = TradeLogger()
     restore_active_deals(await logger.load_active_deals())
 
-    # 3. Binance WebSocket streams
+    # 3. Configure leverage + margin type on exchange
+    if not PAPER_MODE:
+        from data.binance_rest import setup_symbols
+        _leverage    = cfg["risk"]["leverage"]
+        _margin_type = cfg["risk"].get("margin_type", "ISOLATED")
+        await setup_symbols(symbols, _leverage, _margin_type)
+
+    # 3b. Binance WebSocket streams
     ws_task = asyncio.create_task(start_streams(symbols, cache))
 
     # 4. Binance REST poller (OI, funding, weekly/daily history)
@@ -104,6 +111,9 @@ async def main() -> None:
     )
 
     # 6. FastAPI metrics server in a daemon thread
+    from logging_.metrics_api import set_cache as _metrics_set_cache
+    _metrics_set_cache(cache)   # give metrics API access to live Coinglass cache data
+
     def _start_metrics() -> None:
         import uvicorn
         from logging_.metrics_api import app
@@ -112,11 +122,67 @@ async def main() -> None:
     threading.Thread(target=_start_metrics, daemon=True).start()
     log.info("Metrics server starting on http://%s:%d", metrics_host, metrics_port)
 
-    # 6b. Trade monitor — closes positions when TP/SL is hit
+    # 6b. Lead-lag strategy loop (independent of regime, runs every 30s)
+    if cfg.get("leadlag", {}).get("enabled", False):
+        from core.leadlag_loop import run_leadlag_loop
+        extra_tasks.append(
+            asyncio.create_task(run_leadlag_loop(symbols, cache))
+        )
+        log.info("Lead-lag strategy enabled")
+
+    # 6b2. Session open trap (fires at session open + 15 min: Asia/London/NY)
+    if cfg.get("session_trap", {}).get("enabled", False):
+        from core.session_loop import run_session_loop
+        extra_tasks.append(
+            asyncio.create_task(run_session_loop(symbols, cache))
+        )
+        log.info("Session open trap enabled")
+
+    # 6b3. 1H inside bar flip (scans every 60s for compression zones)
+    if cfg.get("insidebar", {}).get("enabled", False):
+        from core.insidebar_loop import run_insidebar_loop
+        extra_tasks.append(
+            asyncio.create_task(run_insidebar_loop(symbols, cache))
+        )
+        log.info("1H inside bar flip enabled")
+
+    # 6b4. Funding rate harvest (wakes before each 8h settlement window)
+    if cfg.get("funding_harvest", {}).get("enabled", False):
+        from core.funding_harvest_loop import run_funding_harvest_loop
+        extra_tasks.append(
+            asyncio.create_task(run_funding_harvest_loop(symbols, cache))
+        )
+        log.info("Funding rate harvest enabled")
+
+    # 6c. Micro-range flip strategy loop (independent, runs every 30s)
+    if cfg.get("microrange", {}).get("enabled", False):
+        from core.microrange_loop import run_microrange_loop
+        _mr_exclude = [s.upper() for s in cfg["microrange"].get("exclude_symbols", [])]
+        _mr_symbols = [s for s in symbols if s not in _mr_exclude]
+        extra_tasks.append(
+            asyncio.create_task(run_microrange_loop(_mr_symbols, cache))
+        )
+        log.info("Micro-range flip strategy enabled — symbols=%s  excluded=%s",
+                 _mr_symbols, _mr_exclude)
+
+    # 6d. Trade monitor — closes positions when TP/SL is hit
     from core.trade_monitor import monitor_trades
     asyncio.create_task(monitor_trades(cache))
 
-    # 6c. Periodic health check — alerts via Telegram if bot goes silent
+    # 6d2. Telegram command listener (/market, /status, /help)
+    from notifications.telegram_commands import start_command_listener
+    extra_tasks.append(
+        asyncio.create_task(start_command_listener(cache, symbols))
+    )
+
+    # 6f. Swing structure monitor — Telegram alert when HH+HL confirmed
+    from core.swing_monitor import run_swing_monitor
+    extra_tasks.append(
+        asyncio.create_task(run_swing_monitor(symbols, cache, interval=300))
+    )
+    log.info("Swing monitor started (5-min check, alerts on HH+HL flip)")
+
+    # 6e. Periodic health check — alerts via Telegram if bot goes silent
     async def _health_check_periodic() -> None:
         from ops.health_check import run_silent_check
         await run_silent_check()
@@ -125,8 +191,35 @@ async def main() -> None:
         asyncio.create_task(_periodic(_health_check_periodic, interval=300))
     )
 
-    # 7. Main evaluation loop
+    # 7. Wait for cache to be populated before firing any signals
+    _CACHE_MIN_BARS   = 50    # need at least 50 × 1h bars for ADX/EMA warmup
+    _CACHE_MIN_BARS5m = 32    # need 32 × 5m bars for microrange warmup
+    _CACHE_WAIT_MAX   = 120   # max 2 minutes; then proceed anyway with a warning
+    _cache_waited     = 0
+    log.info("Waiting for cache to populate (need %d × 1h bars per symbol)...",
+             _CACHE_MIN_BARS)
+    while _cache_waited < _CACHE_WAIT_MAX:
+        ready = all(
+            len(cache.get_ohlcv(s, _CACHE_MIN_BARS, "1h")) >= _CACHE_MIN_BARS
+            for s in symbols
+        )
+        ready5m = all(
+            len(cache.get_ohlcv(s, _CACHE_MIN_BARS5m, "5m")) >= _CACHE_MIN_BARS5m
+            for s in symbols
+        )
+        if ready and ready5m:
+            log.info("Cache ready — starting signal evaluation loop")
+            break
+        await asyncio.sleep(5)
+        _cache_waited += 5
+    else:
+        log.warning("Cache not fully populated after %ds — starting anyway", _CACHE_WAIT_MAX)
+
+    # 8. Main evaluation loop
     prev_regimes: dict[str, str] = {}
+    _regime_alert_ts: dict[str, float] = {}   # symbol → last Telegram alert timestamp
+    _REGIME_ALERT_COOLDOWN = 1800.0            # max one Telegram alert per symbol per 30 min
+    _regime_eval_count: dict[str, int] = {}   # suppress alerts for first 2 evals after startup
     # Stagger per-symbol evaluation evenly across the loop interval so each
     # symbol gets a distinct timestamp in the signals log.
     stagger_sleep = loop_interval / max(len(symbols), 1)
@@ -138,12 +231,19 @@ async def main() -> None:
                 regime_str = str(regime)
 
                 # Log regime changes
+                _regime_eval_count[symbol] = _regime_eval_count.get(symbol, 0) + 1
                 if prev_regimes.get(symbol) != regime_str:
+                    import time as _time
                     old_regime = prev_regimes.get(symbol, "")
                     prev_regimes[symbol] = regime_str
                     log.info("%s regime → %s", symbol, regime_str)
                     asyncio.create_task(logger.log_regime(symbol, regime_str))
-                    if old_regime:   # don't alert on first startup
+                    now = _time.monotonic()
+                    # Skip alert for first 2 evals per symbol (startup warmup) and enforce cooldown
+                    if (old_regime
+                            and _regime_eval_count[symbol] > 2
+                            and (now - _regime_alert_ts.get(symbol, 0)) >= _REGIME_ALERT_COOLDOWN):
+                        _regime_alert_ts[symbol] = now
                         from notifications.telegram import send_regime_change
                         asyncio.create_task(
                             send_regime_change(symbol, old_regime, regime_str)

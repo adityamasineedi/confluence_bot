@@ -11,7 +11,11 @@ from signals.bear.bear_ob        import check_bear_ob_breakdown
 from signals.bear.oi_flush       import check_oi_long_flush
 from signals.bear.htf_lower_high import check_htf_lower_high
 from signals.bear.funding_extreme import check_funding_extreme_positive
+from signals.bear.funding_ramp    import check_funding_ramp_bearish, check_funding_ramp_bullish
 from signals.bear.whale_inflow   import check_whale_exchange_inflow
+from signals.trend.rsi_divergence   import check_rsi_divergence_bearish
+from signals.trend.ema_cross        import check_ema_pullback_short
+from signals.trend.long_short_ratio import check_ls_crowded_long
 from .filter import passes_trend_short_filters
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -23,11 +27,28 @@ _THRESHOLD = _cfg["thresholds"]["trend_short_fire"]
 
 
 def _available_signals(symbol: str, cache) -> set[str]:
-    available = {"bear_ob", "oi_flush", "htf_lower_high", "funding_extreme"}
+    # Only include signals with non-zero weight — disabled signals must not inflate denominator
+    available: set[str] = set()
+
+    def _add(name: str) -> None:
+        if _WEIGHTS.get(name, 0.0) > 0.0:
+            available.add(name)
+
+    _add("bear_ob")
+    _add("oi_flush")
+    _add("htf_lower_high")
+    _add("funding_extreme")
+    _add("rsi_divergence")   # needs only 1H OHLCV — always available
+    _add("ema_pullback")
     if cache.get_cvd(symbol, 1, "5m"):
-        available.add("cvd_bearish")
+        _add("cvd_bearish")
     if cache.get_exchange_inflow(symbol) is not None:
-        available.add("whale_inflow")
+        _add("whale_inflow")
+    if cache.get_long_short_ratio(symbol) is not None:
+        _add("ls_crowded_long")
+    # Funding ramp — uses funding rate scalar (always available when Coinglass key set)
+    if cache.get_funding_rate(symbol) is not None:
+        _add("funding_ramp")
     return available
 
 
@@ -55,6 +76,10 @@ async def score(symbol: str, cache) -> dict:
         "htf_lower_high":  check_htf_lower_high(symbol, cache),
         "funding_extreme": check_funding_extreme_positive(symbol, cache),
         "whale_inflow":    check_whale_exchange_inflow(symbol, cache),
+        "rsi_divergence":  check_rsi_divergence_bearish(symbol, cache),
+        "ema_pullback":    check_ema_pullback_short(symbol, cache),
+        "ls_crowded_long": check_ls_crowded_long(symbol, cache),
+        "funding_ramp":    check_funding_ramp_bearish(symbol, cache),
     }
 
     avail     = _available_signals(symbol, cache)

@@ -21,6 +21,7 @@ _BASIS_MAXLEN     = 500
 _SKEW_MAXLEN      = 500
 _INFLOW_MAXLEN    = 365    # daily readings → 1 year
 _AGG_TRADE_MAXLEN = 10_000
+_LIQ_EVENT_MAXLEN = 500    # forced-liquidation events (~last hour at busy markets)
 
 
 class DataCache:
@@ -43,6 +44,9 @@ class DataCache:
         _skew[symbol]             deque[float]
         _agg_trades[symbol]       deque[dict]   {ts, price, qty, is_buyer_maker}
         _inflow[symbol]           deque[dict]   {ts, value}
+        _order_book[symbol]       dict          {bids: [(price,qty)], asks: [(price,qty)], ts: float}
+        _liq_events[symbol]       deque[dict]   {side, qty, price, ts_ms}
+        _long_short_ratio[symbol] float         latest global L/S account ratio (Coinglass)
         _account_balance          float
     """
 
@@ -54,12 +58,20 @@ class DataCache:
         self._cvd:   dict[tuple[str, str], deque] = {}
 
         # Scalar lookups
-        self._funding:       dict[str, float] = {}
-        self._liq_clusters:  dict[str, list]  = {}
-        self._range_high:    dict[str, float] = {}
-        self._range_low:     dict[str, float] = {}
-        self._range_start_ts: dict[str, int]  = {}
-        self._account_balance: float = 0.0
+        self._funding:          dict[str, float] = {}
+        self._liq_clusters:     dict[str, list]  = {}
+        self._range_high:       dict[str, float] = {}
+        self._range_low:        dict[str, float] = {}
+        self._range_start_ts:   dict[str, int]   = {}
+        self._long_short_ratio: dict[str, float] = {}
+        self._account_balance:  float = 0.0
+
+        # Order book: latest L2 snapshot per symbol
+        self._order_book: dict[str, dict] = {}
+
+        # Liquidation events: rolling window per symbol
+        self._liq_events: defaultdict[str, deque] = defaultdict(
+            lambda: deque(maxlen=_LIQ_EVENT_MAXLEN))
 
         # Rolling deques via defaultdict (created on first write)
         # OI keyed by (symbol, exchange) — prevents mixing incomparable units
@@ -335,6 +347,19 @@ class DataCache:
         with self._lock:
             self._funding[symbol] = float(rate)
 
+    def set_long_short_ratio(self, symbol: str, ratio: float) -> None:
+        """Store latest global long/short account ratio from Coinglass."""
+        with self._lock:
+            self._long_short_ratio[symbol] = float(ratio)
+
+    def get_long_short_ratio(self, symbol: str) -> float | None:
+        """Latest long/short ratio. None if not yet received.
+
+        >1.0 = more longs than shorts globally.
+        Contrarian thresholds: >1.8 = crowded long (bearish); <0.6 = crowded short (bullish).
+        """
+        return self._long_short_ratio.get(symbol)
+
     def set_liq_clusters(self, symbol: str, clusters: list[dict]) -> None:
         """Atomically replace the full liquidation cluster list."""
         with self._lock:
@@ -347,6 +372,46 @@ class DataCache:
     def set_account_balance(self, balance: float) -> None:
         with self._lock:
             self._account_balance = float(balance)
+
+    # ── Order Book (L2 depth snapshot) ───────────────────────────────────────
+
+    def push_order_book(self, symbol: str, bids: list, asks: list) -> None:
+        """Store latest L2 snapshot. bids/asks are [(price, qty), ...] best-first."""
+        with self._lock:
+            self._order_book[symbol] = {
+                "bids": list(bids),
+                "asks": list(asks),
+                "ts":   time.time(),
+            }
+
+    def get_order_book(self, symbol: str) -> dict:
+        """Return latest order book dict or {} if no snapshot yet."""
+        return dict(self._order_book.get(symbol, {}))
+
+    # ── Forced Liquidation Events ─────────────────────────────────────────────
+
+    def push_liquidation(self, symbol: str, side: str, qty: float, price: float, ts_ms: int) -> None:
+        """Append a forced liquidation event.
+
+        side: order side of the liquidation engine ('BUY' = short was liquidated,
+              'SELL' = long was liquidated).
+        """
+        with self._lock:
+            self._liq_events[symbol].append({
+                "side":  side,
+                "qty":   float(qty),
+                "price": float(price),
+                "ts_ms": int(ts_ms),
+            })
+
+    def get_recent_liquidations(self, symbol: str, window_seconds: float) -> list[dict]:
+        """Return liquidation events within the last window_seconds, oldest→newest."""
+        dq = self._liq_events.get(symbol)
+        if not dq:
+            return []
+        cutoff_ms = (time.time() - window_seconds) * 1000.0
+        snap = list(dq)
+        return [e for e in snap if e["ts_ms"] >= cutoff_ms]
 
 
 # Backward-compatible alias — existing code imports `from data.cache import Cache`

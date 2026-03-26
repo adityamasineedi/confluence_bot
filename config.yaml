@@ -8,9 +8,11 @@ symbols:
   - SOLUSDT
   - BNBUSDT
   - AVAXUSDT
-  - LINKUSDT
   - ADAUSDT
-  - XRPUSDT
+  - DOTUSDT    # added: 50% WR, +$15 in 6m backtest
+  - DOGEUSDT   # added: 71% WR, +$21 in 6m backtest
+  - SUIUSDT    # added: 62% WR, +$14 in 6m backtest
+  # Removed: XRPUSDT (20% WR), LINKUSDT (-$3.89), NEARUSDT (-$9.15 with BTC filter)
 
 timeframes:
   - 1m
@@ -26,7 +28,8 @@ loop_interval_seconds: 60
 regime:
   # ── RegimeDetector (class-based, hysteresis) ─────────────────────────────
   adx_range_threshold: 20         # all 3 recent ADX readings < this → enter RANGE
-  adx_trend_threshold: 25         # ADX > this while in RANGE → exit RANGE (hysteresis)
+  adx_trend_threshold: 25         # ≥2 of last 3 ADX readings > this → exit RANGE (symmetric hysteresis)
+  regime_min_dwell_bars: 12       # minimum calls before regime change allowed (~4H bars worth of stability)
   range_size_max_pct: 0.12        # max (high-low)/mid over 20×4H bars to confirm RANGE
   crash_weekly_drop: -0.12        # 7-day close change < this (−12 %) → crash candidate
   pump_weekly_gain:   0.12        # 7-day close change > this (+12 %) → pump candidate
@@ -45,9 +48,9 @@ regime:
 # ── Score thresholds ─────────────────────────────────────────────────────────
 thresholds:
   trend_long_fire: 0.65
-  trend_short_fire: 0.82          # raised: bear signals fire rarely and have 10% WR in backtest
+  trend_short_fire: 0.75          # re-enabled: requires cvd_bearish + oi_flush + 1 more signal
   range_long_fire: 0.60
-  range_short_fire: 0.65          # raised: upthrust/ask_absorption fire rarely
+  range_short_fire: 1.10          # disabled: 25% WR in backtest (consistent money-loser)
   crash_short_fire: 0.75          # higher bar for crash shorts
   pump_long_fire: 0.50            # htf_structure alone = score 0.55 → fires; backtest shows 82% WR
   breakout_long_fire: 0.60
@@ -56,41 +59,53 @@ thresholds:
 # ── Signal weights (trend LONG) ──────────────────────────────────────────────
 # Backtest validation: htf_structure = +45% edge, vpvr_support = -22% edge
 # oi_funding fired only 2x in backtest (almost never True)
+# options_flow/options_skew/call_skew_roc: Deribit only covers BTC+ETH — zero for alt coins
+# time_distribution: confirmed -33% edge in backtest — fully disabled
+# rsi_divergence: bullish div on 1H — price lower low, RSI higher low (seller exhaustion)
+# ema_pullback: 20 EMA > 50 EMA on 1H + price pulled back to 20 EMA (optimal entry timing)
 weights:
   trend_long:
-    cvd_bullish:   0.25           # untested live signal, keep high
-    liq_sweep:     0.15
-    htf_structure: 0.30           # raised: dominant predictor (+45% edge in backtest)
-    vpvr_support:  0.05           # reduced: -22% edge — hurts when fires
-    oi_funding:    0.10           # reduced: fired only 2x in backtest
-    order_block:   0.05           # reduced: rare + slight negative edge
-    options_flow:  0.05
-    whale_flow:    0.05
+    cvd_bullish:    0.20          # reduced slightly to make room for new signals
+    liq_sweep:      0.10          # reduced: synthetic clusters less reliable
+    htf_structure:  0.25          # reduced: shares dominance with new signals
+    vpvr_support:   0.00          # DISABLED: -22% edge in backtest — actively hurts WR
+    oi_funding:     0.05          # reduced: fired only 2x in backtest
+    order_block:    0.05          # keep: confluence entry point
+    options_flow:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
+    whale_flow:     0.10          # keep: works all symbols
+    rsi_divergence:    0.15        # NEW: bullish divergence — price lower low + RSI higher low on 1H
+    ema_pullback:      0.10        # NEW: 20/50 EMA pullback entry — best trend timing signal
+    ls_crowded_short:  0.10        # NEW: Coinglass L/S ratio < 0.6 → crowd overly short → contrarian bullish
+    funding_ramp_bull: 0.10        # NEW: Coinglass extreme negative funding → short squeeze fuel
 
   range_long:
-    absorption:      0.25         # keep: primary range long signal (fires in backtest)
-    wyckoff_spring:  0.20         # keep: ideal range entry but rarely fires in backtest
-    perp_basis:      0.15         # raised: live perp basis signal
-    options_skew:    0.10
+    absorption:      0.25         # raised: primary range long signal, works all symbols
+    wyckoff_spring:  0.25         # raised: ideal range entry, works all symbols
+    rsi_oversold:    0.20         # new: RSI(14)<35 turning up near range_low
+    perp_basis:      0.15         # raised: absorbed freed weight, works all symbols
+    options_skew:    0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
     anchored_vwap:   0.15         # keep: strong live signal
-    time_distribution: 0.05       # reduced: -33% edge in backtest
-    call_skew_roc:   0.10
+    time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
+    call_skew_roc:   0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
 
   range_short:
-    ask_absorption: 0.25          # keep original: if raised alone it fires with bad edge
-    upthrust:       0.25          # keep: needs both ask_absorption + upthrust ideally
-    perp_basis:     0.10
-    options_skew:   0.15          # raised: live skew signal
-    anchored_vwap:  0.15          # keep
-    time_distribution: 0.10       # keep: negative edge but needed for min scoring
+    ask_absorption: 0.30          # raised: absorbed freed weights, primary signal
+    upthrust:       0.30          # raised: needs both ask_absorption + upthrust ideally
+    perp_basis:     0.15          # raised: absorbed freed weight
+    options_skew:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
+    anchored_vwap:  0.25          # raised: strong live signal, works all symbols
+    time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
 
   bear:
-    cvd_bearish:     0.30         # raised: untested live signal, likely best bear predictor
-    bear_ob:         0.10         # reduced: -65% edge in backtest (10% WR when fires)
-    oi_flush:        0.25         # raised: when it fires should be strongest bear signal
-    htf_lower_high:  0.10         # reduced: -65% edge in backtest (10% WR when fires)
-    funding_extreme: 0.15
-    whale_inflow:    0.10
+    cvd_bearish:     0.35         # dominant bear predictor
+    bear_ob:         0.00         # DISABLED: -65% edge (10% WR) — actively harmful
+    oi_flush:        0.30         # strong confirmation signal
+    htf_lower_high:  0.00         # DISABLED: -65% edge (10% WR) — actively harmful
+    funding_extreme: 0.15         # useful contrarian signal
+    whale_inflow:    0.10         # supplementary
+    rsi_divergence:  0.10         # NEW: bearish divergence — price higher high + RSI lower high on 1H
+    ls_crowded_long: 0.10         # NEW: Coinglass L/S ratio > 1.8 → crowd overly long → contrarian bearish
+    funding_ramp:    0.10         # NEW: Coinglass extreme positive funding → longs overheating
 
   crash:
     dead_cat:       0.30
@@ -116,11 +131,18 @@ weights:
 
 # ── Risk management ──────────────────────────────────────────────────────────
 risk:
-  risk_per_trade: 0.01            # 1% account risk per trade
-  max_open_positions: 3
-  max_position_size_usdt: 5000
-  rr_ratio: 2.5                   # Risk:Reward ratio (TP = entry ± stop_dist * rr_ratio)
-  leverage: 5                     # Binance Futures leverage
+  max_risk_usdt: 5                # max $5 loss per trade (5% of $100 margin)
+  max_position_size_usdt: 300    # $300 notional = $100 margin at 3x leverage
+  max_open_positions: 5          # 5 × $100 margin = $500 total (10% of balance)
+  max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
+  rr_ratio: 2.5                # TP = entry ± stop_dist × 2.0
+  leverage: 3
+  margin_type: ISOLATED
+  # ── Circuit breaker ───────────────────────────────────────────────────────
+  max_daily_loss_pct: 3.0         # halt if daily loss > 3% of balance (~$144)
+  max_daily_loss_usdt: 150        # or > $150 in one day (30 losing trades × $5)
+  max_consecutive_losses: 6       # halt after 6 consecutive losses
+  post_trade_cooldown_mins: 30    # 30 min cooldown per symbol after any close
 
 # ── Hard filters ─────────────────────────────────────────────────────────────
 filters:
@@ -149,7 +171,98 @@ vpvr:
 logging:
   db_path: "confluence_bot.db"
   metrics_host: "0.0.0.0"
-  metrics_port: 8000
+  metrics_port: 8001
+
+# ── Lead-Lag strategy ────────────────────────────────────────────────────────
+# Fires alt entries when BTC breaks its rolling 1h VWAP with a volume spike.
+# Alts lag BTC by 5-15 min — we capture that catch-up move.
+leadlag:
+  enabled: true  # validated: profitable in backtest
+  vwap_window_bars: 12          # 12 × 5m bars = 1h rolling VWAP anchor
+  min_vwap_break_pct: 0.006     # BTC close must be ≥0.6% beyond VWAP  [tuned: was 0.003]
+  vol_spike_mult: 2.0           # current 5m vol / 20-bar avg must exceed this [tuned: was 1.5]
+  max_alt_premove_pct: 0.003    # alt already moved >0.3%? skip it (it priced in)
+  cooldown_mins: 30             # min gap between two trades on the same symbol
+  max_alts_per_signal: 6        # max simultaneous alt entries per BTC breakout (raised: more alts per signal)
+  check_interval_secs: 30       # how often the leadlag loop checks BTC
+  stop_pct: 0.0020              # SL = 0.20% from entry
+  tp_pct:   0.0100              # TP = 1.00% from entry (5 RR)  [tuned: was 0.005]
+  max_hold_bars: 6              # max 6 × 5m bars = 30 min hold
+  require_trend_aligned: true   # only LONG above BTC 1h EMA20, SHORT below [tuned: new]
+  exclude_symbols:              # never enter these as alts
+    - BTCUSDT
+
+# ── Session open trap ────────────────────────────────────────────────────────
+# Fade the first 15-min fake move at Asia / London / NY opens.
+session_trap:
+  enabled: false  # DISABLED: 24.7% WR in backtest (needs 40% to break even at 1.5 RR)
+  sessions: [1, 8, 13]           # UTC hours: Asia=1, London=8, NY=13
+  min_move_pct: 0.003            # fake move must be ≥ 0.3% in first 15 min
+  strong_move_pct: 0.006         # ≥ 0.6% = bonus score signal
+  max_range_pct: 0.015           # reject gap opens wider than 1.5%
+  sl_buffer_pct: 0.002           # SL 0.2% beyond session extreme
+  rr_ratio: 1.5                  # TP = entry ± SL_dist × 1.5
+  max_hold_bars: 12              # 12 × 5m bars = 1h max hold
+  cooldown_mins: 60              # one trade per symbol per session
+  max_entries_per_session: 3     # simultaneous entries cap per session fire
+
+# ── 1H inside bar flip ────────────────────────────────────────────────────────
+# Mean-reversion off 1H compression zones (2+ consecutive inside bars).
+insidebar:
+  enabled: false  # DISABLED: 33.7% WR, account wiped in backtest (16k overtraded entries)
+  min_inside_bars: 2             # minimum consecutive inside bars to qualify
+  max_zone_pct: 0.015            # zone width must be ≤ 1.5% of mid price
+  entry_zone_pct: 0.002          # price within 0.2% of zone boundary to enter
+  sl_buffer_pct: 0.002           # SL 0.2% beyond zone boundary
+  rr_ratio: 1.5                  # TP = entry ± SL_dist × 1.5
+  max_hold_bars: 6               # 6 × 1H bars = 6h max hold
+  cooldown_mins: 60              # per-symbol cooldown (1h between trades)
+  max_positions: 3               # max simultaneous inside bar positions
+  check_interval_secs: 60        # scan interval (align with 1H bar close)
+
+# ── Funding rate harvest ──────────────────────────────────────────────────────
+# Collect 8h funding payments by entering on the correct side of extreme rates.
+funding_harvest:
+  enabled: false  # DISABLED: 9.1% WR, only 11 trades in 6 months — insufficient activity
+  min_rate_pct: 0.0005           # |rate| ≥ 0.05% per 8h to trigger
+  strong_rate_pct: 0.0010        # ≥ 0.10% = bonus signal strength
+  entry_mins_before: 30          # enter 30 min before settlement
+  exit_mins_after: 15            # force-exit 15 min after settlement
+  sl_pct: 0.005                  # 0.5% SL (tight — limit directional risk)
+  tp_pct: 0.008                  # 0.8% TP (modest — income supplements this)
+  cooldown_hours: 8              # one trade per symbol per 8h window
+  max_entries_per_window: 4      # max simultaneous funding harvest positions
+  poll_interval_secs: 60         # how often to check within the active window
+  risk_pct: 0.005                # 0.5% risk per trade (smaller: income strategy)
+
+# ── Micro Range Flip strategy ────────────────────────────────────────────────
+# Mean-reversion scalp inside a tight 5m consolidation box.
+# 3-6 trades per sideways session; highest-frequency component.
+microrange:
+  enabled: true   # ENABLED: 7/9 symbols profitable in backtest (+143% on $9k, 6 months)
+  exclude_symbols:          # unprofitable in backtest — keep excluded
+    - ETHUSDT               #   28.1% WR, -$419
+    - AVAXUSDT              #   30.5% WR, -$204
+  window_bars: 10           # completed 5m bars used to measure the box
+  range_max_pct: 0.010      # max (high-low)/mid to qualify as micro-range (1%)
+  entry_zone_pct: 0.002     # price within 0.2% of range boundary to enter
+  stop_pct: 0.003           # SL = 0.3% beyond range boundary
+  tp_ratio: 0.75            # TP = 75% of range width from entry boundary
+  max_hold_bars: 6          # max 6 × 5m bars = 30 min hold
+  cooldown_mins: 20         # min gap between two trades on the same symbol
+  max_positions: 3          # max simultaneous micro-range entries (conservative)
+  max_vol_ratio: 1.3        # reject entries when vol > 1.3× 20-bar avg (breakout risk)
+  rsi_long_max: 40          # RSI(14) must be ≤ 40 for LONG entries
+  rsi_short_min: 60         # RSI(14) must be ≥ 60 for SHORT entries
+  use_rsi_filter: true      # set false to disable RSI gate
+  fire_threshold: 0.75      # 3 of 4 signals must fire (box + zone + vol + rsi)
+  check_interval_secs: 30   # how often the microrange loop scans
+  risk_pct: 0.01            # 1% equity risk per trade
+
+# ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
+long_short_ratio:
+  crowded_long_threshold:  1.8   # ratio > this → everyone long → contrarian bearish
+  crowded_short_threshold: 0.6   # ratio < this → everyone short → contrarian bullish
 
 # ── Telegram alerts ───────────────────────────────────────────────────────────
 # Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in environment (.env / shell).

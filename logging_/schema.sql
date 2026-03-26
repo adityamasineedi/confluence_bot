@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS regimes (
     regime      TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS bot_state (
+    key     TEXT PRIMARY KEY,
+    value   TEXT NOT NULL,
+    updated TEXT NOT NULL    -- ISO-8601 UTC timestamp
+);
+
+CREATE TABLE IF NOT EXISTS cooldowns (
+    symbol      TEXT NOT NULL,
+    strategy    TEXT NOT NULL,   -- MICRORANGE | LEADLAG | INSIDEBAR
+    expires_ts  REAL NOT NULL,   -- Unix timestamp (monotonic-equivalent: wall clock)
+    PRIMARY KEY (symbol, strategy)
+);
+
 CREATE INDEX IF NOT EXISTS idx_signals_symbol_ts  ON signals  (symbol, ts);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol_ts   ON trades   (symbol, ts);
 CREATE INDEX IF NOT EXISTS idx_regimes_symbol_ts  ON regimes  (symbol, ts);

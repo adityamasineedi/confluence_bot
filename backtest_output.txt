@@ -1,0 +1,503 @@
+2026-03-26 00:42:26,759 [INFO] backtest.fetcher: Fetching BTCUSDT...
+2026-03-26 00:42:26,759 [INFO] backtest.fetcher:   fetching: BTCUSDT 1m (500 candles)...
+2026-03-26 00:42:27,043 [INFO] backtest.fetcher:   fetching: BTCUSDT 5m (52000 candles)...
+2026-03-26 00:42:37,270 [INFO] backtest.fetcher:   fetching: BTCUSDT 15m (2880 candles)...
+2026-03-26 00:42:37,795 [INFO] backtest.fetcher:   fetching: BTCUSDT 1h (80000 candles)...
+2026-03-26 00:42:51,734 [INFO] backtest.fetcher:   fetching: BTCUSDT 4h (20000 candles)...
+2026-03-26 00:42:55,002 [INFO] backtest.fetcher:   fetching: BTCUSDT 1d (3650 candles)...
+2026-03-26 00:42:55,794 [INFO] backtest.fetcher:   fetching: BTCUSDT 1w (520 candles)...
+2026-03-26 00:42:56,101 [INFO] backtest.fetcher:   fetching: BTCUSDT OI...
+2026-03-26 00:42:56,457 [INFO] backtest.fetcher:   fetching: BTCUSDT funding...
+2026-03-26 00:42:56,614 [INFO] backtest.fetcher: Fetching ETHUSDT...
+2026-03-26 00:42:56,616 [INFO] backtest.fetcher:   fetching: ETHUSDT 1m (500 candles)...
+2026-03-26 00:42:56,844 [INFO] backtest.fetcher:   fetching: ETHUSDT 5m (52000 candles)...
+2026-03-26 00:43:08,751 [INFO] backtest.fetcher:   fetching: ETHUSDT 15m (2880 candles)...
+2026-03-26 00:43:09,269 [INFO] backtest.fetcher:   fetching: ETHUSDT 1h (80000 candles)...
+2026-03-26 00:43:21,869 [INFO] backtest.fetcher:   fetching: ETHUSDT 4h (20000 candles)...
+2026-03-26 00:43:25,234 [INFO] backtest.fetcher:   fetching: ETHUSDT 1d (3650 candles)...
+2026-03-26 00:43:26,042 [INFO] backtest.fetcher:   fetching: ETHUSDT 1w (520 candles)...
+2026-03-26 00:43:26,734 [INFO] backtest.fetcher:   fetching: ETHUSDT OI...
+2026-03-26 00:43:27,102 [INFO] backtest.fetcher:   fetching: ETHUSDT funding...
+2026-03-26 00:43:27,255 [INFO] backtest.fetcher: Fetching SOLUSDT...
+2026-03-26 00:43:27,255 [INFO] backtest.fetcher:   fetching: SOLUSDT 1m (500 candles)...
+2026-03-26 00:43:27,470 [INFO] backtest.fetcher:   fetching: SOLUSDT 5m (52000 candles)...
+2026-03-26 00:43:38,854 [INFO] backtest.fetcher:   fetching: SOLUSDT 15m (2880 candles)...
+2026-03-26 00:43:39,363 [INFO] backtest.fetcher:   fetching: SOLUSDT 1h (80000 candles)...
+2026-03-26 00:43:49,726 [INFO] backtest.fetcher:   fetching: SOLUSDT 4h (20000 candles)...
+2026-03-26 00:43:52,231 [INFO] backtest.fetcher:   fetching: SOLUSDT 1d (3650 candles)...
+2026-03-26 00:43:52,807 [INFO] backtest.fetcher:   fetching: SOLUSDT 1w (520 candles)...
+2026-03-26 00:43:53,115 [INFO] backtest.fetcher:   fetching: SOLUSDT OI...
+2026-03-26 00:43:53,481 [INFO] backtest.fetcher:   fetching: SOLUSDT funding...
+2026-03-26 00:43:53,633 [INFO] backtest.fetcher: Fetching BNBUSDT...
+2026-03-26 00:43:53,633 [INFO] backtest.fetcher:   fetching: BNBUSDT 1m (500 candles)...
+2026-03-26 00:43:53,859 [INFO] backtest.fetcher:   fetching: BNBUSDT 5m (52000 candles)...
+2026-03-26 00:44:04,853 [INFO] backtest.fetcher:   fetching: BNBUSDT 15m (2880 candles)...
+2026-03-26 00:44:05,422 [INFO] backtest.fetcher:   fetching: BNBUSDT 1h (80000 candles)...
+2026-03-26 00:44:15,675 [INFO] backtest.fetcher:   fetching: BNBUSDT 4h (20000 candles)...
+2026-03-26 00:44:18,289 [INFO] backtest.fetcher:   fetching: BNBUSDT 1d (3650 candles)...
+2026-03-26 00:44:19,049 [INFO] backtest.fetcher:   fetching: BNBUSDT 1w (520 candles)...
+2026-03-26 00:44:19,360 [INFO] backtest.fetcher:   fetching: BNBUSDT OI...
+2026-03-26 00:44:19,741 [INFO] backtest.fetcher:   fetching: BNBUSDT funding...
+2026-03-26 00:44:19,899 [INFO] backtest.fetcher: Fetching AVAXUSDT...
+2026-03-26 00:44:19,899 [INFO] backtest.fetcher:   fetching: AVAXUSDT 1m (500 candles)...
+2026-03-26 00:44:20,529 [INFO] backtest.fetcher:   fetching: AVAXUSDT 5m (52000 candles)...
+2026-03-26 00:44:29,555 [INFO] backtest.fetcher:   fetching: AVAXUSDT 15m (2880 candles)...
+2026-03-26 00:44:30,068 [INFO] backtest.fetcher:   fetching: AVAXUSDT 1h (80000 candles)...
+2026-03-26 00:44:39,859 [INFO] backtest.fetcher:   fetching: AVAXUSDT 4h (20000 candles)...
+2026-03-26 00:44:42,235 [INFO] backtest.fetcher:   fetching: AVAXUSDT 1d (3650 candles)...
+2026-03-26 00:44:42,802 [INFO] backtest.fetcher:   fetching: AVAXUSDT 1w (520 candles)...
+2026-03-26 00:44:43,108 [INFO] backtest.fetcher:   fetching: AVAXUSDT OI...
+2026-03-26 00:44:43,470 [INFO] backtest.fetcher:   fetching: AVAXUSDT funding...
+2026-03-26 00:44:43,624 [INFO] backtest.fetcher: Fetching ADAUSDT...
+2026-03-26 00:44:43,626 [INFO] backtest.fetcher:   fetching: ADAUSDT 1m (500 candles)...
+2026-03-26 00:44:43,852 [INFO] backtest.fetcher:   fetching: ADAUSDT 5m (52000 candles)...
+2026-03-26 00:44:53,536 [INFO] backtest.fetcher:   fetching: ADAUSDT 15m (2880 candles)...
+2026-03-26 00:44:54,190 [INFO] backtest.fetcher:   fetching: ADAUSDT 1h (80000 candles)...
+2026-03-26 00:45:05,171 [INFO] backtest.fetcher:   fetching: ADAUSDT 4h (20000 candles)...
+2026-03-26 00:45:07,988 [INFO] backtest.fetcher:   fetching: ADAUSDT 1d (3650 candles)...
+2026-03-26 00:45:08,711 [INFO] backtest.fetcher:   fetching: ADAUSDT 1w (520 candles)...
+2026-03-26 00:45:09,012 [INFO] backtest.fetcher:   fetching: ADAUSDT OI...
+2026-03-26 00:45:09,386 [INFO] backtest.fetcher:   fetching: ADAUSDT funding...
+2026-03-26 00:45:09,539 [INFO] backtest.fetcher: Fetching DOTUSDT...
+2026-03-26 00:45:09,541 [INFO] backtest.fetcher:   fetching: DOTUSDT 1m (500 candles)...
+2026-03-26 00:45:09,760 [INFO] backtest.fetcher:   fetching: DOTUSDT 5m (52000 candles)...
+2026-03-26 00:45:21,116 [INFO] backtest.fetcher:   fetching: DOTUSDT 15m (2880 candles)...
+2026-03-26 00:45:21,605 [INFO] backtest.fetcher:   fetching: DOTUSDT 1h (80000 candles)...
+2026-03-26 00:45:32,639 [INFO] backtest.fetcher:   fetching: DOTUSDT 4h (20000 candles)...
+2026-03-26 00:45:35,078 [INFO] backtest.fetcher:   fetching: DOTUSDT 1d (3650 candles)...
+2026-03-26 00:45:35,630 [INFO] backtest.fetcher:   fetching: DOTUSDT 1w (520 candles)...
+2026-03-26 00:45:36,205 [INFO] backtest.fetcher:   fetching: DOTUSDT OI...
+2026-03-26 00:45:36,577 [INFO] backtest.fetcher:   fetching: DOTUSDT funding...
+2026-03-26 00:45:36,732 [INFO] backtest.fetcher: Fetching DOGEUSDT...
+2026-03-26 00:45:36,732 [INFO] backtest.fetcher:   fetching: DOGEUSDT 1m (500 candles)...
+2026-03-26 00:45:36,952 [INFO] backtest.fetcher:   fetching: DOGEUSDT 5m (52000 candles)...
+2026-03-26 00:45:48,120 [INFO] backtest.fetcher:   fetching: DOGEUSDT 15m (2880 candles)...
+2026-03-26 00:45:48,652 [INFO] backtest.fetcher:   fetching: DOGEUSDT 1h (80000 candles)...
+2026-03-26 00:45:59,613 [INFO] backtest.fetcher:   fetching: DOGEUSDT 4h (20000 candles)...
+2026-03-26 00:46:02,182 [INFO] backtest.fetcher:   fetching: DOGEUSDT 1d (3650 candles)...
+2026-03-26 00:46:02,902 [INFO] backtest.fetcher:   fetching: DOGEUSDT 1w (520 candles)...
+2026-03-26 00:46:03,205 [INFO] backtest.fetcher:   fetching: DOGEUSDT OI...
+2026-03-26 00:46:03,596 [INFO] backtest.fetcher:   fetching: DOGEUSDT funding...
+2026-03-26 00:46:03,755 [INFO] backtest.fetcher: Fetching SUIUSDT...
+2026-03-26 00:46:03,755 [INFO] backtest.fetcher:   fetching: SUIUSDT 1m (500 candles)...
+2026-03-26 00:46:04,170 [INFO] backtest.fetcher:   fetching: SUIUSDT 5m (52000 candles)...
+2026-03-26 00:46:14,197 [INFO] backtest.fetcher:   fetching: SUIUSDT 15m (2880 candles)...
+2026-03-26 00:46:14,682 [INFO] backtest.fetcher:   fetching: SUIUSDT 1h (80000 candles)...
+2026-03-26 00:46:19,640 [INFO] backtest.fetcher:   fetching: SUIUSDT 4h (20000 candles)...
+2026-03-26 00:46:20,993 [INFO] backtest.fetcher:   fetching: SUIUSDT 1d (3650 candles)...
+2026-03-26 00:46:21,335 [INFO] backtest.fetcher:   fetching: SUIUSDT 1w (520 candles)...
+2026-03-26 00:46:21,629 [INFO] backtest.fetcher:   fetching: SUIUSDT OI...
+2026-03-26 00:46:22,006 [INFO] backtest.fetcher:   fetching: SUIUSDT funding...
+2026-03-26 00:46:22,485 [INFO] backtest.microrange_engine: MicroRange backtest BTCUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,557 [INFO] backtest.microrange_engine: MicroRange backtest ETHUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,603 [INFO] backtest.microrange_engine: MicroRange backtest SOLUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,648 [INFO] backtest.microrange_engine: MicroRange backtest BNBUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,700 [INFO] backtest.microrange_engine: MicroRange backtest AVAXUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,740 [INFO] backtest.microrange_engine: MicroRange backtest ADAUSDT: 8817 bars (2026-02-23 04:30 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:22,801 [INFO] backtest.microrange_engine: MicroRange backtest DOTUSDT: 8818 bars (2026-02-23 04:30 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:22,860 [INFO] backtest.microrange_engine: MicroRange backtest DOGEUSDT: 8818 bars (2026-02-23 04:30 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:22,924 [INFO] backtest.microrange_engine: MicroRange backtest SUIUSDT: 8818 bars (2026-02-23 04:30 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:22,969 [INFO] backtest.microrange_engine: MicroRange backtest complete: 2413 trades  total_pnl=$823.10  avg_return_per_symbol=1.9%
+2026-03-26 00:46:23,248 [INFO] backtest.session_engine: SessionTrap backtest BTCUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,256 [INFO] backtest.session_engine: SessionTrap backtest ETHUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,265 [INFO] backtest.session_engine: SessionTrap backtest SOLUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,270 [INFO] backtest.session_engine: SessionTrap backtest BNBUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,278 [INFO] backtest.session_engine: SessionTrap backtest AVAXUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,292 [INFO] backtest.session_engine: SessionTrap backtest ADAUSDT: 8849 bars (2026-02-23 01:50 \u2192 2026-03-25 19:10)
+2026-03-26 00:46:23,302 [INFO] backtest.session_engine: SessionTrap backtest DOTUSDT: 8850 bars (2026-02-23 01:50 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:23,322 [INFO] backtest.session_engine: SessionTrap backtest DOGEUSDT: 8850 bars (2026-02-23 01:50 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:23,338 [INFO] backtest.session_engine: SessionTrap backtest SUIUSDT: 8850 bars (2026-02-23 01:50 \u2192 2026-03-25 19:15)
+2026-03-26 00:46:23,345 [INFO] backtest.session_engine: SessionTrap backtest complete: 248 trades  final=$4688.12  return=-2.5%
+
+Fetching historical data for ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT'] ...
+(cached files in backtest/data/ reused if < 24 h old)
+
+Date window      : last 30 days  (cutoff 2026-02-23)
+
+  BTCUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  ETHUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  SOLUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  BNBUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  AVAXUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  ADAUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  DOTUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  DOGEUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+  SUIUSDT  1h bars: 930  |  OI snapshots: 672  |  funding records: 200
+
+
+====================================================================
+Running MICRO-RANGE backtest (5m mean-reversion)...
+
+Starting capital : $4,806.00
+Risk per trade   : 0.1% of equity
+Box detection    : 10 × 5m bars  |  entry zone 0.2%  |  RSI filter
+Max hold         : 30 min (6 × 5m)
+
+
+====================================================================
+  CONFLUENCE BOT -- BACKTEST RESULTS
+====================================================================
+
+  OVERALL SUMMARY
+--------------------------------------------------------------------
+  Starting capital.........................................$4,806.00
+  Final equity.............................................$5,629.10
+  Total return................................................+17.1%
+  Total trades..................................................2413
+  Wins / Losses / T-O...............................756 / 616 / 1041
+  Win rate.....................................................31.3%
+  Profit factor.................................................1.22
+  Avg win.....................................................+$4.29
+  Avg loss....................................................$-5.06
+  Max drawdown.......................................$137.30  (2.4%)
+  Longest win streak..............................................12
+  Longest loss streak..............................................9
+
+  BY REGIME
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  MICRORANGE        2413 756/616/1041    31.3%     +$823.10
+
+  BY SYMBOL
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  ADAUSDT            249   89/70/90    35.7%     +$176.31
+  AVAXUSDT           272  84/66/122    30.9%     +$127.85
+  BNBUSDT            418 117/78/223    28.0%     +$111.76
+  BTCUSDT            367 105/92/170    28.6%      $-24.23
+  DOGEUSDT           232   75/68/89    32.3%      +$27.94
+  DOTUSDT            187   66/55/66    35.3%     +$145.86
+  ETHUSDT            262  78/64/120    29.8%      +$83.53
+  SOLUSDT            233   79/63/91    33.9%      +$96.85
+  SUIUSDT            193   63/60/70    32.6%      +$77.22
+
+  MONTHLY RETURNS
+--------------------------------------------------------------------
+  Month      Trades    W/L/T      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026-02       361  125/105/131     35%    +$162.24   $4,968.24     +3.4%
+  2026-03      2052  631/511/910     31%    +$660.87   $5,629.11    +13.3%
+
+  --------------------------------------------------------------
+  Year       Trades     Wins      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026         2413      756     31%    +$823.10   $5,629.11    +17.1%
+
+  SIGNAL VALIDATION  (win rate when signal True vs False)
+--------------------------------------------------------------------
+  Signal                   N(T)   WR(T)   N(F)   WR(F)    Edge
+  ----------------------------------------------------------
+  box_detected             2413     31%      0       -    +31%
+  entry_zone               2413     31%      0       -    +31%
+  rsi_aligned              2413     31%      0       -    +31%
+  volume_ok                2413     31%      0       -    +31%
+
+  LAST 15 TRADES
+--------------------------------------------------------------------
+  Date         Sym        Dir    Regime   Score    Risk$  Outcome       PnL
+  ----------------------------------------------------------------
+  2026-03-25   SOLUSDT    SHORT  MICROR    0.75     $5.1  TIMEOUT    $-0.14
+  2026-03-25   BNBUSDT    SHORT  MICROR    0.75     $5.1  WIN        +$3.30
+  2026-03-25   DOGEUSDT   SHORT  MICROR    0.75     $5.0  LOSS       $-5.03
+  2026-03-25   DOGEUSDT   LONG   MICROR    0.75     $5.0  LOSS       $-5.03
+  2026-03-25   BTCUSDT    LONG   MICROR    0.75     $5.0  LOSS       $-4.98
+  2026-03-25   AVAXUSDT   LONG   MICROR    0.75     $5.1  LOSS       $-5.14
+  2026-03-25   ADAUSDT    LONG   MICROR    0.75     $5.2  LOSS       $-5.18
+  2026-03-25   DOTUSDT    LONG   MICROR    0.75     $5.2  LOSS       $-5.16
+  2026-03-25   ADAUSDT    SHORT  MICROR    0.75     $5.2  WIN        +$2.76
+  2026-03-25   DOGEUSDT   LONG   MICROR    0.75     $5.0  WIN        +$3.24
+  2026-03-25   BNBUSDT    LONG   MICROR    0.75     $5.1  TIMEOUT    +$0.27
+  2026-03-25   BTCUSDT    LONG   MICROR    0.75     $5.0  TIMEOUT    $-0.62
+  2026-03-25   ETHUSDT    LONG   MICROR    0.75     $5.1  TIMEOUT    +$1.32
+  2026-03-25   SOLUSDT    LONG   MICROR    0.75     $5.1  TIMEOUT    +$0.11
+  2026-03-25   SUIUSDT    SHORT  MICROR    0.75     $5.1  TIMEOUT    +$0.32
+
+====================================================================
+
+Results saved to C:\projects\confluence_bot\backtest\results_microrange.json
+
+====================================================================
+Running SESSION TRAP backtest (fade session open fake moves)...
+
+Starting capital : $4,806.00
+Risk per trade   : 0.1% of equity
+Sessions         : Asia 01:00 / London 08:00 / NY 13:00 UTC
+RR               : 1.5×  |  max hold 1h
+
+
+====================================================================
+  CONFLUENCE BOT -- BACKTEST RESULTS
+====================================================================
+
+  OVERALL SUMMARY
+--------------------------------------------------------------------
+  Starting capital.........................................$4,806.00
+  Final equity.............................................$4,688.12
+  Total return.................................................-2.5%
+  Total trades...................................................248
+  Wins / Losses / T-O..................................72 / 136 / 40
+  Win rate.....................................................29.0%
+  Profit factor.................................................0.83
+  Avg win.....................................................+$7.36
+  Avg loss....................................................$-4.92
+  Max drawdown.......................................$340.82  (7.1%)
+  Longest win streak...............................................9
+  Longest loss streak.............................................15
+
+  BY REGIME
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  SESSION            248  72/136/40    29.0%     $-117.88
+
+  BY SYMBOL
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  ADAUSDT             34    10/16/8    29.4%       $-2.19
+  AVAXUSDT            33    11/19/3    33.3%      $-10.48
+  BNBUSDT             16     3/11/2    18.8%      $-22.60
+  BTCUSDT             20     7/10/3    35.0%       +$6.41
+  DOGEUSDT            30    10/16/4    33.3%       $-9.082026-03-26 00:46:23,441 [INFO] backtest.insidebar_engine: InsideBar backtest BTCUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,444 [INFO] backtest.insidebar_engine: InsideBar backtest ETHUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,444 [INFO] backtest.insidebar_engine: InsideBar backtest SOLUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,451 [INFO] backtest.insidebar_engine: InsideBar backtest BNBUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,454 [INFO] backtest.insidebar_engine: InsideBar backtest AVAXUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,454 [INFO] backtest.insidebar_engine: InsideBar backtest ADAUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,458 [INFO] backtest.insidebar_engine: InsideBar backtest DOTUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,461 [INFO] backtest.insidebar_engine: InsideBar backtest DOGEUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,461 [INFO] backtest.insidebar_engine: InsideBar backtest SUIUSDT: 922 bars (2026-02-15 10:00 \u2192 2026-03-25 19:00)
+2026-03-26 00:46:23,466 [INFO] backtest.insidebar_engine: InsideBar backtest complete: 403 trades  final=$4471.78  return=-7.0%
+2026-03-26 00:46:23,573 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest BTCUSDT: 200 funding events
+2026-03-26 00:46:23,575 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest ETHUSDT: 200 funding events
+2026-03-26 00:46:23,575 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest SOLUSDT: 200 funding events
+2026-03-26 00:46:23,575 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest BNBUSDT: 200 funding events
+2026-03-26 00:46:23,579 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest AVAXUSDT: 200 funding events
+2026-03-26 00:46:23,579 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest ADAUSDT: 200 funding events
+2026-03-26 00:46:23,581 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest DOTUSDT: 200 funding events
+2026-03-26 00:46:23,592 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest DOGEUSDT: 200 funding events
+2026-03-26 00:46:23,593 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest SUIUSDT: 200 funding events
+2026-03-26 00:46:23,593 [INFO] backtest.funding_harvest_engine: FundingHarvest backtest complete: 12 trades  final=$4807.47  return=0.0%
+
+  DOTUSDT             32     8/18/6    25.0%      $-22.14
+  ETHUSDT             23     6/13/4    26.1%      $-23.39
+  SOLUSDT             30     7/18/5    23.3%      $-36.37
+  SUIUSDT             30    10/15/5    33.3%       +$1.95
+
+  MONTHLY RETURNS
+--------------------------------------------------------------------
+  Month      Trades    W/L/T      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026-02        51  13/33/5     25%     $-67.88   $4,738.12     -1.4%
+  2026-03       197  59/103/35     30%     $-50.00   $4,688.12     -1.1%
+
+  --------------------------------------------------------------
+  Year       Trades     Wins      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026          248       72     29%    $-117.88   $4,688.12     -2.5%
+
+  SIGNAL VALIDATION  (win rate when signal True vs False)
+--------------------------------------------------------------------
+  Signal                   N(T)   WR(T)   N(F)   WR(F)    Edge
+  ----------------------------------------------------------
+  cooldown_ok               248     29%      0       -    +29%
+  fake_move_ok              248     29%      0       -    +29%
+  spread_tight              248     29%      0       -    +29%
+
+  LAST 15 TRADES
+--------------------------------------------------------------------
+  Date         Sym        Dir    Regime   Score    Risk$  Outcome       PnL
+  ----------------------------------------------------------------
+  2026-03-23   DOGEUSDT   SHORT  SESSIO    0.75     $4.8  WIN        +$7.26
+  2026-03-23   ETHUSDT    SHORT  SESSIO    0.75     $5.0  WIN        +$7.46
+  2026-03-23   AVAXUSDT   SHORT  SESSIO    0.75     $4.9  WIN        +$7.35
+  2026-03-23   SOLUSDT    SHORT  SESSIO    0.75     $4.9  WIN        +$7.40
+  2026-03-23   BTCUSDT    SHORT  SESSIO    0.75     $5.0  TIMEOUT    +$3.39
+  2026-03-23   SUIUSDT    SHORT  SESSIO    0.75     $4.9  TIMEOUT    +$3.91
+  2026-03-23   SUIUSDT    LONG   SESSIO    0.75     $4.9  WIN        +$7.31
+  2026-03-23   DOGEUSDT   LONG   SESSIO    0.75     $4.9  WIN        +$7.28
+  2026-03-24   DOGEUSDT   LONG   SESSIO    0.75     $4.9  WIN        +$7.29
+  2026-03-24   DOTUSDT    LONG   SESSIO    0.75     $4.9  LOSS       $-4.89
+  2026-03-24   ADAUSDT    SHORT  SESSIO    0.75     $4.9  TIMEOUT    +$1.40
+  2026-03-25   ADAUSDT    SHORT  SESSIO    0.75     $4.9  WIN        +$7.34
+  2026-03-25   DOGEUSDT   SHORT  SESSIO    0.75     $4.9  WIN        +$7.30
+  2026-03-25   ADAUSDT    SHORT  SESSIO    0.75     $4.9  WIN        +$7.35
+  2026-03-25   SUIUSDT    SHORT  SESSIO    0.75     $4.9  LOSS       $-4.88
+
+====================================================================
+
+Results saved to C:\projects\confluence_bot\backtest\results_session.json
+
+====================================================================
+Running INSIDE BAR FLIP backtest (1H compression zones)...
+
+Starting capital : $4,806.00
+Risk per trade   : 0.1% of equity
+Min inside bars  : 2  |  RR 1.5×  |  max hold 6H
+
+
+====================================================================
+  CONFLUENCE BOT -- BACKTEST RESULTS
+====================================================================
+
+  OVERALL SUMMARY
+--------------------------------------------------------------------
+  Starting capital.........................................$4,806.00
+  Final equity.............................................$4,471.78
+  Total return.................................................-7.0%
+  Total trades...................................................403
+  Wins / Losses / T-O..................................130 / 266 / 7
+  Win rate.....................................................32.3%
+  Profit factor.................................................0.74
+  Avg win.....................................................+$7.22
+  Avg loss....................................................$-4.82
+  Max drawdown.......................................$368.01  (7.6%)
+  Longest win streak...............................................5
+  Longest loss streak.............................................13
+
+  BY REGIME
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  INSIDEBAR          403  130/266/7    32.3%     $-334.22
+
+  BY SYMBOL
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  ADAUSDT             49    15/34/0    30.6%      $-55.08
+  AVAXUSDT            46    15/31/0    32.6%      $-41.18
+  BNBUSDT             57    19/36/2    33.3%      $-34.96
+  BTCUSDT             41    14/25/2    34.1%      $-20.22
+  DOGEUSDT            47    16/30/1    34.0%      $-26.09
+  DOTUSDT             39     9/30/0    23.1%      $-77.77
+  ETHUSDT             49    15/33/1    30.6%      $-48.18
+  SOLUSDT             45    14/30/1    31.1%      $-42.22
+  SUIUSDT             30    13/17/0    43.3%      +$11.50
+
+  MONTHLY RETURNS
+--------------------------------------------------------------------
+  Month      Trades    W/L/T      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026-02       129  41/88/0     32%    $-131.07   $4,674.93     -2.7%
+  2026-03       274  89/178/7     32%    $-203.16   $4,471.77     -4.3%
+
+  --------------------------------------------------------------
+  Year       Trades     Wins      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026          403      130     32%    $-334.22   $4,471.77     -7.0%
+
+  SIGNAL VALIDATION  (win rate when signal True vs False)
+--------------------------------------------------------------------
+  Signal                   N(T)   WR(T)   N(F)   WR(F)    Edge
+  ----------------------------------------------------------
+  compression_ok            403     32%      0       -    +32%
+  entry_zone                403     32%      0       -    +32%
+  zone_tight                403     32%      0       -    +32%
+
+  LAST 15 TRADES
+--------------------------------------------------------------------
+  Date         Sym        Dir    Regime   Score    Risk$  Outcome       PnL
+  ----------------------------------------------------------------
+  2026-03-24   ETHUSDT    SHORT  INSIDE    0.75     $4.9  LOSS       $-4.93
+  2026-03-24   AVAXUSDT   LONG   INSIDE    0.75     $4.8  LOSS       $-4.81
+  2026-03-24   DOGEUSDT   SHORT  INSIDE    0.75     $4.6  LOSS       $-4.65
+  2026-03-24   DOGEUSDT   SHORT  INSIDE    0.75     $4.6  LOSS       $-4.64
+  2026-03-25   SUIUSDT    SHORT  INSIDE    0.75     $4.6  WIN        +$6.97
+  2026-03-25   BNBUSDT    LONG   INSIDE    0.75     $4.8  WIN        +$7.25
+  2026-03-25   DOTUSDT    LONG   INSIDE    0.75     $4.7  LOSS       $-4.67
+  2026-03-25   ETHUSDT    SHORT  INSIDE    0.75     $4.9  LOSS       $-4.93
+  2026-03-25   SOLUSDT    SHORT  INSIDE    0.75     $4.9  LOSS       $-4.89
+  2026-03-25   ADAUSDT    SHORT  INSIDE    0.75     $4.8  LOSS       $-4.75
+  2026-03-25   BTCUSDT    LONG   INSIDE    0.75     $5.0  TIMEOUT    $-0.45
+  2026-03-25   ETHUSDT    LONG   INSIDE    0.75     $4.9  TIMEOUT    +$3.97
+  2026-03-25   SOLUSDT    LONG   INSIDE    0.75     $4.9  TIMEOUT    +$2.07
+  2026-03-25   BNBUSDT    LONG   INSIDE    0.75     $4.8  TIMEOUT    +$4.02
+  2026-03-25   DOGEUSDT   LONG   INSIDE    0.75     $4.6  TIMEOUT    +$1.97
+
+====================================================================
+
+Results saved to C:\projects\confluence_bot\backtest\results_insidebar.json
+
+====================================================================
+Running FUNDING HARVEST backtest (collect 8h settlement payments)...
+
+Starting capital : $4,806.00
+Risk per trade   : 0.1% of equity
+Min rate         : 0.05%  |  SL 0.5%  |  TP 0.8%  |  RR 1.6×
+
+
+====================================================================
+  CONFLUENCE BOT -- BACKTEST RESULTS
+====================================================================
+
+  OVERALL SUMMARY
+--------------------------------------------------------------------
+  Starting capital.........................................$4,806.00
+  Final equity.............................................$4,807.47
+  Total return.................................................+0.0%
+  Total trades....................................................12
+  Wins / Losses / T-O......................................1 / 2 / 9
+  Win rate......................................................8.3%
+  Profit factor.................................................1.14
+  Avg win.....................................................+$7.99
+  Avg loss....................................................$-5.00
+  Max drawdown.........................................$5.76  (0.1%)
+  Longest win streak...............................................1
+  Longest loss streak..............................................1
+
+  BY REGIME
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  FUNDING             12      1/2/9     8.3%       +$1.47
+
+  BY SYMBOL
+--------------------------------------------------------------------
+                  Trades      W/L/T  WinRate          PnL
+  --------------------------------------------------------
+  DOTUSDT              8      1/2/5    12.5%       +$2.23
+  SOLUSDT              4      0/0/4     0.0%       $-0.76
+
+  MONTHLY RETURNS
+--------------------------------------------------------------------
+  Month      Trades    W/L/T      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026-02         5    0/0/5      0%      $-0.76   $4,805.24     -0.0%
+  2026-03         7    1/2/4     14%      +$2.23   $4,807.47     +0.0%
+
+  --------------------------------------------------------------
+  Year       Trades     Wins      WR         PnL      Equity   Return%
+  --------------------------------------------------------------
+  2026           12        1      8%      +$1.47   $4,807.47     +0.0%
+
+  SIGNAL VALIDATION  (win rate when signal True vs False)
+--------------------------------------------------------------------
+  Signal                   N(T)   WR(T)   N(F)   WR(F)    Edge
+  ----------------------------------------------------------
+  cooldown_ok                12      8%      0       -     +8%
+  in_window                  12      8%      0       -     +8%
+  rate_extreme               12      8%      0       -     +8%
+
+  LAST 15 TRADES
+--------------------------------------------------------------------
+  Date         Sym        Dir    Regime   Score    Risk$  Outcome       PnL
+  ----------------------------------------------------------------
+  2026-02-23   SOLUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+  2026-02-23   SOLUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+  2026-02-23   SOLUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+  2026-02-23   DOTUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+  2026-02-23   SOLUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    $-0.76
+  2026-03-14   DOTUSDT    LONG   FUNDIN    0.75     $5.0  LOSS       $-5.00
+  2026-03-14   DOTUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+  2026-03-15   DOTUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$1.41
+  2026-03-15   DOTUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$2.82
+  2026-03-16   DOTUSDT    LONG   FUNDIN    0.75     $5.0  WIN        +$7.99
+  2026-03-24   DOTUSDT    LONG   FUNDIN    0.75     $5.0  LOSS       $-5.00
+  2026-03-25   DOTUSDT    LONG   FUNDIN    0.75     $5.0  TIMEOUT    +$0.00
+
+====================================================================
+
+Results saved to C:\projects\confluence_bot\backtest\results_funding.json

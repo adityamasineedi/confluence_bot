@@ -94,7 +94,7 @@ def _signal_alert(score_dict: dict, order: dict) -> str:
         f"Entry:  <code>{entry:,.4f}</code>",
         f"SL:     <code>{stop:,.4f}</code>",
         f"TP:     <code>{tp:,.4f}</code>",
-        f"Qty:    <code>{qty:.4f}</code>",
+        f"Qty:    <code>{int(qty) if qty == int(qty) else f'{qty:.4f}'}</code>",
         "",
         f"✅ Fired:  {', '.join(fired) if fired else '—'}",
         f"❌ Missed: {', '.join(missed) if missed else '—'}",
@@ -170,7 +170,7 @@ def _trade_close_alert(trade: dict, outcome: str, exit_price: float, pnl: float)
         "",
         f"Entry:  <code>{entry:,.4f}</code>",
         f"Exit:   <code>{exit_price:,.4f}</code>",
-        f"Size:   <code>{size:.4f}</code>",
+        f"Size:   <code>{int(size) if size == int(size) else f'{size:.4f}'}</code>",
         f"PnL:    <b>{pnl_sign}{pnl:,.2f} USDT</b>",
     ]
     return "\n".join(lines)

@@ -1,0 +1,65 @@
+2026-03-26 00:38:19,295 [INFO] confluence_bot: Starting confluence_bot  |  PAPER_MODE=False  |  symbols=['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']
+2026-03-26 00:38:19,298 [INFO] core.executor: Restored 2 active deal(s) from DB: [('SUIUSDT', 'LONG'), ('SOLUSDT', 'LONG')]
+2026-03-26 00:38:21,806 [INFO] data.binance_rest: Symbol setup complete: leverage=3x  margin=ISOLATED  symbols=['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']
+2026-03-26 00:38:21,814 [INFO] confluence_bot: Metrics server starting on http://0.0.0.0:8001
+2026-03-26 00:38:21,841 [INFO] confluence_bot: Lead-lag strategy enabled
+2026-03-26 00:38:21,861 [INFO] confluence_bot: Micro-range flip strategy enabled — symbols=['BTCUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']  excluded=['ETHUSDT', 'AVAXUSDT']
+2026-03-26 00:38:21,861 [INFO] confluence_bot: Swing monitor started (5-min check, alerts on HH+HL flip)
+2026-03-26 00:38:21,861 [INFO] confluence_bot: Waiting for cache to populate (need 50 × 1h bars per symbol)...
+2026-03-26 00:38:21,865 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-26 00:38:21,942 [INFO] core.leadlag_loop: LeadLag loop started — interval=30s  alts=['ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']  max_per_signal=6
+2026-03-26 00:38:22,001 [INFO] core.microrange_loop: MicroRange loop started — interval=30s  symbols=['BTCUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']  max_positions=3
+2026-03-26 00:38:22,026 [INFO] core.trade_monitor: Trade monitor started  paper=False  poll=30s
+2026-03-26 00:38:22,026 [INFO] core.swing_monitor: Swing monitor started — interval=300s  symbols=['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'AVAXUSDT', 'ADAUSDT', 'DOTUSDT', 'DOGEUSDT', 'SUIUSDT']
+2026-03-26 00:38:22,436 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:38:22,606 [INFO] data.binance_ws: WS connected
+2026-03-26 00:39:24,116 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:40:21,921 [WARNING] confluence_bot: Cache not fully populated after 120s — starting anyway
+2026-03-26 00:40:21,921 [INFO] confluence_bot: BTCUSDT regime \u2192 TREND
+2026-03-26 00:40:25,122 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:40:28,729 [INFO] confluence_bot: ETHUSDT regime \u2192 TREND
+2026-03-26 00:40:35,400 [INFO] confluence_bot: SOLUSDT regime \u2192 TREND
+2026-03-26 00:40:42,060 [INFO] confluence_bot: BNBUSDT regime \u2192 TREND
+2026-03-26 00:40:48,734 [INFO] confluence_bot: AVAXUSDT regime \u2192 TREND
+2026-03-26 00:40:55,399 [INFO] confluence_bot: ADAUSDT regime \u2192 TREND
+2026-03-26 00:41:02,057 [INFO] confluence_bot: DOTUSDT regime \u2192 TREND
+2026-03-26 00:41:08,738 [INFO] confluence_bot: DOGEUSDT regime \u2192 TREND
+2026-03-26 00:41:15,386 [INFO] confluence_bot: SUIUSDT regime \u2192 TREND
+2026-03-26 00:41:35,882 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:42:22,084 [INFO] confluence_bot: BTCUSDT regime \u2192 RANGE
+2026-03-26 00:42:28,883 [INFO] confluence_bot: ETHUSDT regime \u2192 RANGE
+2026-03-26 00:42:35,569 [INFO] confluence_bot: SOLUSDT regime \u2192 RANGE
+2026-03-26 00:42:42,234 [INFO] confluence_bot: BNBUSDT regime \u2192 RANGE
+2026-03-26 00:42:47,048 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:43:02,204 [INFO] confluence_bot: DOTUSDT regime \u2192 RANGE
+2026-03-26 00:43:48,036 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:44:49,181 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:45:50,148 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:46:51,157 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:47:52,115 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:48:53,059 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:49:49,047 [INFO] confluence_bot: AVAXUSDT regime \u2192 RANGE
+2026-03-26 00:49:54,127 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:50:55,084 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:51:56,080 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:53:06,889 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:54:17,996 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:55:18,994 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:55:22,506 [INFO] confluence_bot: BTCUSDT regime \u2192 TREND
+2026-03-26 00:55:29,181 [INFO] confluence_bot: ETHUSDT regime \u2192 TREND
+2026-03-26 00:55:35,837 [INFO] confluence_bot: SOLUSDT regime \u2192 TREND
+2026-03-26 00:55:42,498 [INFO] confluence_bot: BNBUSDT regime \u2192 TREND
+2026-03-26 00:56:02,529 [INFO] confluence_bot: DOTUSDT regime \u2192 TREND
+2026-03-26 00:56:19,950 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:57:21,208 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:58:23,079 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 00:59:33,929 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:00:35,071 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:01:36,507 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:02:37,954 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:02:49,484 [INFO] confluence_bot: AVAXUSDT regime \u2192 TREND
+2026-03-26 01:03:38,916 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:04:40,076 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:05:41,316 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:06:42,306 [INFO] data.binance_rest: Account balance: 4806.51 USDT
+2026-03-26 01:07:43,457 [INFO] data.binance_rest: Account balance: 4806.51 USDT

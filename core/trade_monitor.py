@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
 _PAPER_MODE      = os.environ.get("PAPER_MODE", "0") == "1"
 _POLL_INTERVAL_S = 30
-_BINANCE_BASE    = "https://fapi.binance.com"
+_BINANCE_BASE    = os.environ.get("BINANCE_BASE_URL", "https://fapi.binance.com")
 _API_KEY         = os.environ.get("BINANCE_API_KEY", "")
 _SECRET          = os.environ.get("BINANCE_SECRET", "")
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -48,7 +48,7 @@ def _load_open_trades() -> list[dict]:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, symbol, direction, entry, stop_loss, take_profit, "
-                "size, order_id FROM trades WHERE status='OPEN'"
+                "size, order_id, regime, ts FROM trades WHERE status='OPEN'"
             ).fetchall()
         return [dict(r) for r in rows]
     except Exception as exc:
@@ -89,30 +89,177 @@ async def _check_live_order(
     trade: dict, session: aiohttp.ClientSession
 ) -> tuple[str, float] | None:
     """
-    Query Binance for entry order status.
-    Returns ('FILLED', fill_price) | ('CANCELLED', 0.0) | None (still open).
+    Check if a live trade has hit SL or TP via Binance position + ticker.
+
+    If order_id is available, checks the order status first.
+    Falls back to position-based check: if no open position exists for the
+    symbol, infer TP or SL hit from the current price vs entry levels.
+
+    Returns ('TP'/'SL', exit_price) | ('CANCELLED', 0.0) | None (still open).
     """
-    order_id = str(trade.get("order_id", "")).strip()
-    if not order_id or order_id in ("", "None", "0"):
+    symbol   = trade["symbol"]
+    headers  = {"X-MBX-APIKEY": _API_KEY}
+
+    # ── Step 1: Check open orders — if both SL and TP still open → trade live ──
+    direction = trade["direction"]
+    sl = float(trade["stop_loss"])
+    tp = float(trade["take_profit"])
+    try:
+        open_params = _sign({"symbol": symbol})
+        async with session.get(
+            f"{_BINANCE_BASE}/fapi/v1/openOrders",
+            params=open_params, headers=headers
+        ) as resp:
+            resp.raise_for_status()
+            open_orders = await resp.json()
+
+        # Count reduce-only orders for this symbol (our SL + TP bracket)
+        bracket_open = sum(
+            1 for o in open_orders
+            if o.get("reduceOnly") and o.get("symbol") == symbol
+        )
+        if bracket_open >= 2:
+            return None   # both SL and TP still live → position still open
+        if bracket_open == 1:
+            return None   # one leg remaining → position still open
+
+    except Exception as exc:
+        log.debug("_check_live_order openOrders (%s): %s", symbol, exc)
+
+    # ── Step 2: Bracket gone — check position size ───────────────────────────
+    pos_amt = 0.0
+    try:
+        pos_params = _sign({"symbol": symbol})
+        async with session.get(
+            f"{_BINANCE_BASE}/fapi/v2/positionRisk",
+            params=pos_params, headers=headers
+        ) as resp:
+            resp.raise_for_status()
+            positions = await resp.json()
+
+        for p in positions:
+            if p.get("symbol") == symbol:
+                pos_amt = float(p.get("positionAmt", 0))
+                break
+
+        position_still_open = (
+            (direction == "LONG"  and pos_amt > 0) or
+            (direction == "SHORT" and pos_amt < 0)
+        )
+
+        if position_still_open:
+            # ── Step 2b: Software SL/TP — no bracket orders but position open ──
+            # Protects positions when exchange stop orders couldn't be placed
+            # (e.g. demo API limitation) or were cancelled unexpectedly.
+            try:
+                async with session.get(
+                    f"{_BINANCE_BASE}/fapi/v1/ticker/price",
+                    params={"symbol": symbol}
+                ) as resp:
+                    resp.raise_for_status()
+                    price = float((await resp.json()).get("price", 0))
+
+                hit_tp = (direction == "LONG"  and price >= tp) or \
+                         (direction == "SHORT" and price <= tp)
+                hit_sl = (direction == "LONG"  and price <= sl) or \
+                         (direction == "SHORT" and price >= sl)
+
+                if hit_tp or hit_sl:
+                    outcome    = "TP" if hit_tp else "SL"
+                    exit_price = tp if hit_tp else sl
+                    # Place market close
+                    close_side = "SELL" if direction == "LONG" else "BUY"
+                    close_qty  = abs(pos_amt)
+                    close_qty  = int(close_qty) if close_qty == int(close_qty) else close_qty
+                    close_params = _sign({
+                        "symbol":     symbol,
+                        "side":       close_side,
+                        "type":       "MARKET",
+                        "quantity":   close_qty,
+                        "reduceOnly": "true",
+                    })
+                    async with session.post(
+                        f"{_BINANCE_BASE}/fapi/v1/order",
+                        params=close_params, headers=headers
+                    ) as resp:
+                        close_resp = await resp.json()
+                    if close_resp.get("orderId"):
+                        log.info("Software %s triggered for %s — market close placed (price=%.6f %s=%.6f)",
+                                 outcome, symbol, price, outcome, exit_price)
+                        return (outcome, exit_price)
+                    else:
+                        log.warning("Software %s market close rejected for %s: %s", outcome, symbol, close_resp)
+
+            except Exception as exc:
+                log.debug("_check_live_order software SL/TP (%s): %s", symbol, exc)
+
+            return None   # position still open, SL/TP not hit
+
+    except Exception as exc:
+        log.debug("_check_live_order positionRisk (%s): %s", symbol, exc)
         return None
 
-    url     = f"{_BINANCE_BASE}/fapi/v1/order"
-    headers = {"X-MBX-APIKEY": _API_KEY}
-    params  = _sign({"symbol": trade["symbol"], "orderId": int(order_id)})
+    # ── Step 3: Position flat — fetch actual exit price from recent orders ────
+    actual_exit = 0.0
+    outcome     = "SL"   # conservative default
     try:
-        async with session.get(url, params=params, headers=headers) as resp:
+        from datetime import datetime, timezone
+        ts_str = trade.get("ts") or ""
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            entry_ts_ms = int(dt.timestamp() * 1000)
+        except Exception:
+            entry_ts_ms = 0
+
+        hist_params = _sign({
+            "symbol":    symbol,
+            "startTime": max(entry_ts_ms - 1000, 0),
+            "limit":     50,
+            "orderId":   0,
+        })
+        async with session.get(
+            f"{_BINANCE_BASE}/fapi/v1/allOrders",
+            params=hist_params, headers=headers
+        ) as resp:
             resp.raise_for_status()
-            data = await resp.json()
-        status = data.get("status", "")
-        if status == "FILLED":
-            fill_price = float(data.get("avgPrice") or data.get("price") or 0)
-            return ("FILLED", fill_price)
-        if status in ("CANCELED", "EXPIRED", "REJECTED"):
-            return ("CANCELLED", 0.0)
-        return None  # NEW or PARTIALLY_FILLED — still active
+            all_orders = await resp.json()
+
+        # Find the filled reduce-only order (SL or TP)
+        close_side = "SELL" if direction == "LONG" else "BUY"
+        for o in reversed(all_orders):
+            if (o.get("reduceOnly") and
+                    o.get("side") == close_side and
+                    o.get("status") == "FILLED"):
+                fill_price = float(o.get("avgPrice") or o.get("stopPrice") or 0)
+                order_type = o.get("type", "")
+                if fill_price > 0:
+                    actual_exit = fill_price
+                    outcome = "TP" if "TAKE_PROFIT" in order_type else "SL"
+                    break
+
     except Exception as exc:
-        log.debug("_check_live_order(%s #%s): %s", trade["symbol"], order_id, exc)
-        return None
+        log.debug("_check_live_order allOrders (%s): %s", symbol, exc)
+
+    # ── Step 4: Fallback — infer from price proximity to SL/TP levels ─────────
+    if actual_exit <= 0:
+        try:
+            async with session.get(
+                f"{_BINANCE_BASE}/fapi/v1/ticker/price",
+                params={"symbol": symbol}
+            ) as resp:
+                resp.raise_for_status()
+                price = float((await resp.json()).get("price", 0))
+            if price > 0:
+                actual_exit = tp if (
+                    (direction == "LONG"  and price >= tp * 0.998) or
+                    (direction == "SHORT" and price <= tp * 1.002)
+                ) else sl
+                outcome = "TP" if actual_exit == tp else "SL"
+        except Exception:
+            actual_exit = sl   # conservative: assume SL hit
+            outcome = "SL"
+
+    return (outcome, actual_exit)
 
 
 def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:

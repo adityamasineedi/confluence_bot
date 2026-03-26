@@ -23,7 +23,7 @@ _CACHE_TTL    = 86_400   # 24 h in seconds
 # Candles per timeframe — enough to cover ~9 years
 _TF_LIMITS: dict[str, int] = {
     "1m":  500,        # recent only (entry price proxy)
-    "5m":  2_000,
+    "5m":  52_000,     # ~180 days for lead-lag backtest (180 × 288 bars/day)
     "15m": 2_880,      # ~30 days for ATR
     "1h":  80_000,     # ~9 years
     "4h":  20_000,     # ~9 years
@@ -47,11 +47,12 @@ _FUTURES_LAUNCH_MS: dict[str, int] = {
     "BTCUSDT":  1568592000000,   # 2019-09-16
     "ETHUSDT":  1574035200000,   # 2019-11-18
     "ADAUSDT":  1577836800000,   # 2020-01-01
-    "XRPUSDT":  1577836800000,   # 2020-01-01
     "BNBUSDT":  1581292800000,   # 2020-02-10
-    "LINKUSDT": 1594080000000,   # 2020-07-07
+    "DOTUSDT":  1607212800000,   # 2020-12-06
     "SOLUSDT":  1607904000000,   # 2020-12-14
+    "DOGEUSDT": 1614643200000,   # 2021-03-02
     "AVAXUSDT": 1630454400000,   # 2021-09-01
+    "SUIUSDT":  1685059200000,   # 2023-05-26
 }
 
 

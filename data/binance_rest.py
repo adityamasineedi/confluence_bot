@@ -13,9 +13,26 @@ from .cache import DataCache
 
 log = logging.getLogger(__name__)
 
-_BINANCE_BASE = "https://fapi.binance.com"
+_BINANCE_BASE = os.environ.get("BINANCE_BASE_URL", "https://fapi.binance.com")
 _BYBIT_BASE   = "https://api.bybit.com"
 _OKX_BASE     = "https://www.okx.com"
+
+# Binance Futures price tick decimals (from PRICE_FILTER tickSize)
+_PRICE_DECIMALS: dict[str, int] = {
+    "BTCUSDT":  1,
+    "ETHUSDT":  2,
+    "SOLUSDT":  2,
+    "BNBUSDT":  2,
+    "AVAXUSDT": 3,
+    "ADAUSDT":  4,
+    "DOTUSDT":  3,
+    "DOGEUSDT": 5,
+    "SUIUSDT":  4,
+}
+
+def _round_price(symbol: str, price: float) -> float:
+    dp = _PRICE_DECIMALS.get(symbol.upper(), 2)
+    return round(price, dp)
 
 _POLL_INTERVAL_S = 60
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -98,11 +115,40 @@ class BinanceRestPoller:
 
     async def _poll_all(self, session: aiohttp.ClientSession, *, load_history: bool) -> None:
         """Fire all per-symbol polls concurrently."""
+        await self._fetch_account_balance(session)
         tasks = [
             self._poll_symbol(session, sym, load_history=load_history)
             for sym in self._symbols
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _fetch_account_balance(self, session: aiohttp.ClientSession) -> None:
+        """GET /fapi/v2/account → cache.set_account_balance() with USDT wallet balance."""
+        url = f"{_BINANCE_BASE}/fapi/v2/account"
+        try:
+            params = _sign({"timestamp": int(time.time() * 1000)})
+            async with session.get(url, params=params, headers={"X-MBX-APIKEY": _API_KEY}) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+            balance = float(data.get("totalWalletBalance", 0))
+            if balance > 0:
+                self._cache.set_account_balance(balance)
+                log.info("Account balance: %.2f USDT", balance)
+                # Persist for circuit breaker (reads from DB, not cache)
+                try:
+                    import sqlite3 as _sq, os as _os
+                    from datetime import datetime, timezone
+                    db = _os.environ.get("DB_PATH", "confluence_bot.db")
+                    with _sq.connect(db) as _c:
+                        _c.execute(
+                            "INSERT OR REPLACE INTO bot_state(key,value,updated) VALUES(?,?,?)",
+                            ("account_balance", str(balance),
+                             datetime.now(timezone.utc).isoformat())
+                        )
+                except Exception:
+                    pass
+        except Exception as exc:
+            log.warning("_fetch_account_balance failed: %s", exc)
 
     async def _poll_symbol(
         self,
@@ -276,6 +322,49 @@ class BinanceRestPoller:
 
 # ── Order execution (signed — used by executor.py) ───────────────────────────
 
+async def setup_symbols(symbols: list[str], leverage: int, margin_type: str = "ISOLATED") -> None:
+    """Set leverage and margin type for all symbols on startup."""
+    url_margin   = f"{_BINANCE_BASE}/fapi/v1/marginType"
+    url_leverage = f"{_BINANCE_BASE}/fapi/v1/leverage"
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        for sym in symbols:
+            try:
+                async with session.post(url_margin, params=_sign({"symbol": sym, "marginType": margin_type}), headers=headers) as r:
+                    data = await r.json()
+                    code = data.get("code", 0)
+                    if code not in (200, -4046):   # -4046 = already set
+                        log.warning("marginType %s %s: %s", sym, margin_type, data)
+            except Exception as exc:
+                log.debug("setup_symbols marginType %s: %s", sym, exc)
+            try:
+                async with session.post(url_leverage, params=_sign({"symbol": sym, "leverage": leverage}), headers=headers) as r:
+                    data = await r.json()
+                    if data.get("leverage") != leverage:
+                        log.warning("leverage %s → %s: %s", sym, leverage, data)
+            except Exception as exc:
+                log.debug("setup_symbols leverage %s: %s", sym, exc)
+    log.info("Symbol setup complete: leverage=%dx  margin=%s  symbols=%s", leverage, margin_type, symbols)
+
+
+async def get_position_amt(symbol: str) -> float:
+    """Return current position size for symbol (positive=LONG, negative=SHORT, 0=flat)."""
+    url = f"{_BINANCE_BASE}/fapi/v2/positionRisk"
+    params = _sign({"symbol": symbol})
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    try:
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.get(url, params=params, headers=headers) as resp:
+                resp.raise_for_status()
+                positions = await resp.json()
+        for p in positions:
+            if p.get("symbol") == symbol:
+                return float(p.get("positionAmt", 0))
+    except Exception as exc:
+        log.debug("get_position_amt(%s): %s", symbol, exc)
+    return 0.0
+
+
 async def get_account_balance() -> float:
     """Fetch available USDT balance from Binance Futures account."""
     url = f"{_BINANCE_BASE}/fapi/v2/balance"
@@ -317,6 +406,9 @@ async def place_order(
     headers = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if side == "BUY" else "BUY"
 
+    # Ensure quantity has no spurious .0 suffix (Binance rejects "18295.0" for step=1 symbols)
+    quantity = int(quantity) if quantity == int(quantity) else quantity
+
     entry_params: dict = {
         "symbol":   symbol,
         "side":     side,
@@ -332,7 +424,7 @@ async def place_order(
         "side":          close_side,
         "type":          "STOP_MARKET",
         "quantity":      quantity,
-        "stopPrice":     stop,
+        "stopPrice":     _round_price(symbol, stop),
         "reduceOnly":    "true",
     }
     tp_params = {
@@ -340,7 +432,7 @@ async def place_order(
         "side":          close_side,
         "type":          "TAKE_PROFIT_MARKET",
         "quantity":      quantity,
-        "stopPrice":     take_profit,
+        "stopPrice":     _round_price(symbol, take_profit),
         "reduceOnly":    "true",
     }
 
@@ -354,22 +446,164 @@ async def place_order(
             ) as resp:
                 resp.raise_for_status()
                 result = await resp.json()
+            # Binance returns HTTP 200 with code<0 on API-level errors
+            if isinstance(result.get("code"), int) and result["code"] < 0:
+                log.error("place_order entry rejected %s %s: %s", side, symbol, result)
+                return {}
 
             # 2. Stop loss
             async with session.post(
                 url, params=_sign(sl_params), headers=headers
             ) as resp:
-                resp.raise_for_status()
+                sl_resp = await resp.json()
+            if isinstance(sl_resp.get("code"), int) and sl_resp["code"] < 0:
+                log.warning("SL order rejected %s: code=%s msg=%s — software SL/TP will protect position",
+                            symbol, sl_resp["code"], sl_resp.get("msg", "?"))
+            else:
+                log.debug("SL placed %s: orderId=%s", symbol, sl_resp.get("orderId"))
 
             # 3. Take profit
             async with session.post(
                 url, params=_sign(tp_params), headers=headers
             ) as resp:
-                resp.raise_for_status()
+                tp_resp = await resp.json()
+            if isinstance(tp_resp.get("code"), int) and tp_resp["code"] < 0:
+                log.warning("TP order rejected %s: code=%s msg=%s — software SL/TP will protect position",
+                            symbol, tp_resp["code"], tp_resp.get("msg", "?"))
 
-        log.info("Order placed: %s %s qty=%.4f entry=%s", side, symbol, quantity, entry or "MARKET")
+        log.info("Order placed: %s %s qty=%.4f entry=%s orderId=%s",
+                 side, symbol, quantity, entry or "MARKET", result.get("orderId", "?"))
     except Exception as exc:
         log.error("place_order(%s %s) failed: %s", side, symbol, exc)
+
+    return result
+
+
+async def get_order_status(symbol: str, order_id: int) -> str:
+    """Return order status string ('FILLED', 'NEW', 'PARTIALLY_FILLED', etc.) or '' on error."""
+    url     = f"{_BINANCE_BASE}/fapi/v1/order"
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    params  = _sign({"symbol": symbol, "orderId": order_id})
+    try:
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.get(url, params=params, headers=headers) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        return data.get("status", "")
+    except Exception as exc:
+        log.debug("get_order_status(%s, %s): %s", symbol, order_id, exc)
+        return ""
+
+
+async def place_limit_then_market(
+    symbol: str,
+    side: str,
+    quantity: float,
+    limit_price: float,
+    stop: float,
+    take_profit: float,
+    timeout_s: float = 30.0,
+) -> dict:
+    """Place a LIMIT entry; fall back to MARKET after timeout_s seconds if unfilled.
+
+    Strategy:
+      1. Submit GTC LIMIT at limit_price.
+      2. Wait timeout_s seconds.
+      3. Check fill status via REST.
+      4. If unfilled, cancel the LIMIT and place a MARKET order.
+      5. In all paths, place SL + TP conditional orders.
+
+    Returns the entry order confirmation dict, or {} on failure.
+    """
+    headers   = {"X-MBX-APIKEY": _API_KEY}
+    close_side = "SELL" if side == "BUY" else "BUY"
+    quantity   = int(quantity) if quantity == int(quantity) else quantity
+
+    entry_params: dict = {
+        "symbol":      symbol,
+        "side":        side,
+        "type":        "LIMIT",
+        "quantity":    quantity,
+        "price":       _round_price(symbol, limit_price),
+        "timeInForce": "GTC",
+    }
+
+    url    = f"{_BINANCE_BASE}/fapi/v1/order"
+    result: dict = {}
+
+    async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        # ── Step 1: place LIMIT entry ──────────────────────────────────────────
+        try:
+            async with session.post(url, params=_sign(entry_params), headers=headers) as resp:
+                resp.raise_for_status()
+                result = await resp.json()
+            if isinstance(result.get("code"), int) and result["code"] < 0:
+                log.error("place_limit_then_market entry rejected %s %s: %s", side, symbol, result)
+                return {}
+            order_id = result.get("orderId")
+            log.info("LIMIT entry placed %s %s @ %.4f orderId=%s", side, symbol, limit_price, order_id)
+        except Exception as exc:
+            log.error("place_limit_then_market LIMIT failed (%s %s): %s", side, symbol, exc)
+            return {}
+
+        # ── Step 2: wait for fill ──────────────────────────────────────────────
+        await asyncio.sleep(timeout_s)
+
+        # ── Step 3: check fill status ──────────────────────────────────────────
+        status = await get_order_status(symbol, order_id)
+
+        if status not in ("FILLED", "PARTIALLY_FILLED"):
+            # ── Step 4: cancel LIMIT and submit MARKET ─────────────────────────
+            await cancel_order(symbol, order_id)
+            log.info(
+                "LIMIT unfilled after %.0fs (%s) — cancelling and switching to MARKET (%s %s)",
+                timeout_s, status, side, symbol,
+            )
+            mkt_params: dict = {
+                "symbol":   symbol,
+                "side":     side,
+                "type":     "MARKET",
+                "quantity": quantity,
+            }
+            try:
+                async with session.post(url, params=_sign(mkt_params), headers=headers) as resp:
+                    resp.raise_for_status()
+                    result = await resp.json()
+                if isinstance(result.get("code"), int) and result["code"] < 0:
+                    log.error("MARKET fallback rejected %s %s: %s", side, symbol, result)
+                    return {}
+                log.info("MARKET fallback filled %s %s orderId=%s", side, symbol, result.get("orderId"))
+            except Exception as exc:
+                log.error("MARKET fallback failed (%s %s): %s", side, symbol, exc)
+                return {}
+
+        # ── Step 5: SL + TP ───────────────────────────────────────────────────
+        sl_params = {
+            "symbol":    symbol,
+            "side":      close_side,
+            "type":      "STOP_MARKET",
+            "quantity":  quantity,
+            "stopPrice": _round_price(symbol, stop),
+            "reduceOnly": "true",
+        }
+        tp_params = {
+            "symbol":    symbol,
+            "side":      close_side,
+            "type":      "TAKE_PROFIT_MARKET",
+            "quantity":  quantity,
+            "stopPrice": _round_price(symbol, take_profit),
+            "reduceOnly": "true",
+        }
+        for label, params in (("SL", sl_params), ("TP", tp_params)):
+            try:
+                async with session.post(url, params=_sign(params), headers=headers) as resp:
+                    r = await resp.json()
+                if isinstance(r.get("code"), int) and r["code"] < 0:
+                    log.warning("%s rejected %s: code=%s msg=%s", label, symbol, r["code"], r.get("msg"))
+                else:
+                    log.debug("%s placed %s orderId=%s", label, symbol, r.get("orderId"))
+            except Exception as exc:
+                log.warning("%s placement failed %s: %s", label, symbol, exc)
 
     return result
 

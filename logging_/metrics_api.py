@@ -10,6 +10,16 @@ app = FastAPI(title="confluence_bot metrics", version="0.1.0")
 
 _DB_PATH = os.environ.get("DB_PATH", "confluence_bot.db")
 
+# Live DataCache reference — set by main.py after cache is initialised.
+# All endpoints that need live Coinglass data read from this.
+_cache = None
+
+
+def set_cache(cache) -> None:
+    """Register the live DataCache instance. Called from main.py at startup."""
+    global _cache
+    _cache = cache
+
 
 def _get_conn() -> sqlite3.Connection:
     try:
@@ -96,6 +106,25 @@ async def stats_summary() -> dict:
             "total_trades": 0, "win_rate": 0.0,
             "total_pnl_usdt": 0.0, "fired_today": 0, "by_regime": [],
         }
+
+
+@app.get("/trades/open")
+async def open_trades() -> JSONResponse:
+    """Return all currently open trades keyed by symbol."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT symbol, direction, entry, stop_loss, take_profit, size, ts, regime "
+                "FROM trades WHERE status='OPEN' ORDER BY ts DESC"
+            ).fetchall()
+        by_sym: dict[str, dict] = {}
+        for r in rows:
+            sym = r["symbol"]
+            if sym not in by_sym:          # keep most recent open per symbol
+                by_sym[sym] = dict(r)
+        return JSONResponse(by_sym)
+    except Exception:
+        return JSONResponse({})
 
 
 @app.get("/debug/{symbol}")
@@ -267,6 +296,88 @@ async def recent_regimes(limit: int = 20) -> JSONResponse:
         return JSONResponse([])
 
 
+@app.get("/signals/live")
+def signals_live() -> JSONResponse:
+    """Live Binance snapshot for all 9 symbols — price, 24h change, funding, ADX, regime."""
+    import datetime
+    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
+    result = []
+    now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Bulk fetch 24h tickers in one call
+    tickers: dict[str, dict] = {}
+    try:
+        raw = _fetch_json("https://fapi.binance.com/fapi/v1/ticker/24hr")
+        tickers = {r["symbol"]: r for r in raw if r["symbol"] in symbols}
+    except Exception:
+        pass
+
+    # Bulk fetch latest funding rates in one call
+    fundings: dict[str, float] = {}
+    try:
+        raw_f = _fetch_json("https://fapi.binance.com/fapi/v1/premiumIndex")
+        for r in raw_f:
+            if r["symbol"] in symbols:
+                fundings[r["symbol"]] = float(r.get("lastFundingRate", 0))
+    except Exception:
+        pass
+
+    for sym in symbols:
+        tk  = tickers.get(sym, {})
+        price    = float(tk.get("lastPrice", 0))
+        chg_pct  = float(tk.get("priceChangePercent", 0))
+        vol_24h  = float(tk.get("quoteVolume", 0))
+        funding  = fundings.get(sym, 0.0)
+
+        # ADX from 4h klines
+        adx_val = 0.0
+        plus_di = 0.0
+        minus_di = 0.0
+        try:
+            c4h = _get_klines(sym, "4h", 40)
+            if len(c4h) >= 30:
+                adx_info = _calc_adx_live(c4h[-35:])
+                adx_val  = adx_info["adx"]
+                plus_di  = adx_info["plus_di"]
+                minus_di = adx_info["minus_di"]
+        except Exception:
+            pass
+
+        # Regime from DB
+        regime = _get_db_regime(sym) or "UNKNOWN"
+
+        # Build a signals dict reflecting live conditions
+        funding_extreme  = abs(funding) >= 0.0005
+        funding_positive = funding > 0
+        signals = {
+            "adx_trending":   adx_val >= 20,
+            "adx_strong":     adx_val >= 25,
+            "bull_di":        plus_di > minus_di,
+            "bear_di":        minus_di > plus_di,
+            "funding_extreme": funding_extreme,
+            "funding_long":   funding_positive,
+            "funding_short":  not funding_positive,
+            "vol_ok":         vol_24h >= 50_000_000,
+        }
+
+        result.append({
+            "ts":        now_iso,
+            "symbol":    sym,
+            "regime":    regime,
+            "direction": "LONG" if plus_di >= minus_di else "SHORT",
+            "score":     round(min(adx_val / 40.0, 1.0), 4),
+            "signals":   signals,
+            "fire":      False,
+            "price":     round(price, 4),
+            "chg_pct":   round(chg_pct, 2),
+            "funding":   round(funding * 100, 4),
+            "adx":       round(adx_val, 1),
+            "vol_24h_m": round(vol_24h / 1e6, 1),
+        })
+
+    return JSONResponse(result)
+
+
 # ── Live dashboard ─────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -320,13 +431,13 @@ async def dashboard() -> HTMLResponse:
   .badge-LOSS     { background: #7f1d1d; color: #fecaca; }
   .badge-TIMEOUT  { background: #713f12; color: #fef3c7; }
 
-  /* ── Trade Log panel ── */
-  #panel-tradelog .tl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+  /* ── KPI cards (shared by signals + tradelog panels) ── */
+  .tl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
           gap: 16px; padding: 20px; }
-  #panel-tradelog .tl-card { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 18px; }
-  #panel-tradelog .tl-card h3 { font-size: 0.75rem; color: #6b7280; text-transform: uppercase;
+  .tl-card { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 10px; padding: 18px; }
+  .tl-card h3 { font-size: 0.75rem; color: #6b7280; text-transform: uppercase;
              letter-spacing: .06em; margin-bottom: 8px; }
-  #panel-tradelog .tl-card .val { font-size: 2rem; font-weight: 700; }
+  .tl-card .val { font-size: 2rem; font-weight: 700; }
   section { padding: 0 20px 20px; }
   section h2 { font-size: 0.85rem; color: #6b7280; text-transform: uppercase;
                letter-spacing: .06em; margin-bottom: 10px; }
@@ -409,6 +520,41 @@ async def dashboard() -> HTMLResponse:
   .gate-ok   { color: #22c55e; }
   .adx-slope { font-size: 0.7rem; margin-top: 6px; }
   .ema-line  { font-size: 0.7rem; color: #6b7280; margin-top: 4px; }
+  .swing-section { margin-top: 10px; padding: 10px; background: #12141e;
+                   border-radius: 6px; border: 1px solid #1e2130; }
+  .swing-section .lbl { font-size: 0.65rem; color: #6b7280; text-transform: uppercase;
+                        letter-spacing: .05em; margin-bottom: 6px; }
+  .swing-row  { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .swing-pill { display: inline-block; padding: 2px 8px; border-radius: 4px;
+                font-size: 0.72rem; font-weight: 700; }
+  .pill-HH { background: #14532d; color: #86efac; }
+  .pill-HL { background: #1c3a1c; color: #6ee37a; }
+  .pill-LH { background: #3a1c1c; color: #fca5a5; }
+  .pill-LL { background: #7f1d1d; color: #fecaca; }
+  .conf-bar-wrap { background: #1a1d27; border-radius: 3px; height: 6px; margin-top: 3px; }
+  .conf-bar-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+  .buy-zone-txt  { font-size: 0.68rem; color: #6b7280; margin-top: 5px; }
+  .buy-zone-txt b { color: #60a5fa; }
+  /* ── Coinglass section (inside market card) ── */
+  .cg-section { margin-top: 10px; padding: 10px 12px; border-radius: 6px;
+                background: #0d1520; border: 1px solid #1e3a5f; }
+  .cg-section.cg-none { padding: 8px 10px; background: #0f1117; border-color: #1a1d27; }
+  .cg-hdr  { font-size: 0.65rem; color: #60a5fa; text-transform: uppercase;
+              letter-spacing: .06em; font-weight: 700; margin-bottom: 7px; }
+  .cg-row  { display: flex; justify-content: space-between; align-items: baseline;
+              margin: 3px 0; gap: 6px; }
+  .cg-lbl  { font-size: 0.68rem; color: #4b5563; white-space: nowrap; flex-shrink: 0; }
+  .cg-val  { font-size: 0.78rem; font-weight: 600; text-align: right; }
+
+  .open-pos { margin-top: 10px; padding: 10px 12px; border-radius: 6px;
+              border: 1px solid #1e3a1e; background: #0d1f0d; font-size: 0.75rem; }
+  .open-pos .op-hdr { font-size: 0.65rem; color: #22c55e; text-transform: uppercase;
+                      letter-spacing: .05em; margin-bottom: 6px; font-weight: 700; }
+  .open-pos .op-row { display: flex; justify-content: space-between; margin: 2px 0; }
+  .open-pos .op-lbl { color: #6b7280; }
+  .open-pos .op-val { font-weight: 600; }
+  .open-pos.short-pos { border-color: #3a1e1e; background: #1f0d0d; }
+  .open-pos.short-pos .op-hdr { color: #ef4444; }
   #panel-market .mkt-footer { padding: 0 20px 30px; }
   .note { background: #1a1d27; border: 1px solid #2a2d3a; border-radius: 8px;
           padding: 14px 18px; font-size: 0.75rem; color: #4b5563; line-height: 1.6; }
@@ -438,12 +584,23 @@ async def dashboard() -> HTMLResponse:
     <div class="tl-card"><h3>Total PnL (USDT)</h3><div class="val" id="stat-pnl">—</div></div>
     <div class="tl-card"><h3>Signals Fired Today</h3><div class="val purple" id="stat-fired">—</div></div>
   </div>
-  <section>
-    <h2>Recent Signals</h2>
+  <section style="padding-top:0">
+    <h2>Live Signal Snapshot <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— Binance live data</span></h2>
+    <div style="overflow-x:auto">
     <table>
-      <thead><tr><th>Time</th><th>Symbol</th><th>Regime</th><th>Dir</th><th>Score</th><th>Features</th><th>Fire</th></tr></thead>
-      <tbody id="signals-body"><tr><td colspan="7" style="color:#4b5563">loading…</td></tr></tbody>
+      <thead><tr><th>Symbol</th><th>Price</th><th>24h</th><th>Funding %</th><th>ADX</th><th>Vol 24h (M)</th><th>Regime</th><th>Dir</th><th>Live Signals</th></tr></thead>
+      <tbody id="signals-body"><tr><td colspan="9" style="color:#4b5563">loading…</td></tr></tbody>
     </table>
+    </div>
+  </section>
+  <section>
+    <h2>Recent Fired Signals <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— from DB</span></h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Time (IST)</th><th>Symbol</th><th>Regime</th><th>Dir</th><th>Score</th><th>Features</th><th>Fire</th></tr></thead>
+      <tbody id="signals-fired-body"><tr><td colspan="7" style="color:#4b5563">loading…</td></tr></tbody>
+    </table>
+    </div>
   </section>
 </div>
 
@@ -500,8 +657,8 @@ async def dashboard() -> HTMLResponse:
   <div style="padding:16px 20px 0">
     <select id="debug-sym" style="background:#1a1d27;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 12px;font-size:0.85rem">
       <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
-      <option>BNBUSDT</option><option>AVAXUSDT</option><option>LINKUSDT</option>
-      <option>ADAUSDT</option><option>XRPUSDT</option>
+      <option>BNBUSDT</option><option>AVAXUSDT</option><option>ADAUSDT</option>
+      <option>DOTUSDT</option><option>DOGEUSDT</option><option>SUIUSDT</option>
     </select>
     <button onclick="loadDebug()" style="margin-left:8px;padding:6px 14px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">Refresh</button>
     <span id="debug-cvd" style="margin-left:16px;font-size:0.8rem;color:#6b7280"></span>
@@ -512,7 +669,7 @@ async def dashboard() -> HTMLResponse:
 </div>
 
 <script>
-const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','LINKUSDT','ADAUSDT','XRPUSDT'];
+const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','ADAUSDT','DOTUSDT','DOGEUSDT','SUIUSDT'];
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 let mktLoaded = false, btLoaded = false, mktTimer = null;
@@ -548,9 +705,10 @@ function badge(cls, text) { return `<span class="badge badge-${text}">${text}</s
 
 // ── SIGNALS / TRADES / REGIMES (shared refresh) ───────────────────────────────
 async function refreshTradelog() {
-  const [stats, signals, trades] = await Promise.all([
+  const [stats, liveSignals, firedSignals, trades] = await Promise.all([
     fetchJSON('/stats/summary'),
-    fetchJSON('/signals/recent?limit=30'),
+    fetchJSON('/signals/live'),
+    fetchJSON('/signals/recent?limit=20'),
     fetchJSON('/trades/recent?limit=20'),
   ]);
   document.getElementById('stat-trades').textContent  = stats.total_trades;
@@ -562,16 +720,16 @@ async function refreshTradelog() {
 
   const regimes = await Promise.all(ALL_SYMBOLS.map(s => fetchJSON('/regime/' + s)));
   document.getElementById('regime-body').innerHTML = regimes.map(r =>
-    `<tr><td>${r.symbol}</td><td>${badge('regime', r.regime)}</td><td>${r.ts || '—'}</td></tr>`
+    `<tr><td>${r.symbol}</td><td>${badge('regime', r.regime)}</td><td>${toIST(r.ts)}</td></tr>`
   ).join('');
 
   // Regime → fire threshold map (mirrors config.yaml thresholds)
   const THRESHOLDS = {
-    TREND_LONG: 0.65, TREND_SHORT: 0.65,
-    RANGE_LONG: 0.60, RANGE_SHORT: 0.60,
+    TREND_LONG: 0.65, TREND_SHORT: 0.82,
+    RANGE_LONG: 0.60, RANGE_SHORT: 0.65,
     CRASH_SHORT: 0.75,
-    PUMP_LONG: 0.70,
-    BREAKOUT_LONG: 0.60, BREAKOUT_SHORT: 0.60,
+    PUMP_LONG: 0.50,
+    BREAKOUT_LONG: 0.60, BREAKOUT_SHORT: 0.75,
   };
   function scoreThr(regime, dir) {
     const key = regime + '_' + dir;
@@ -590,6 +748,13 @@ async function refreshTradelog() {
       </div>
     </div>`;
   }
+  function livePills(signals) {
+    // For live snapshot: only show TRUE signals as green pills
+    if (!signals || !Object.keys(signals).length) return '<span style="color:#4b5563">—</span>';
+    const on = Object.entries(signals).filter(([,v]) => v)
+      .map(([k]) => `<span class="feat-pill feat-on">${k.replace(/_/g,' ')}</span>`);
+    return on.length ? on.join(' ') : '<span style="color:#4b5563">—</span>';
+  }
   function featPills(signalsJson, availJson) {
     let obj = {}, avail = null;
     try { obj   = typeof signalsJson === 'string' ? JSON.parse(signalsJson) : (signalsJson || {}); } catch(e) {}
@@ -598,17 +763,40 @@ async function refreshTradelog() {
     if (!entries.length) return '<span style="color:#4b5563">—</span>';
     const on      = entries.filter(([,v]) => v)
                            .map(([k]) => `<span class="feat-pill feat-on" title="${k}">${k.replace(/_/g,' ')}</span>`);
-    const off     = entries.filter(([,v]) => !v && (!avail || avail.includes(k)))
+    const off     = entries.filter(([k,v]) => !v && (!avail || avail.includes(k)))
                            .map(([k]) => `<span class="feat-pill feat-off" title="${k}">${k.replace(/_/g,' ')}</span>`);
-    const nodata  = entries.filter(([,v]) => !v && avail && !avail.includes(k))
+    const nodata  = entries.filter(([k,v]) => !v && avail && !avail.includes(k))
                            .map(([k]) => `<span class="feat-pill feat-nodata" title="no data: ${k}">${k.replace(/_/g,' ')}</span>`);
     return on.join('') + off.join('') + nodata.join('');
   }
-  document.getElementById('signals-body').innerHTML = signals.length
-    ? signals.map(s => {
+  // Live Binance snapshot table
+  document.getElementById('signals-body').innerHTML = liveSignals.length
+    ? liveSignals.map(s => {
+        const chgCls = s.chg_pct >= 0 ? 'green' : 'red';
+        const chgStr = (s.chg_pct >= 0 ? '+' : '') + s.chg_pct.toFixed(2) + '%';
+        const fundCls = Math.abs(s.funding) >= 0.05 ? (s.funding > 0 ? 'red' : 'green') : 'gray';
+        const fundStr = (s.funding >= 0 ? '+' : '') + s.funding.toFixed(4) + '%';
+        const adxCls  = s.adx >= 25 ? 'green' : s.adx >= 15 ? 'yellow' : 'gray';
+        return `<tr>
+          <td><b>${s.symbol}</b></td>
+          <td style="font-weight:600">${(+s.price).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:4})}</td>
+          <td class="${chgCls}">${chgStr}</td>
+          <td class="${fundCls}">${fundStr}</td>
+          <td class="${adxCls}">${s.adx}</td>
+          <td class="gray">${s.vol_24h_m}M</td>
+          <td>${badge('regime', s.regime)}</td>
+          <td>${badge('dir', s.direction)}</td>
+          <td style="max-width:300px">${livePills(s.signals)}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="9" style="color:#4b5563">loading live data…</td></tr>';
+
+  // Fired signals from DB
+  document.getElementById('signals-fired-body').innerHTML = firedSignals.length
+    ? firedSignals.map(s => {
         const thr = scoreThr(s.regime, s.direction);
         return `<tr>
-          <td style="white-space:nowrap;color:#6b7280">${s.ts ? s.ts.slice(0,19).replace('T',' ') : ''}</td>
+          <td style="white-space:nowrap;color:#6b7280">${toIST(s.ts)}</td>
           <td><b>${s.symbol}</b></td>
           <td>${badge('regime', s.regime)}</td>
           <td>${badge('dir', s.direction)}</td>
@@ -621,7 +809,7 @@ async function refreshTradelog() {
 
   document.getElementById('trades-body').innerHTML = trades.length
     ? trades.map(t => `<tr>
-        <td>${t.ts ? t.ts.slice(11,19) : ''}</td><td>${t.symbol}</td>
+        <td>${toISTTime(t.ts)}</td><td>${t.symbol}</td>
         <td>${badge('dir', t.direction)}</td>
         <td>${(+t.entry).toFixed(2)}</td><td>${(+t.stop_loss).toFixed(2)}</td>
         <td>${(+t.take_profit).toFixed(2)}</td><td>${(+t.size).toFixed(4)}</td>
@@ -713,13 +901,96 @@ function crashExtra(d) {
     7-day drop: <b class="red">${d.change_7d_pct}%</b> &nbsp;|&nbsp;
     EMA50(1D): <b>$${mktFmt(d.ema50_1d,0)}</b> &nbsp;|&nbsp; Price at new lows &#10003;</div>`;
 }
-function renderMarket(data) {
+function openPosSection(pos) {
+  if (!pos) return '';
+  const isLong  = pos.direction === 'LONG';
+  const cls     = isLong ? '' : 'short-pos';
+  const arrow   = isLong ? '&#8679;' : '&#8681;';
+  const col     = isLong ? '#22c55e' : '#ef4444';
+  const pd = +pos.entry >= 100 ? 2 : +pos.entry >= 1 ? 4 : 6;
+  const fp = n => (+n).toLocaleString('en', {minimumFractionDigits: pd, maximumFractionDigits: pd});
+  const since = pos.ts ? new Date(pos.ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:false}) : '—';
+  return `<div class="open-pos ${cls}">
+    <div class="op-hdr">${arrow} Open ${pos.direction} — ${pos.regime || ''} &nbsp;<span style="color:#4b5563;font-weight:400">${since} IST</span></div>
+    <div class="op-row"><span class="op-lbl">Entry</span><span class="op-val" style="color:${col}">${fp(pos.entry)}</span></div>
+    <div class="op-row"><span class="op-lbl">Stop</span><span class="op-val red">${fp(pos.stop_loss)}</span></div>
+    <div class="op-row"><span class="op-lbl">Target</span><span class="op-val green">${fp(pos.take_profit)}</span></div>
+    <div class="op-row"><span class="op-lbl">Size</span><span class="op-val">${(+pos.size).toFixed(4)}</span></div>
+  </div>`;
+}
+function swingSection(d) {
+  const s = d.swing;
+  if (!s || !s.structure || !s.structure.length) return '';
+  const conf    = Math.round(s.buy_confidence * 100);
+  const confCol = conf >= 75 ? '#22c55e' : conf >= 50 ? '#fbbf24' : '#ef4444';
+  const confLbl = conf >= 75 ? 'Strong bullish' : conf >= 50 ? 'Neutral' : 'Bearish bias';
+  const pills   = s.structure.map(lbl =>
+    `<span class="swing-pill pill-${lbl}" title="${lbl==='HH'?'Higher High':lbl==='HL'?'Higher Low':lbl==='LH'?'Lower High':'Lower Low'}">${lbl}</span>`
+  ).join('');
+  const pd = d.price >= 100 ? 0 : d.price >= 1 ? 2 : 4;
+  const fp = n => n > 0 ? '$' + mktFmt(n, pd) : '—';
+  return `<div class="swing-section">
+    <div class="lbl">Swing Structure &amp; Buy Zone (4H)</div>
+    <div class="swing-row">${pills}
+      <span style="margin-left:auto;font-size:0.7rem;color:${confCol};font-weight:700">${conf}% &mdash; ${confLbl}</span>
+    </div>
+    <div style="margin-top:7px">
+      <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:#6b7280;margin-bottom:2px">
+        <span>Buy confidence</span><span style="color:${confCol}">${conf}%</span></div>
+      <div class="conf-bar-wrap"><div class="conf-bar-fill" style="width:${conf}%;background:${confCol}"></div></div>
+    </div>
+    <div class="buy-zone-txt" style="margin-top:6px">
+      Buy zone: <b>${fp(s.buy_zone_low)}</b> &mdash; <b>${fp(s.buy_zone_high)}</b>
+      &nbsp;&#124;&nbsp; Resistance: <b>${fp(s.last_pivot_high)}</b>
+    </div>
+  </div>`;
+}
+function liqClusterRow(c, label) {
+  if (!c) return `<div class="cg-row"><span class="cg-lbl">${label}</span><span class="cg-val gray">—</span></div>`;
+  const col   = c.side === 'buy' ? '#22c55e' : '#ef4444';
+  const arrow = c.side === 'buy' ? '▲' : '▼';
+  const prec  = c.price >= 100 ? 0 : c.price >= 1 ? 2 : 4;
+  const pFmt  = c.price.toLocaleString('en',{minimumFractionDigits:prec,maximumFractionDigits:prec});
+  return `<div class="cg-row">
+    <span class="cg-lbl">${label}</span>
+    <span class="cg-val" style="color:${col}">${arrow} $${pFmt}
+      <span style="color:#6b7280;font-weight:400"> ${c.dist_pct}% away · $${c.size_m}M</span>
+    </span>
+  </div>`;
+}
+function lsBiasTag(bias, ratio) {
+  if (!bias || ratio === null || ratio === undefined) return '<span style="color:#6b7280">—</span>';
+  if (bias === 'crowded_long')  return `<span style="color:#ef4444;font-weight:700">${ratio.toFixed(2)} ▲ crowded LONG</span>`;
+  if (bias === 'crowded_short') return `<span style="color:#22c55e;font-weight:700">${ratio.toFixed(2)} ▼ crowded SHORT</span>`;
+  return `<span style="color:#9ca3af">${ratio.toFixed(2)} neutral</span>`;
+}
+function oiTag(pct) {
+  if (pct === null || pct === undefined) return '<span style="color:#6b7280">—</span>';
+  const col = pct > 2 ? '#22c55e' : pct < -2 ? '#ef4444' : '#9ca3af';
+  return `<span style="color:${col};font-weight:700">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
+}
+function coinglassSection(d) {
+  if (!d.coinglass_live) {
+    return `<div class="cg-section cg-none"><span style="color:#374151;font-size:0.68rem">Coinglass — no data yet (API key required)</span></div>`;
+  }
+  return `<div class="cg-section">
+    <div class="cg-hdr">&#128200; Coinglass</div>
+    <div class="cg-row"><span class="cg-lbl">OI 24h</span><span class="cg-val">${oiTag(d.oi_change_pct)}</span></div>
+    <div class="cg-row"><span class="cg-lbl">L/S Ratio</span><span class="cg-val">${lsBiasTag(d.ls_bias, d.ls_ratio)}</span></div>
+    ${liqClusterRow(d.liq_below, 'Liq support ↓')}
+    ${liqClusterRow(d.liq_above, 'Liq resist ↑')}
+  </div>`;
+}
+function renderMarket(data, openPos) {
+  openPos = openPos || {};
   document.getElementById('mkt-app').innerHTML = ALL_SYMBOLS.map(sym => {
     const d = data[sym]; if (!d) return '';
+    const pos = openPos[sym] || null;
     const chgCls = d.change_24h >= 0 ? 'up' : 'dn';
     const aboveEma = d.price > d.ema200 && d.ema200 > 0;
+    const emaDec = d.ema200 >= 100 ? 0 : d.ema200 >= 1 ? 2 : 4;
     const emaTxt = d.ema200 > 0
-      ? `Price ${aboveEma?'&#8679; above':'&#8681; below'} EMA200 ($${mktFmt(d.ema200,0)})`
+      ? `Price ${aboveEma?'&#8679; above':'&#8681; below'} EMA200 ($${mktFmt(d.ema200, emaDec)})`
       : 'EMA200 (4H) not available';
     const fundCls = Math.abs(d.funding_pct) > 0.05 ? 'red' : 'green';
     const adxCls  = d.adx > 40 ? 'red' : d.adx > 25 ? 'yellow' : 'green';
@@ -759,16 +1030,20 @@ function renderMarket(data) {
       <div class="adx-slope">ADX slope: ${adxSlope}</div>
       <div class="ema-line">${emaTxt}</div>
       <div class="gates">${gateHtml}</div>
+      ${coinglassSection(d)}
+      ${openPosSection(pos)}
+      ${swingSection(d)}
     </div>`;
   }).join('');
 }
 async function loadMarket() {
   document.getElementById('hdr-right').textContent = 'fetching…';
   try {
-    const r = await fetch('/market/data');
+    const [r, ro] = await Promise.all([fetch('/market/data'), fetch('/trades/open')]);
     const d = await r.json();
+    const openPos = ro.ok ? await ro.json() : {};
     if (d.error) throw new Error(d.error);
-    renderMarket(d);
+    renderMarket(d, openPos);
     document.getElementById('hdr-right').textContent = `updated ${new Date().toLocaleTimeString()} — refreshing every 30s`;
   } catch(e) {
     document.getElementById('mkt-app').innerHTML =
@@ -782,7 +1057,19 @@ let eqChart = null, barChart = null;
 function btPnlCls(v) { return +v >= 0 ? 'pos' : 'neg'; }
 function btPnlFmt(v) { return (+v>=0?'+':'')+'$'+(+v).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function btPctFmt(v) { return (+v>=0?'+':''),(+v).toFixed(1)+'%'; }
-function btTsDate(ms) { if (!ms) return '—'; return new Date(+ms).toISOString().slice(0,10); }
+function toIST(ts) {
+  if (!ts) return '—';
+  return new Date(typeof ts==='number'?ts:ts).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+}
+function toISTDate(ts) {
+  if (!ts) return '—';
+  return new Date(typeof ts==='number'?ts:ts).toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'});
+}
+function toISTTime(ts) {
+  if (!ts) return '—';
+  return new Date(typeof ts==='number'?ts:ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+}
+function btTsDate(ms) { return toISTDate(ms); }
 function btProfitFactor(trades) {
   const w = trades.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
   const l = Math.abs(trades.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
@@ -966,7 +1253,7 @@ async function loadDebug() {
   const sigRows = (d.recent_signals || []).map(s => {
     const scoreColor = s.score >= 0.65 ? '#22c55e' : s.score >= 0.45 ? '#fbbf24' : '#ef4444';
     return `<tr>
-      <td style="color:#6b7280;font-size:0.75rem">${(s.ts||'').slice(0,19).replace('T',' ')}</td>
+      <td style="color:#6b7280;font-size:0.75rem">${toIST(s.ts)}</td>
       <td>${s.regime} ${s.direction}</td>
       <td style="color:${scoreColor};font-weight:700">${Math.round(s.score*100)}%</td>
       <td style="color:${s.fire?'#22c55e':'#4b5563'}">${s.fire?'⚡ FIRE':'—'}</td>
@@ -1282,7 +1569,7 @@ function tradeTable(trades) {
 function pnlCls(v) { return +v >= 0 ? 'pos' : 'neg'; }
 function pnlFmt(v) { return (+v>=0?'+':'')+'$'+(+v).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function pctFmt(v) { return (+v>=0?'+':''),(+v).toFixed(1)+'%'; }
-function tsDate(ms) { if (!ms) return '—'; return new Date(+ms).toISOString().slice(0,10); }
+function tsDate(ms) { return toISTDate(ms); }
 
 function buildEquityCurve(monthly, sc) {
   let eq = sc;
@@ -1397,6 +1684,61 @@ def _calc_ema(closes: list, period: int) -> float:
     return ema
 
 
+def _calc_swing_structure(candles: list, pivot_n: int = 3) -> dict:
+    """Identify HH/HL/LH/LL swing structure from candles using n-bar pivot detection.
+
+    Returns structure labels, buy_confidence (0.0–1.0 where 1.0 = pure HH+HL),
+    and buy zone boundaries derived from the last pivot low/high.
+    """
+    if len(candles) < pivot_n * 2 + 4:
+        return {"structure": [], "buy_confidence": 0.0,
+                "buy_zone_low": 0.0, "buy_zone_high": 0.0,
+                "last_pivot_high": 0.0, "last_pivot_low": 0.0}
+
+    pivot_highs: list[float] = []
+    pivot_lows:  list[float] = []
+    for i in range(pivot_n, len(candles) - pivot_n):
+        if all(candles[i]["h"] >= candles[i - j]["h"] for j in range(1, pivot_n + 1)) and \
+           all(candles[i]["h"] >= candles[i + j]["h"] for j in range(1, pivot_n + 1)):
+            pivot_highs.append(candles[i]["h"])
+        if all(candles[i]["l"] <= candles[i - j]["l"] for j in range(1, pivot_n + 1)) and \
+           all(candles[i]["l"] <= candles[i + j]["l"] for j in range(1, pivot_n + 1)):
+            pivot_lows.append(candles[i]["l"])
+
+    structure: list[str] = []
+    buy_score = 0
+    total     = 0
+
+    if len(pivot_highs) >= 2:
+        if pivot_highs[-1] > pivot_highs[-2]:
+            structure.append("HH"); buy_score += 1
+        else:
+            structure.append("LH")
+        total += 1
+
+    if len(pivot_lows) >= 2:
+        if pivot_lows[-1] > pivot_lows[-2]:
+            structure.append("HL"); buy_score += 1
+        else:
+            structure.append("LL")
+        total += 1
+
+    buy_confidence = round(buy_score / max(total, 1), 2)
+    lph = pivot_highs[-1] if pivot_highs else 0.0
+    lpl = pivot_lows[-1]  if pivot_lows  else 0.0
+    # Buy zone: from last pivot low (support) to midpoint of the last swing
+    bz_high = round((lpl + lph) / 2.0, 4) if lph and lpl else 0.0
+
+    return {
+        "structure":       structure,
+        "buy_confidence":  buy_confidence,
+        "buy_zone_low":    round(lpl, 6),
+        "buy_zone_high":   bz_high,
+        "last_pivot_high": round(lph, 6),
+        "last_pivot_low":  round(lpl, 6),
+    }
+
+
 def _get_klines(symbol: str, tf: str, limit: int) -> list:
     url  = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={tf}&limit={limit}"
     data = _fetch_json(url)
@@ -1406,7 +1748,8 @@ def _get_klines(symbol: str, tf: str, limit: int) -> list:
 
 def _detect_regime_live(symbol: str, candles_4h: list, candles_1d: list) -> dict:
     """Return regime, adx_info, ema200, price, adx_slope_rising for all 5 regimes."""
-    adx = _calc_adx_live(candles_4h[-35:])
+    adx   = _calc_adx_live(candles_4h[-35:])
+    swing = _calc_swing_structure(candles_4h)
 
     closes_4h = [c["c"] for c in candles_4h]
     closes_1d = [c["c"] for c in candles_1d]
@@ -1546,13 +1889,82 @@ def _detect_regime_live(symbol: str, candles_4h: list, candles_1d: list) -> dict
         "ema50_1d":           round(ema50_1d, 2),
         "change_7d_pct":      round(change_7d * 100, 2),
         "price":              price,
+        "swing":              swing,
     }
+
+
+def _coinglass_fields(sym: str, price: float) -> dict:
+    """Extract Coinglass paid-data fields from the live cache for one symbol.
+
+    Returns a dict with keys: oi_change_pct, ls_ratio, ls_bias,
+    liq_below, liq_above, coinglass_live.
+    All values are JSON-serialisable; nulls used when data is unavailable.
+    """
+    empty = {
+        "oi_change_pct": None,
+        "ls_ratio":      None,
+        "ls_bias":       None,
+        "liq_below":     None,
+        "liq_above":     None,
+        "coinglass_live": False,
+    }
+    if _cache is None or price == 0:
+        return empty
+
+    try:
+        # OI 24h trend
+        oi_hist = _cache.get_oi_history(sym, window=24)
+        oi_chg  = None
+        if len(oi_hist) >= 2 and oi_hist[0] != 0:
+            oi_chg = round((oi_hist[-1] - oi_hist[0]) / oi_hist[0] * 100.0, 2)
+
+        # Long/Short ratio
+        ls = _cache.get_long_short_ratio(sym)
+        ls_bias = None
+        if ls is not None:
+            if ls > 1.8:
+                ls_bias = "crowded_long"
+            elif ls < 0.6:
+                ls_bias = "crowded_short"
+            else:
+                ls_bias = "neutral"
+
+        # Nearest liq clusters above and below current price
+        clusters  = _cache.get_liq_clusters(sym)
+        liq_below = None
+        liq_above = None
+        if clusters and price > 0:
+            below = [c for c in clusters if c["price"] < price]
+            above = [c for c in clusters if c["price"] > price]
+            if below:
+                nb = max(below, key=lambda c: c["price"])
+                dist = round(abs(nb["price"] - price) / price * 100, 2)
+                liq_below = {"price": nb["price"], "size_m": round(nb["size_usd"]/1e6, 2),
+                             "side": nb["side"], "dist_pct": dist}
+            if above:
+                na = min(above, key=lambda c: c["price"])
+                dist = round(abs(na["price"] - price) / price * 100, 2)
+                liq_above = {"price": na["price"], "size_m": round(na["size_usd"]/1e6, 2),
+                             "side": na["side"], "dist_pct": dist}
+
+        any_live = any(x is not None for x in (oi_chg, ls, liq_below, liq_above))
+        return {
+            "oi_change_pct":  oi_chg,
+            "ls_ratio":       round(ls, 3) if ls is not None else None,
+            "ls_bias":        ls_bias,
+            "liq_below":      liq_below,
+            "liq_above":      liq_above,
+            "coinglass_live": any_live,
+        }
+    except Exception:
+        return empty
 
 
 @app.get("/market/data")
 def market_data() -> JSONResponse:
-    """Live market conditions for all 8 configured symbols — prices, regime, ADX, funding."""
-    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","LINKUSDT","ADAUSDT","XRPUSDT"]
+    """Live market conditions for all 9 configured symbols — prices, regime, ADX, funding,
+    plus Coinglass paid data: OI 24h trend, L/S ratio, liquidation heatmap clusters."""
+    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
     result  = {}
     try:
         # Fetch tickers (price + 24h change + volume)
@@ -1570,17 +1982,19 @@ def market_data() -> JSONResponse:
         btc_1d = _get_klines("BTCUSDT", "1d", 60)
 
         for sym in symbols:
-            tk  = tickers.get(sym, {})
-            c4h = btc_4h if sym == "BTCUSDT" else _get_klines(sym, "4h", 210)
-            c1d = btc_1d if sym == "BTCUSDT" else _get_klines(sym, "1d", 60)
+            tk    = tickers.get(sym, {})
+            c4h   = btc_4h if sym == "BTCUSDT" else _get_klines(sym, "4h", 210)
+            c1d   = btc_1d if sym == "BTCUSDT" else _get_klines(sym, "1d", 60)
+            price = float(tk.get("lastPrice", 0))
 
             info = _detect_regime_live(sym, c4h, c1d)
             result[sym] = {
                 **info,
-                "price":        float(tk.get("lastPrice", info["price"])),
+                "price":        price or info["price"],
                 "change_24h":   float(tk.get("priceChangePercent", 0)),
                 "volume_24h_m": round(float(tk.get("quoteVolume", 0)) / 1e6, 0),
                 "funding_pct":  round(funding.get(sym, 0) * 100, 4),
+                **_coinglass_fields(sym, price or info["price"]),
             }
 
     except Exception as exc:
@@ -1698,7 +2112,7 @@ async def _market_legacy() -> HTMLResponse:
 </div>
 
 <script>
-const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','LINKUSDT','ADAUSDT','XRPUSDT'];
+const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','ADAUSDT','DOTUSDT','DOGEUSDT','SUIUSDT'];
 
 function fmt(n, dec=2) { return (+n).toLocaleString('en',{minimumFractionDigits:dec,maximumFractionDigits:dec}); }
 function fmtPct(v) { return (v>=0?'+':'')+fmt(v,2)+'%'; }
@@ -1794,8 +2208,9 @@ function render(data) {
     if (!d) return '';
     const chgCls = d.change_24h >= 0 ? 'up' : 'dn';
     const aboveEma = d.price > d.ema200 && d.ema200 > 0;
+    const emaDec = d.ema200 >= 100 ? 0 : d.ema200 >= 1 ? 2 : 4;
     const emaTxt = d.ema200 > 0
-      ? `Price ${aboveEma ? '&#8679; above' : '&#8681; below'} EMA200 ($${fmt(d.ema200,0)})`
+      ? `Price ${aboveEma ? '&#8679; above' : '&#8681; below'} EMA200 ($${fmt(d.ema200, emaDec)})`
       : 'EMA200 (4H) not available';
 
     const fundCls = d.funding_pct > 0.05 ? 'red' : d.funding_pct < -0.05 ? 'red' : 'green';

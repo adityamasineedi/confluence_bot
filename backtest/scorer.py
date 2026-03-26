@@ -24,16 +24,26 @@ with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
 # ── Signals available in backtest (OHLCV + OI + funding only) ────────────────
+# Only include signals with weight > 0 AND whose data is available from OHLCV/OI/funding.
+# Disabled signals (weight=0) must not inflate the denominator.
+# New signals rsi_divergence and ema_pullback use only OHLCV → always available.
 
 _AVAILABLE = {
-    "trend_long":      {"oi_funding", "vpvr_support", "htf_structure", "order_block"},
-    "trend_short":     {"oi_flush", "htf_lower_high", "bear_ob", "funding_extreme"},
-    "range_long":      {"absorption", "wyckoff_spring", "anchored_vwap", "time_distribution"},
-    "range_short":     {"ask_absorption", "upthrust", "anchored_vwap", "time_distribution"},
-    "crash":           {"dead_cat", "liq_grab_short", "oi_flush"},
-    "pump":            {"htf_structure", "oi_funding", "order_block"},
-    "breakout_long":   {"htf_structure", "oi_funding", "absorption"},
-    "breakout_short":  {"htf_lower_high", "oi_flush", "ask_absorption"},
+    # vpvr_support(0.00) removed — disabled. cvd/liq/whale not available in backtest.
+    "trend_long":     {"oi_funding", "htf_structure", "order_block",
+                       "rsi_divergence", "ema_pullback"},
+    # htf_lower_high(0.00) + bear_ob(0.00) removed — disabled. cvd/whale not available.
+    "trend_short":    {"oi_flush", "funding_extreme", "rsi_divergence"},
+    # time_distribution(0.00) + options_skew(0.00) + call_skew_roc(0.00) removed.
+    # perp_basis excluded — basis history not available in backtest data files.
+    "range_long":     {"absorption", "wyckoff_spring", "rsi_oversold", "anchored_vwap"},
+    # time_distribution(0.00) + options_skew(0.00) removed.
+    "range_short":    {"ask_absorption", "upthrust", "anchored_vwap"},
+    "crash":          {"dead_cat", "liq_grab_short", "oi_flush"},
+    "pump":           {"htf_structure", "oi_funding", "order_block"},
+    "breakout_long":  {"htf_structure", "oi_funding", "absorption"},
+    # htf_lower_high(0.00) removed — disabled.
+    "breakout_short": {"oi_flush", "ask_absorption"},
 }
 
 # Minimum number of available signals that must fire before we consider the setup
@@ -44,21 +54,28 @@ _MIN_SIGNALS = {
     "range_short":    2,
     "crash":          2,
     "pump":           1,   # pump moves fast — 1 confirming signal is enough
-    "breakout_long":  2,   # need at least 2 of 3 signals to avoid false breakouts
+    "breakout_long":  2,
     "breakout_short": 2,
 }
 
-# Backtest-specific thresholds — lower than live because CVD/liq/options/whale signals
-# are excluded from the denominator, leaving only 3-4 signals per regime.
+# Backtest thresholds — calibrated to available signals per regime.
+# rsi_divergence + ema_pullback are now available, so thresholds can be higher.
+#
+# trend_long denom  = 0.05+0.25+0.05+0.15+0.10 = 0.60
+#   htf_structure + rsi_divergence = 0.40/0.60 = 0.667 → threshold 0.60 fires this
+# trend_short denom = 0.30+0.15+0.10           = 0.55
+#   oi_flush + rsi_divergence      = 0.40/0.55 = 0.727 → threshold 0.65 fires this
+# range_long denom  = 0.25+0.25+0.20+0.15      = 0.85
+#   absorption + rsi_oversold      = 0.45/0.85 = 0.529 → threshold 0.45 fires this
 _BT_THRESHOLDS = {
-    "trend_long":     0.38,   # live: 0.65
-    "trend_short":    0.42,   # live: 0.65
-    "range_long":     0.38,   # live: 0.60
-    "range_short":    0.38,   # live: 0.60
+    "trend_long":     0.60,   # live: 0.65 — htf_structure + rsi_divergence fires
+    "trend_short":    0.65,   # re-enabled: oi_flush + rsi_divergence fires
+    "range_long":     0.45,   # live: 0.60 — absorption + rsi_oversold fires
+    "range_short":    2.00,   # still disabled: 25% WR in prior backtest
     "crash":          0.50,   # live: 0.75
-    "pump":           0.40,   # live: 0.70  — pump: 1 of 3 signals is enough
-    "breakout_long":  0.42,   # live: 0.60  — require 2 of 3 signals
-    "breakout_short": 0.42,   # live: 0.60
+    "pump":           0.40,   # live: 0.50
+    "breakout_long":  0.42,   # live: 0.60
+    "breakout_short": 2.00,   # still disabled: 0% WR in prior backtest
 }
 
 
@@ -77,10 +94,11 @@ def _normalised_score(
 
 
 async def score_trend_long(symbol: str, cache) -> dict:
-    from signals.trend.oi_funding    import check_oi_funding
-    from signals.trend.vpvr          import check_vpvr_reclaim
-    from signals.trend.htf_structure import check_htf_structure
-    from signals.trend.order_block   import check_order_block
+    from signals.trend.oi_funding     import check_oi_funding
+    from signals.trend.htf_structure  import check_htf_structure
+    from signals.trend.order_block    import check_order_block
+    from signals.trend.rsi_divergence import check_rsi_divergence_bullish
+    from signals.trend.ema_cross      import check_ema_pullback_long
     from core.filter import passes_trend_long_filters
 
     weights = _cfg["weights"]["trend_long"]
@@ -89,9 +107,10 @@ async def score_trend_long(symbol: str, cache) -> dict:
 
     signals: dict[str, bool] = {
         "oi_funding":    check_oi_funding(symbol, cache),
-        "vpvr_support":  check_vpvr_reclaim(symbol, cache),
         "htf_structure": check_htf_structure(symbol, cache),
         "order_block":   check_order_block(symbol, cache),
+        "rsi_divergence": check_rsi_divergence_bullish(symbol, cache),
+        "ema_pullback":  check_ema_pullback_long(symbol, cache),
     }
 
     score = _normalised_score(signals, weights, avail)
@@ -104,9 +123,8 @@ async def score_trend_long(symbol: str, cache) -> dict:
 
 async def score_trend_short(symbol: str, cache) -> dict:
     from signals.bear.oi_flush        import check_oi_long_flush
-    from signals.bear.htf_lower_high  import check_htf_lower_high
-    from signals.bear.bear_ob         import check_bear_ob_breakdown
     from signals.bear.funding_extreme import check_funding_extreme_positive
+    from signals.trend.rsi_divergence import check_rsi_divergence_bearish
     from core.filter import passes_trend_short_filters
 
     weights = _cfg["weights"]["bear"]
@@ -115,9 +133,8 @@ async def score_trend_short(symbol: str, cache) -> dict:
 
     signals: dict[str, bool] = {
         "oi_flush":        check_oi_long_flush(symbol, cache),
-        "htf_lower_high":  check_htf_lower_high(symbol, cache),
-        "bear_ob":         check_bear_ob_breakdown(symbol, cache),
         "funding_extreme": check_funding_extreme_positive(symbol, cache),
+        "rsi_divergence":  check_rsi_divergence_bearish(symbol, cache),
     }
 
     score  = _normalised_score(signals, weights, avail)
@@ -129,10 +146,10 @@ async def score_trend_short(symbol: str, cache) -> dict:
 
 
 async def score_range_long(symbol: str, cache) -> dict:
-    from signals.range.absorption       import check_absorption_ratio
-    from signals.range.wyckoff_spring   import check_wyckoff_spring
-    from signals.range.anchored_vwap    import check_anchored_vwap
-    from signals.range.time_distribution import check_time_distribution
+    from signals.range.absorption     import check_absorption_ratio
+    from signals.range.wyckoff_spring import check_wyckoff_spring
+    from signals.range.anchored_vwap  import check_anchored_vwap
+    from signals.range.rsi_oversold   import check_rsi_oversold
     from core.range_filter import passes_range_filters
 
     weights = _cfg["weights"]["range_long"]
@@ -140,14 +157,14 @@ async def score_range_long(symbol: str, cache) -> dict:
     avail   = _AVAILABLE["range_long"]
 
     signals: dict[str, bool] = {
-        "absorption":        check_absorption_ratio(symbol, cache),
-        "wyckoff_spring":    check_wyckoff_spring(symbol, cache),
-        "anchored_vwap":     check_anchored_vwap(symbol, cache),
-        "time_distribution": check_time_distribution(symbol, cache),
+        "absorption":     check_absorption_ratio(symbol, cache),
+        "wyckoff_spring": check_wyckoff_spring(symbol, cache),
+        "anchored_vwap":  check_anchored_vwap(symbol, cache),
+        "rsi_oversold":   check_rsi_oversold(symbol, cache),
     }
 
     score  = _normalised_score(signals, weights, avail)
-    min_ok = signals.get("absorption") or signals.get("wyckoff_spring")
+    min_ok = signals.get("absorption") or signals.get("wyckoff_spring") or signals.get("rsi_oversold")
     fire   = score >= thr and min_ok and passes_range_filters(symbol, cache)
 
     return {"symbol": symbol, "regime": "RANGE", "direction": "LONG",

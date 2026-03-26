@@ -1,6 +1,6 @@
 """Wyckoff spring signal — false breakdown below range support followed by recovery."""
 
-_SPRING_DEPTH_MAX = 0.020   # wick may breach range_low by up to 2 % (crypto wicks are deep)
+_SPRING_DEPTH_MAX = 0.050   # wick may breach range_low by up to 5 % (crypto wicks are 3-5%)
 _VOL_SPIKE_MULT   = 1.5     # spring candle volume ≥ 1.5× vol MA
 
 

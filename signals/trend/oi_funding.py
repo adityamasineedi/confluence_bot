@@ -1,7 +1,7 @@
 """Open Interest + Funding Rate signal — trend long confirmation."""
 
-_OI_RISE_THRESHOLD  = 0.02   # OI must grow ≥ 2 % vs 1-hour-ago reading
-_FUNDING_LONG_MAX   = 0.0    # funding must be negative (bears paying) for clean long
+_OI_RISE_THRESHOLD  = 0.005  # OI must grow ≥ 0.5 % vs 1-hour-ago reading
+_FUNDING_LONG_MAX   = 0.0002 # allow slightly positive/neutral funding (≤0.02%/8h is not greed)
 
 
 def check_oi_funding(symbol: str, cache) -> bool:

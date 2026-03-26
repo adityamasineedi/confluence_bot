@@ -194,6 +194,9 @@ class RegimeDetector:
         self._breakout_direction:   dict[str, str]                = {}
         # PUMP: transition-based — only fires on the bar where pump starts
         self._pump_active: dict[str, bool] = {}
+        # Minimum dwell: bars since last regime change (prevents rapid flipping)
+        self._regime_dwell: dict[str, int] = {}
+        self._regime_current: dict[str, str] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -203,6 +206,7 @@ class RegimeDetector:
 
         adx_range_thr    = float(rcfg.get("adx_range_threshold",  20.0))
         adx_trend_thr    = float(rcfg.get("adx_trend_threshold",   25.0))
+        min_dwell        = int(rcfg.get("regime_min_dwell_bars",    3))
         range_size_max   = float(rcfg.get("range_size_max_pct",     0.12))
         crash_drop_thr   = float(rcfg.get("crash_weekly_drop",     -0.12))
         pump_gain_thr    = float(rcfg.get("pump_weekly_gain",        0.12))
@@ -231,18 +235,27 @@ class RegimeDetector:
         self._update_adx_history(symbol, adx)
         history = self._adx_history[symbol]
 
+        # Minimum dwell: increment bars-in-regime counter; block changes until met
+        dwell = self._regime_dwell.get(symbol, min_dwell)
+        self._regime_dwell[symbol] = dwell + 1
+        dwell_ok = dwell >= min_dwell
+
         currently_ranging = was_ranging   # start from prior state
 
-        if not was_ranging:
-            # Enter RANGE only when all 3 recent readings are below the entry threshold
-            if len(history) == 3 and all(v < adx_range_thr for v in history):
-                self._in_range[symbol] = True
-                currently_ranging = True
-        else:
-            # Exit RANGE when ADX rises convincingly above the trend threshold
-            if adx > adx_trend_thr:
-                self._in_range[symbol] = False
-                currently_ranging = False
+        if dwell_ok:
+            if not was_ranging:
+                # Enter RANGE only when all 3 recent readings are below entry threshold
+                if len(history) == 3 and all(v < adx_range_thr for v in history):
+                    self._in_range[symbol] = True
+                    currently_ranging = True
+                    self._regime_dwell[symbol] = 0
+            else:
+                # Exit RANGE only when ≥2 of last 3 readings are above trend threshold
+                # (symmetric with entry — prevents single-spike exits)
+                if len(history) >= 2 and sum(v > adx_trend_thr for v in history) >= 2:
+                    self._in_range[symbol] = False
+                    currently_ranging = False
+                    self._regime_dwell[symbol] = 0
 
         # ── Step 5: Capture range bounds on range exit (for breakout window) ─
         if was_ranging and not currently_ranging:
