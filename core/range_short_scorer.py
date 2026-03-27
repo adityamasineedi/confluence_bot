@@ -6,7 +6,8 @@ from signals.range.ask_absorption  import check_ask_absorption_ratio
 from signals.range.upthrust        import check_wyckoff_upthrust
 from signals.range.perp_basis      import check_perp_basis
 from signals.range.options_skew    import check_options_skew
-from signals.range.anchored_vwap   import check_anchored_vwap
+from signals.range.anchored_vwap   import check_anchored_vwap, check_vwap_overbought
+from signals.trend.fvg             import check_fvg_bearish
 from signals.range.time_distribution import check_time_distribution
 from .range_filter import passes_range_filters
 
@@ -28,12 +29,14 @@ async def score(symbol: str, cache) -> dict:
     Returns a dict: {symbol, regime, direction, score, signals, fire}.
     """
     signals: dict[str, bool] = {
-        "ask_absorption":   check_ask_absorption_ratio(symbol, cache),
-        "upthrust":         check_wyckoff_upthrust(symbol, cache),
-        "perp_basis":       check_perp_basis(symbol, cache),
-        "options_skew":     check_options_skew(symbol, cache),
-        "anchored_vwap":    check_anchored_vwap(symbol, cache),
+        "ask_absorption":    check_ask_absorption_ratio(symbol, cache),
+        "upthrust":          check_wyckoff_upthrust(symbol, cache),
+        "perp_basis":        check_perp_basis(symbol, cache),
+        "options_skew":      check_options_skew(symbol, cache),
+        "anchored_vwap":     check_anchored_vwap(symbol, cache),
         "time_distribution": check_time_distribution(symbol, cache),
+        "vwap_overbought":   check_vwap_overbought(symbol, cache),
+        "fvg_bearish":       check_fvg_bearish(symbol, cache),
     }
 
     score_val = sum(

@@ -8,6 +8,7 @@ import yaml
 from signals.trend.htf_structure  import check_htf_structure
 from signals.trend.oi_funding     import check_oi_funding
 from signals.range.absorption     import check_absorption_ratio
+from signals.trend.bb_squeeze     import check_bb_squeeze_bullish
 from signals.bear.htf_lower_high  import check_htf_lower_high
 from signals.bear.oi_flush        import check_oi_long_flush
 from signals.range.ask_absorption import check_ask_absorption_ratio
@@ -34,11 +35,12 @@ def _norm(signals: dict[str, bool], weights: dict[str, float], available: set[st
 async def score_long(symbol: str, cache) -> dict:
     """BREAKOUT LONG: price just cleared range high with volume and HTF confirmation."""
     signals: dict[str, bool] = {
-        "htf_structure": check_htf_structure(symbol, cache),
-        "oi_funding":    check_oi_funding(symbol, cache),
-        "absorption":    check_absorption_ratio(symbol, cache),
+        "htf_structure":  check_htf_structure(symbol, cache),
+        "oi_funding":     check_oi_funding(symbol, cache),
+        "absorption":     check_absorption_ratio(symbol, cache),
+        "bb_squeeze_bull": check_bb_squeeze_bullish(symbol, cache),
     }
-    avail     = {"htf_structure", "oi_funding", "absorption"}
+    avail     = {"htf_structure", "oi_funding", "absorption", "bb_squeeze_bull"}
     score_val = _norm(signals, _W_LONG, avail)
 
     # Need at least 2 of 3 signals, and htf_structure is required

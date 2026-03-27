@@ -109,10 +109,22 @@ class DirectionRouter:
         funding = cache.get_funding_rate(symbol)
         funding_ok_long = funding is None or funding < _FUNDING_LONG_MAX
 
+        # ── Factor 4: 15m entry-timing filter ────────────────────────────────
+        # Ensures we're not entering a TREND LONG while the 15m is in a local
+        # downtrend (lower lows on 15m) — the most common cause of being entered
+        # too early and getting stopped before the move develops.
+        closes_15m = cache.get_closes(symbol, window=25, tf="15m")
+        if len(closes_15m) >= 20:
+            ema20_15m     = self._ema(closes_15m, 20)
+            aligned_long  = closes_15m[-1] > ema20_15m
+            aligned_short = closes_15m[-1] < ema20_15m
+        else:
+            aligned_long = aligned_short = True   # insufficient data → don't block
+
         # ── Decision ─────────────────────────────────────────────────────────
-        if btc_above_ema and hh_intact and funding_ok_long:
+        if btc_above_ema and hh_intact and funding_ok_long and aligned_long:
             return "LONG"
-        if not btc_above_ema and not hh_intact:
+        if not btc_above_ema and not hh_intact and aligned_short:
             return "SHORT"
         return "NONE"
 

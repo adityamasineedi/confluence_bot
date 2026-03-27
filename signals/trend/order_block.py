@@ -1,6 +1,6 @@
 """Bullish Order Block detection — institutional demand zones."""
 
-_IMPULSE_CANDLES = 2     # consecutive bullish candles that define an impulse
+_IMPULSE_CANDLES = 3     # consecutive bullish candles that define an impulse (was 2 — too noisy)
 _IMPULSE_MIN_PCT = 0.005 # each impulse candle body ≥ 0.5 % of open price
 _LOOKBACK        = 60    # 1H candles to scan
 

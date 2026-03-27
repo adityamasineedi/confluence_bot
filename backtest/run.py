@@ -24,6 +24,192 @@ logging.basicConfig(
 log = logging.getLogger("backtest")
 
 
+def _date_to_ms(date_str: str) -> int:
+    """Convert 'YYYY-MM-DD' to milliseconds UTC."""
+    from datetime import datetime, timezone
+    return int(datetime.strptime(date_str, "%Y-%m-%d")
+               .replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
+# Symbols per crash period — kept to 3 for speed (BTC + ETH + one alt)
+_PERIOD_SYMBOLS: dict[str, list[str]] = {
+    "covid_2020":  ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+    "china_2021":  ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "ath_2021":    ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "luna_2022":   ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "celsius_2022":["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "ftx_2022":    ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+}
+
+_CRASH_PERIODS = [
+    ("covid_2020",   "2020-02-12", "2020-03-13", "COVID crash — BTC -60% in weeks"),
+    ("china_2021",   "2021-05-12", "2021-07-20", "China mining ban — -55% from ATH, dead cat bounces"),
+    ("ath_2021",     "2021-11-10", "2021-12-31", "ATH -> bear start — PUMP->CRASH regime flip"),
+    ("luna_2022",    "2022-05-05", "2022-05-18", "LUNA/UST collapse — violent crash, liq cascades"),
+    ("celsius_2022", "2022-06-12", "2022-06-19", "Celsius/3AC collapse — second leg crash, -40%"),
+    ("ftx_2022",     "2022-11-06", "2022-11-14", "FTX collapse — sudden crash, OI flush"),
+]
+
+
+def _run_one_period(
+    period_id:  str,
+    from_date:  str,
+    to_date:    str,
+    label:      str,
+    strategies: list[str],
+    capital:    float,
+    risk_pct:   float,
+) -> dict:
+    """Fetch + run all strategies for one historical crash period. Returns summary dict."""
+    from backtest.fetcher import fetch_period_sync
+    from backtest.reporter import compute_stats
+
+    symbols = _PERIOD_SYMBOLS[period_id]
+    from_ms = _date_to_ms(from_date)
+    to_ms   = _date_to_ms(to_date) + 86_400_000   # include the end date
+
+    print(f"\n{'='*68}")
+    print(f"  {label}")
+    print(f"  Period  : {from_date} -> {to_date}  ({(to_ms - from_ms) // 86_400_000} days)")
+    print(f"  Symbols : {', '.join(symbols)}")
+    print(f"{'='*68}")
+
+    data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+    ohlcv   = data["ohlcv"]
+    oi      = data["oi"]
+    funding = data["funding"]
+
+    # Trim to actual period (warmup already handled by fetcher — engines use full data)
+    results = {}
+
+    for strat in strategies:
+        try:
+            trades = _run_strategy(strat, symbols, ohlcv, oi, funding, capital, risk_pct)
+        except Exception as exc:
+            log.warning("Strategy %s failed for %s: %s", strat, period_id, exc)
+            trades = []
+
+        if not trades:
+            results[strat] = {"trades": 0, "return_pct": 0.0, "win_rate": 0.0, "max_dd": 0.0}
+            print(f"  {strat:15s}: no trades")
+            continue
+
+        stats = compute_stats(trades, starting_capital=capital)
+        ret   = stats.get("total_return_pct", 0.0)
+        wr    = stats.get("win_rate", 0.0) * 100
+        dd    = stats.get("max_drawdown_pct", 0.0) * 100
+        n     = stats.get("total_trades", 0)
+        results[strat] = {"trades": n, "return_pct": ret, "win_rate": wr, "max_dd": dd}
+        pnl_str = f"+{ret:.1f}%" if ret >= 0 else f"{ret:.1f}%"
+        print(f"  {strat:15s}: {n:4d} trades  WR={wr:.0f}%  return={pnl_str:8s}  maxDD={dd:.1f}%")
+
+    return results
+
+
+def _run_strategy(
+    strat:    str,
+    symbols:  list[str],
+    ohlcv:    dict,
+    oi:       dict,
+    funding:  dict,
+    capital:  float,
+    risk_pct: float,
+) -> list[dict]:
+    import asyncio as _asyncio
+    if strat == "main":
+        from backtest.engine import run
+        return _asyncio.run(run(
+            symbols=symbols, ohlcv=ohlcv, oi=oi, funding=funding,
+            warmup_bars=210, starting_capital=capital, risk_pct=risk_pct,
+        ))
+    elif strat == "microrange":
+        from backtest.microrange_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "ema_pullback":
+        from backtest.ema_pullback_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "sweep":
+        from backtest.sweep_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "zone":
+        from backtest.zone_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    return []
+
+
+def _run_crash_periods(args) -> None:
+    """Run all 6 crash periods and print a summary table."""
+    strategies = ["main", "microrange", "ema_pullback"]
+    capital    = args.capital
+    risk_pct   = args.risk_pct
+
+    print("\n" + "="*68)
+    print("  CONFLUENCE BOT — HISTORICAL CRASH PERIOD BACKTESTS")
+    print("  Strategies tested: MAIN, MICRORANGE, EMA PULLBACK")
+    print("  Capital: ${:.0f}  |  Risk: {:.1f}% per trade".format(capital, risk_pct * 100))
+    print("="*68)
+
+    all_results = {}
+    for period_id, from_date, to_date, label in _CRASH_PERIODS:
+        all_results[period_id] = _run_one_period(
+            period_id, from_date, to_date, label,
+            strategies, capital, risk_pct,
+        )
+
+    # ── Summary table ─────────────────────────────────────────────────────────
+    print("\n\n" + "="*68)
+    print("  CRASH PERIOD SUMMARY TABLE")
+    print("="*68)
+    print(f"  {'Period':<20} {'MAIN':>12} {'MICRORANGE':>12} {'EMA_PULL':>12}")
+    print("  " + "-"*56)
+    for period_id, from_date, to_date, label in _CRASH_PERIODS:
+        r    = all_results.get(period_id, {})
+        name = label[:18]
+        main_r = r.get("main",        {}).get("return_pct", 0.0)
+        mr_r   = r.get("microrange",  {}).get("return_pct", 0.0)
+        ep_r   = r.get("ema_pullback",{}).get("return_pct", 0.0)
+        print(f"  {name:<20} {main_r:+11.1f}% {mr_r:+11.1f}% {ep_r:+11.1f}%")
+    print("="*68)
+
+
+def _run_date_range(args, symbols: list[str]) -> None:
+    """Run backtest for a specific --from-date / --to-date window."""
+    from backtest.fetcher import fetch_period_sync
+    from backtest.reporter import compute_stats, print_report
+    import json, os as _os
+
+    from_ms = _date_to_ms(args.from_date)
+    to_ms   = _date_to_ms(args.to_date) + 86_400_000
+
+    print(f"\nDate range : {args.from_date} -> {args.to_date}")
+    print(f"Symbols    : {symbols}")
+    print("Fetching historical data (with 45-day warmup)...\n")
+
+    data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+    ohlcv   = data["ohlcv"]
+    oi      = data["oi"]
+    funding = data["funding"]
+
+    for sym in symbols:
+        n = len(ohlcv.get(f"{sym}:1h", []))
+        print(f"  {sym}  1h bars: {n}  |  OI: {len(oi.get(sym, []))}  |  funding: {len(funding.get(sym, []))}")
+    print()
+
+    strat = args.strategy if args.strategy != "all" else "main"
+    trades = _run_strategy(strat, symbols, ohlcv, oi, funding, args.capital, args.risk_pct)
+    if not trades:
+        print("No trades generated.")
+        return
+
+    from backtest.reporter import compute_stats, print_report
+    stats = compute_stats(trades, starting_capital=args.capital)
+    print_report(stats, trades=trades, starting_capital=args.capital)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="confluence_bot backtester")
     parser.add_argument(
@@ -51,14 +237,37 @@ def main() -> None:
         help="Limit backtest to last N days of data (0 = all available)",
     )
     parser.add_argument(
+        "--from-date", dest="from_date", default=None,
+        help="Backtest start date YYYY-MM-DD (use with --to-date for crash period tests)",
+    )
+    parser.add_argument(
+        "--to-date", dest="to_date", default=None,
+        help="Backtest end date YYYY-MM-DD (use with --from-date)",
+    )
+    parser.add_argument(
+        "--crash-periods", action="store_true",
+        help="Run all 6 historical crash periods automatically",
+    )
+    parser.add_argument(
         "--strategy",
-        choices=["main", "leadlag", "both", "microrange", "session", "insidebar", "funding", "all"],
+        choices=["main", "leadlag", "both", "microrange", "session", "insidebar", "funding",
+                 "sweep", "ema_pullback", "zone", "new", "all"],
         default="main",
-        help="Which strategy to backtest (default: main)",
+        help="Which strategy to backtest (default: main). 'new' = sweep+ema_pullback+zone only",
     )
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",")]
+
+    # ── Crash periods mode ─────────────────────────────────────────────────────
+    if args.crash_periods:
+        _run_crash_periods(args)
+        return
+
+    # ── Date range mode ────────────────────────────────────────────────────────
+    if args.from_date and args.to_date:
+        _run_date_range(args, symbols)
+        return
 
     # ── Step 1: fetch historical data ─────────────────────────────────────────
     print(f"\nFetching historical data for {symbols} ...")
@@ -250,6 +459,79 @@ def main() -> None:
                            "capital": args.capital, "risk_pct": args.risk_pct,
                            "strategy": "funding"}, f, default=str)
             print(f"Results saved to {fh_path}")
+
+
+    # ── Step 2g: sweep reversal backtest ──────────────────────────────────────
+    if args.strategy in ("sweep", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running SWEEP REVERSAL backtest (15m stop-hunt reversals)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : 15m swing pivot sweep + volume + RSI")
+        print(f"RR               : 2.5×  |  SL = wick extreme  |  max hold 2H\n")
+
+        from backtest.sweep_engine import run as run_sw
+        sw_trades = run_sw(symbols=symbols, ohlcv=ohlcv,
+                           starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not sw_trades:
+            print("No sweep reversal trades generated.")
+        else:
+            sw_stats = compute_stats(sw_trades, starting_capital=args.capital)
+            print_report(sw_stats, trades=sw_trades, starting_capital=args.capital)
+            sw_path = _os.path.join(_os.path.dirname(__file__), "results_sweep.json")
+            with open(sw_path, "w") as f:
+                json.dump({"stats": sw_stats, "trades": sw_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "sweep"}, f, default=str)
+            print(f"Results saved to {sw_path}")
+
+    # ── Step 2h: 15m EMA pullback backtest ────────────────────────────────────
+    if args.strategy in ("ema_pullback", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running EMA PULLBACK backtest (15m EMA21 trend-continuation)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : 4H macro bias + 15m pullback to EMA21")
+        print(f"RR               : 2.5×  |  SL below EMA21  |  max hold 2H\n")
+
+        from backtest.ema_pullback_engine import run as run_ep
+        ep_trades = run_ep(symbols=symbols, ohlcv=ohlcv,
+                           starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not ep_trades:
+            print("No EMA pullback trades generated.")
+        else:
+            ep_stats = compute_stats(ep_trades, starting_capital=args.capital)
+            print_report(ep_stats, trades=ep_trades, starting_capital=args.capital)
+            ep_path = _os.path.join(_os.path.dirname(__file__), "results_ema_pullback.json")
+            with open(ep_path, "w") as f:
+                json.dump({"stats": ep_stats, "trades": ep_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "ema_pullback"}, f, default=str)
+            print(f"Results saved to {ep_path}")
+
+    # ── Step 2i: HTF demand/supply zone backtest ───────────────────────────────
+    if args.strategy in ("zone", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running ZONE RETEST backtest (4H demand/supply zone reactions)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : 4H consolidation-before-impulse zones")
+        print(f"RR               : 2.5×  |  SL below/above zone  |  max hold 12H\n")
+
+        from backtest.zone_engine import run as run_zn
+        zn_trades = run_zn(symbols=symbols, ohlcv=ohlcv,
+                           starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not zn_trades:
+            print("No zone retest trades generated.")
+        else:
+            zn_stats = compute_stats(zn_trades, starting_capital=args.capital)
+            print_report(zn_stats, trades=zn_trades, starting_capital=args.capital)
+            zn_path = _os.path.join(_os.path.dirname(__file__), "results_zone.json")
+            with open(zn_path, "w") as f:
+                json.dump({"stats": zn_stats, "trades": zn_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "zone"}, f, default=str)
+            print(f"Results saved to {zn_path}")
 
 
 if __name__ == "__main__":

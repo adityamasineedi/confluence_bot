@@ -73,28 +73,34 @@ weights:
     order_block:    0.05          # keep: confluence entry point
     options_flow:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
     whale_flow:     0.10          # keep: works all symbols
-    rsi_divergence:    0.15        # NEW: bullish divergence — price lower low + RSI higher low on 1H
-    ema_pullback:      0.10        # NEW: 20/50 EMA pullback entry — best trend timing signal
-    ls_crowded_short:  0.10        # NEW: Coinglass L/S ratio < 0.6 → crowd overly short → contrarian bullish
-    funding_ramp_bull: 0.10        # NEW: Coinglass extreme negative funding → short squeeze fuel
+    rsi_divergence:    0.15        # bullish divergence — price lower low + RSI higher low on 1H
+    ema_pullback:      0.10        # 20/50 EMA pullback entry — best trend timing signal
+    ls_crowded_short:  0.10        # Coinglass L/S ratio < 0.6 → crowd overly short → contrarian bullish
+    funding_ramp_bull: 0.10        # Coinglass extreme negative funding → short squeeze fuel
+    fvg_bullish:       0.10        # NEW: Fair Value Gap retest — unfilled 1H imbalance zone
+    bb_squeeze_bull:   0.05        # NEW: Bollinger squeeze release upside — volatility expansion
 
   range_long:
-    absorption:      0.25         # raised: primary range long signal, works all symbols
-    wyckoff_spring:  0.25         # raised: ideal range entry, works all symbols
-    rsi_oversold:    0.20         # new: RSI(14)<35 turning up near range_low
-    perp_basis:      0.15         # raised: absorbed freed weight, works all symbols
+    absorption:      0.20         # primary range long signal, works all symbols
+    wyckoff_spring:  0.20         # ideal range entry, works all symbols
+    rsi_oversold:    0.15         # RSI(14)<35 turning up near range_low
+    perp_basis:      0.10         # absorbed freed weight, works all symbols
     options_skew:    0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
-    anchored_vwap:   0.15         # keep: strong live signal
+    anchored_vwap:   0.15         # strong live signal
     time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
     call_skew_roc:   0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
+    vwap_oversold:   0.15         # NEW: price below VWAP-2σ — statistically oversold
+    fvg_bullish:     0.05         # NEW: Fair Value Gap retest — unfilled 1H imbalance
 
   range_short:
-    ask_absorption: 0.30          # raised: absorbed freed weights, primary signal
-    upthrust:       0.30          # raised: needs both ask_absorption + upthrust ideally
-    perp_basis:     0.15          # raised: absorbed freed weight
+    ask_absorption: 0.25          # primary signal
+    upthrust:       0.25          # needs both ask_absorption + upthrust ideally
+    perp_basis:     0.10          # absorbed freed weight
     options_skew:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
-    anchored_vwap:  0.25          # raised: strong live signal, works all symbols
+    anchored_vwap:  0.20          # strong live signal, works all symbols
     time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
+    vwap_overbought: 0.15         # NEW: price above VWAP+2σ — statistically overbought
+    fvg_bearish:     0.05         # NEW: Fair Value Gap retest — unfilled bearish 1H imbalance
 
   bear:
     cvd_bearish:     0.35         # dominant bear predictor
@@ -120,9 +126,10 @@ weights:
     order_block:   0.25           # keep: confluence entry point
 
   breakout_long:
-    htf_structure: 0.55           # raised: dominant signal
-    oi_funding:    0.20           # reduced: rarely fires
-    absorption:    0.25           # keep
+    htf_structure: 0.45           # dominant signal
+    oi_funding:    0.15           # rarely fires
+    absorption:    0.20           # keep
+    bb_squeeze_bull: 0.20         # NEW: squeeze release = precise breakout timing
 
   breakout_short:
     htf_lower_high: 0.45          # raised: most important bear signal
@@ -234,6 +241,37 @@ funding_harvest:
   max_entries_per_window: 4      # max simultaneous funding harvest positions
   poll_interval_secs: 60         # how often to check within the active window
   risk_pct: 0.005                # 0.5% risk per trade (smaller: income strategy)
+
+# ── Liquidity Sweep Reversal strategy ───────────────────────────────────────
+# Detects stop-hunt wicks through swing highs/lows then reversal close back.
+# Works in any regime — fills the bear-market gap when MAIN fires nothing.
+sweep:
+  enabled: false  # DISABLED: 5% WR in bear market — swing lows break down, not reverse
+                  # Re-enable when market enters RANGE regime (BTC ADX < 20)
+  check_interval_secs: 30
+  max_positions: 3              # max simultaneous sweep positions
+  cooldown_mins: 30             # 30 min per symbol between sweeps
+  fire_threshold: 0.75          # 3 of 4 signals: sweep + volume + rsi + htf
+
+# ── 15m EMA Pullback strategy ────────────────────────────────────────────────
+# Trend-continuation entries at 15m EMA21 pullback, filtered by 4H direction.
+# Fires 2-5x per symbol per day in trending conditions.
+ema_pullback:
+  enabled: true
+  check_interval_secs: 30
+  max_positions: 3
+  cooldown_mins: 45             # 45 min cooldown — one pullback per 45m per symbol
+  fire_threshold: 0.75
+
+# ── HTF Demand / Supply Zone strategy ───────────────────────────────────────
+# 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
+# Highest quality, lowest frequency: 1-3x per symbol per day.
+zone:
+  enabled: true
+  check_interval_secs: 60       # check every 60s (aligned with 1H bar closes)
+  max_positions: 2              # conservative — these are higher-size entries
+  cooldown_mins: 120            # 2h cooldown — zone retests are rare
+  fire_threshold: 0.75
 
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
 # Mean-reversion scalp inside a tight 5m consolidation box.

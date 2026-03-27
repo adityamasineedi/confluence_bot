@@ -11,6 +11,10 @@ _RISK_PER_TRADE    = _cfg["risk"].get("risk_per_trade", 0.01)  # fallback 1% (ma
 _MAX_RISK_USDT     = float(_cfg["risk"].get("max_risk_usdt", 100))  # $100 hard cap
 _MAX_SIZE_USDT     = _cfg["risk"]["max_position_size_usdt"]  # 5000
 _STOP_ATR_MULT     = 1.5   # stop = entry ± ATR × multiplier
+# Sub-$5 coins (ADA, DOGE, DOT) have tiny ATR in absolute terms — a 0.3-point
+# stop on a $1 coin gets taken out by normal spread noise.  Enforce a minimum
+# stop distance of 0.5 % of entry price so we always stay outside the noise band.
+_MIN_STOP_PCT      = 0.005  # 0.5 % minimum stop distance
 _PAPER_DEFAULT_BAL = 10_000.0  # default paper balance when no API key is set
 # Binance Futures taker fee: 0.05% per side = 0.10% round-trip.
 # Inflating the effective stop distance by the round-trip fee ensures the
@@ -63,7 +67,8 @@ def compute(symbol: str, direction: str, cache) -> tuple[float, float, float]:
     if atr_val == 0.0:
         return entry, 0.0, 0.0
 
-    stop_dist = atr_val * _STOP_ATR_MULT
+    min_stop  = entry * _MIN_STOP_PCT
+    stop_dist = max(atr_val * _STOP_ATR_MULT, min_stop)
 
     if direction == "LONG":
         stop        = entry - stop_dist

@@ -5054,31 +5054,277 @@ ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 80
 2026-03-27 17:17:10,667 [INFO] data.binance_rest: Account balance: 4745.57 USDT
 2026-03-27 17:18:11,935 [INFO] data.binance_rest: Account balance: 4745.57 USDT
 2026-03-27 17:19:13,317 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-1001] getaddrinfo failed
-2026-03-27 16:57:24,691 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
-2026-03-27 16:57:24,691 [INFO] data.binance_ws: WS disconnected after 0.0s. Retry in 10s.
-2026-03-27 16:57:34,689 [INFO] data.binance_ws: WS connecting (54 streams) …
-2026-03-27 16:57:34,689 [INFO] data.binance_ws: WS connecting (54 streams) …
-2026-03-27 16:57:35,256 [INFO] data.binance_ws: WS connected
-2026-03-27 16:57:35,319 [INFO] data.binance_ws: WS connected
-2026-03-27 16:58:25,074 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 16:59:27,795 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:00:29,620 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:01:30,903 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:02:32,431 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:03:34,610 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:04:35,995 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:05:37,178 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:06:39,135 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:07:43,217 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:08:45,187 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:09:46,375 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:10:47,449 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:11:58,551 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:13:03,515 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:14:05,466 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:15:07,482 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:16:08,735 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:17:10,133 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:18:11,817 [INFO] data.binance_rest: Account balance: 4745.57 USDT
-2026-03-27 17:19:13,306 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:20:14,646 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:21:15,665 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:22:17,435 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:23:19,041 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:24:20,503 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:25:22,433 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:26:23,780 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:27:28,735 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:28:33,111 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:29:35,331 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:30:40,080 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:31:43,957 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:32:45,172 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:33:46,282 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:34:47,355 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:35:24,871 [INFO] core.microrange_loop: MicroRange FIRE LONG SUIUSDT  score=1.00  width=0.750%  sl=0.887131  tp=0.894825
+2026-03-27 17:35:25,292 [INFO] core.executor: RR 1.16 below min 1.50 for LONG SUIUSDT (entry=0.8907 sl=0.8871 tp=0.8948) — skipping
+2026-03-27 17:35:48,576 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:35:55,311 [INFO] core.microrange_loop: MicroRange FIRE LONG ADAUSDT  score=1.00  width=0.851%  sl=0.245063  tp=0.247375
+2026-03-27 17:35:55,687 [INFO] core.executor: RR 1.03 below min 1.50 for LONG ADAUSDT (entry=0.2462 sl=0.2451 tp=0.2474) — skipping
+2026-03-27 17:36:50,167 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:37:51,461 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:38:52,915 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:39:56,316 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:40:25,731 [INFO] core.microrange_loop: MicroRange FIRE LONG SOLUSDT  score=1.00  width=0.624%  sl=82.780910  tp=83.420000
+2026-03-27 17:40:26,887 [INFO] core.executor: RR 0.88 below min 1.50 for LONG SOLUSDT (entry=83.1200 sl=82.7809 tp=83.4200) — skipping
+2026-03-27 17:40:26,917 [INFO] core.microrange_loop: MicroRange FIRE LONG DOGEUSDT  score=1.00  width=0.623%  sl=0.089391  tp=0.090080
+2026-03-27 17:40:27,355 [INFO] core.executor: RR 0.68 below min 1.50 for LONG DOGEUSDT (entry=0.0898 sl=0.0894 tp=0.0901) — skipping
+2026-03-27 17:40:57,712 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:41:59,713 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:43:02,091 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:44:04,214 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:45:08,194 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:45:27,512 [INFO] core.microrange_loop: MicroRange FIRE LONG BTCUSDT  score=1.00  width=0.372%  sl=66363.311000  tp=66748.925000
+2026-03-27 17:45:27,875 [INFO] core.executor: RR 0.44 below min 1.50 for LONG BTCUSDT (entry=66630.3000 sl=66363.3110 tp=66748.9250) — skipping
+2026-03-27 17:46:10,803 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 17:47:11,991 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 18:35:58,782 [INFO] core.microrange_loop: MicroRange FIRE LONG BTCUSDT  score=1.00  width=0.372%  sl=66363.311000  tp=66748.925000
+2026-03-27 18:35:59,128 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 18:35:59,128 [INFO] data.binance_ws: WS disconnected after 5904.4s. Retry in 5s.
+2026-03-27 18:35:59,128 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 18:35:59,128 [INFO] data.binance_ws: WS disconnected after 5904.4s. Retry in 5s.
+2026-03-27 18:35:59,169 [WARNING] data.binance_rest: _fetch_account_balance failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,247 [INFO] core.executor: RR 0.53 below min 1.50 for LONG BTCUSDT (entry=66614.9000 sl=66363.3110 tp=66748.9250) — skipping
+2026-03-27 18:35:59,453 [INFO] core.microrange_loop: MicroRange FIRE LONG SOLUSDT  score=1.00  width=0.576%  sl=82.820790  tp=83.430000
+2026-03-27 18:35:59,479 [WARNING] data.binance_rest: _fetch_oi(ETHUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,479 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,481 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,481 [WARNING] data.binance_rest: _fetch_funding(SOLUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,481 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,481 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,481 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,483 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,483 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,484 [WARNING] data.binance_rest: _fetch_funding(DOTUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,484 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,484 [WARNING] data.binance_rest: _fetch_oi(DOGEUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,486 [WARNING] data.bin2026-03-27 18:35:59,502 [INFO] core.microrange_loop: MicroRange FIRE LONG SOLUSDT  score=1.00  width=0.576%  sl=82.820790  tp=83.430000
+2026-03-27 18:35:59,776 [WARNING] data.binance_rest: _fetch_oi(DOGEUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,777 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,777 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,777 [WARNING] data.binance_rest: _fetch_funding(SUIUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,779 [WARNING] data.binance_rest: _fetch_oi(AVAXUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,779 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,788 [WARNING] data.binance_rest: _fetch_funding(DOTUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,788 [WARNING] data.binance_rest: _fetch_funding(SOLUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,790 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,801 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,801 [WARNING] data.binance_rest: _fetch_funding(BTCUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,802 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,802 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,802 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,802 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,802 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,803 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,803 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,803 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,804 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,804 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,804 [WARNING] data.binance_rest: _fetch_funding(ADAUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,826 [WARNING] data.binance_rest: _fetch_funding(DOGEUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,827 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,829 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,834 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_funding(BNBUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_oi(SUIUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_funding(AVAXUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,862 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_oi(DOTUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_oi(SOLUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_oi(BNBUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_funding(ETHUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_oi(ETHUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,863 [WARNING] data.binance_rest: _fetch_oi(ADAUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,874 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 18:35:59,876 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.co2026-03-27 19:36:46,498 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 19:36:46,500 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 19:36:46,618 [INFO] core.microrange_loop: MicroRange FIRE LONG BTCUSDT  score=1.00  width=0.372%  sl=66363.311000  tp=66748.925000
+2026-03-27 19:36:47,012 [WARNING] data.binance_ws: WS network error: [Errno 11001] getaddrinfo failed
+2026-03-27 19:36:47,014 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 19:36:47,014 [INFO] data.binance_ws: WS disconnected after 0.5s. Retry in 10s.
+2026-03-27 19:36:47,016 [WARNING] data.binance_ws: WS network error: [Errno 11001] getaddrinfo failed
+2026-03-27 19:36:47,043 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 19:36:47,043 [INFO] data.binance_ws: WS disconnected after 0.5s. Retry in 10s.
+2026-03-27 19:36:47,045 [WARNING] data.binance_rest: _fetch_account_balance failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,088 [INFO] core.executor: RR 0.53 below min 1.50 for LONG BTCUSDT (entry=66614.9000 sl=66363.3110 tp=66748.9250) — skipping
+2026-03-27 19:36:47,194 [INFO] core.microrange_loop: MicroRange FIRE LONG SOLUSDT  score=1.00  width=0.576%  sl=82.820790  tp=83.430000
+2026-03-27 19:36:47,208 [INFO] core.executor: RR 0.91 below min 1.50 for LONG SOLUSDT (entry=83.1400 sl=82.8208 tp=83.4300) — skipping
+2026-03-27 19:36:47,238 [INFO] core.microrange_loop: MicroRange FIRE LONG BNBUSDT  score=1.00  width=0.308%  sl=608.179970  tp=611.420000
+2026-03-27 19:36:47,317 [WARNING] data.binance_rest: _fetch_oi(DOGEUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,317 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(DOTUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_funding(DOTUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_oi(DOTUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_funding(SUIUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,319 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(ADAUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_funding(ADAUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_oi(ADAUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_oi(SUIUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,321 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(AVAXUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_funding(AVAXUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_oi(AVAXUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(SUIUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_funding(BTCUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BNBUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_funding(BNBUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_oi(BNBUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,322 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(SOLUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_funding(SOLUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_oi(SOLUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(DOGEUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 15m) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 4h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(ETHUSDT, 1w) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 1h) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_funding(ETHUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_funding(DOGEUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_oi(ETHUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,324 [WARNING] data.binance_rest: _fetch_klines(BTCUSDT, 1d) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,326 [WARNING] data.binance_rest: _fetch_oi(BTCUSDT) failed: Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,328 [INFO] core.executor: RR 0.19 below min 1.50 for LONG BNBUSDT (entry=610.9000 sl=608.1800 tp=611.4200) — skipping
+2026-03-27 19:36:47,409 [INFO] core.microrange_loop: MicroRange FIRE LONG DOTUSDT  score=1.00  width=0.625%  sl=1.271175  tp=1.281000
+2026-03-27 19:36:47,417 [ERROR] data.binance_rest: place_limit_then_market LIMIT failed (BUY DOTUSDT): Cannot connect to host demo-fapi.binance.com:443 ssl:default [getaddrinfo failed]
+2026-03-27 19:36:47,506 [INFO] core.microrange_loop: MicroRange FIRE LONG DOGEUSDT  score=1.00  width=0.533%  sl=0.089471  tp=0.090100
+2026-03-27 19:36:47,535 [INFO] core.executor: RR 0.70 below min 1.50 for LONG DOGEUSDT (entry=0.0898 sl=0.0895 tp=0.0901) — skipping
+2026-03-27 19:36:57,014 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 19:36:57,046 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 19:36:57,919 [INFO] data.binance_ws: WS connected
+2026-03-27 19:36:58,057 [INFO] data.binance_ws: WS connected
+2026-03-27 19:37:48,077 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 19:38:49,867 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 19:39:51,003 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 20:06:23,671 [INFO] core.microrange_loop: MicroRange FIRE LONG BTCUSDT  score=1.00  width=0.868%  sl=66035.098600  tp=66666.625000
+2026-03-27 20:06:23,752 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 20:06:23,752 [INFO] data.binance_ws: WS disconnected after 1766.7s. Retry in 5s.
+2026-03-27 20:06:23,752 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 20:06:23,752 [INFO] data.binance_ws: WS disconnected after 1766.7s. Retry in 5s.
+2026-03-27 20:06:24,320 [INFO] core.executor: RR 1.27 below min 1.50 for LONG BTCUSDT (entry=66313.7000 sl=66035.0986 tp=66666.6250) — skipping
+2026-03-27 20:06:24,419 [INFO] core.microrange_loop: MicroRange FIRE LONG BNBUSDT  score=1.00  width=0.493%  sl=607.053360  tp=611.137500
+2026-03-27 20:06:24,474 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 20:06:26,121 [INFO] core.executor: RR 0.66 below min 1.50 for LONG BNBUSDT (entry=609.5100 sl=607.0534 tp=611.1375) — skipping
+2026-03-27 20:06:28,751 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 20:06:28,753 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 20:06:29,213 [INFO] data.binance_ws: WS connected
+2026-03-27 20:06:29,413 [INFO] data.binance_ws: WS connected
+2026-03-27 20:07:26,645 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 20:08:27,683 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 20:09:28,882 [INFO] data.binance_rest: Account balance: 4745.57 USDT
+2026-03-27 20:09:56,159 [INFO] core.microrange_loop: MicroRange FIRE LONG SUIUSDT  score=0.75  width=0.953%  sl=0.885336  tp=0.894375
+2026-03-27 20:09:56,932 [INFO] data.binance_rest: LIMIT entry placed BUY SUIUSDT @ 0.8882 orderId=550590204
+2026-03-27 20:10:27,627 [WARNING] data.binance_rest: SL rejected SUIUSDT: code=-4120 msg=Order type not supported for this endpoint. Please use the Algo Order API endpoints instead.
+2026-03-27 20:10:27,742 [WARNING] data.binance_rest: TP rejected SUIUSDT: code=-4120 msg=Order type not supported for this endpoint. Please use the Algo Order API endpoints instead.
+2026-03-27 20:10:28,488 [INFO] core.executor: Position opened: LONG SUIUSDT — active deals: 2
+2026-03-27 20:10:28,503 [INFO] core.microrange_loop: MicroRange order placed: LONG SUIUSDT  entry=0.888200  sl=0.885336  tp=0.894375  qty=337.8000
+2026-03-27 20:10:28,503 [INFO] core.microrange_loop: MicroRange tick complete — 1 position(s) entered
+2026-03-27 20:10:30,742 [INFO] data.binance_rest: Account balance: 4745.48 USDT
+2026-03-27 20:11:31,864 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:12:32,978 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:13:34,143 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:14:35,243 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:15:28,578 [INFO] core.microrange_loop: MicroRange FIRE LONG SOLUSDT  score=1.00  width=0.999%  sl=82.412020  tp=83.282500
+2026-03-27 20:15:29,327 [INFO] core.executor: RR 1.43 below min 1.50 for LONG SOLUSDT (entry=82.7700 sl=82.4120 tp=83.2825) — skipping
+2026-03-27 20:15:36,276 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:16:37,289 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:17:38,570 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:18:40,208 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:19:41,261 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:20:43,194 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:21:44,474 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:22:45,652 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:23:38,780 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 20:23:38,780 [INFO] data.binance_ws: WS disconnected after 1030.0s. Retry in 5s.
+2026-03-27 20:23:38,780 [INFO] data.binance_ws: WS: CVD warmup restarted (20 min) for 9 symbol(s) after disconnect
+2026-03-27 20:23:38,780 [INFO] data.binance_ws: WS disconnected after 1030.0s. Retry in 5s.
+2026-03-27 20:23:43,792 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 20:23:43,793 [INFO] data.binance_ws: WS connecting (54 streams) …
+2026-03-27 20:23:44,232 [INFO] data.binance_ws: WS connected
+2026-03-27 20:23:44,340 [INFO] data.binance_ws: WS connected
+2026-03-27 20:23:46,763 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:24:48,013 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:25:49,520 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:26:50,645 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:27:51,794 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:28:53,322 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:29:55,018 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:30:56,587 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:31:57,828 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:32:59,432 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:34:00,733 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:35:02,122 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:36:03,741 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:37:04,905 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:38:06,186 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:39:07,365 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:40:10,284 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:41:12,784 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:42:13,881 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:43:15,146 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:44:16,310 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:45:17,775 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:46:19,897 [INFO] data.binance_rest: Account balance: 4745.45 USDT
+2026-03-27 20:47:20,999 [INFO] data.binance_rest:

@@ -42,6 +42,11 @@ _RSI_SHORT_MIN  = float(_MR.get("rsi_short_min",   60.0))
 _COOLDOWN_SECS  = float(_MR.get("cooldown_mins",   20)) * 60.0
 _THRESHOLD      = float(_MR.get("fire_threshold",  0.75))   # 3/4 signals required
 
+# Minimum box width to guarantee RR ≥ 1.5×.
+# TP = range_width × tp_ratio = width × 0.75.  SL = stop_pct × range_low ≈ stop_pct × mid.
+# For RR ≥ 1.5: width × 0.75 / stop_pct ≥ 1.5  →  width_pct ≥ stop_pct × 2.0
+_MIN_BOX_PCT = _STOP_PCT * 2.0   # 0.003 × 2 = 0.006 (0.6% minimum box width)
+
 from core.cooldown_store import CooldownStore
 _cd = CooldownStore("MICRORANGE")
 
@@ -92,6 +97,10 @@ async def score(symbol: str, cache) -> list[dict]:
 
     box = detect_micro_range(bars, _WINDOW_BARS, _RANGE_MAX_PCT)
     if box is None:
+        return []
+
+    # Reject boxes too narrow to achieve minimum RR — avoids marginal 1.5× trades
+    if box["range_width_pct"] < _MIN_BOX_PCT:
         return []
 
     price   = bars[-1]["c"]

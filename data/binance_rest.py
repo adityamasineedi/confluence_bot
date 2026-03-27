@@ -13,7 +13,11 @@ from .cache import DataCache
 
 log = logging.getLogger(__name__)
 
-_BINANCE_BASE = os.environ.get("BINANCE_BASE_URL", "https://fapi.binance.com")
+_BINANCE_BASE      = os.environ.get("BINANCE_BASE_URL",  "https://fapi.binance.com")
+# Separate base for public data endpoints (klines, OI, funding).
+# Defaults to live fapi so kline history always resolves even when
+# BINANCE_BASE_URL points to the demo host for order operations.
+_BINANCE_DATA_BASE = os.environ.get("BINANCE_DATA_URL", "https://fapi.binance.com")
 _BYBIT_BASE   = "https://api.bybit.com"
 _OKX_BASE     = "https://www.okx.com"
 
@@ -180,7 +184,7 @@ class BinanceRestPoller:
 
     async def _fetch_oi(self, session: aiohttp.ClientSession, symbol: str) -> None:
         """GET /fapi/v1/openInterest → cache.push_oi()"""
-        url = f"{_BINANCE_BASE}/fapi/v1/openInterest"
+        url = f"{_BINANCE_DATA_BASE}/fapi/v1/openInterest"
         try:
             async with session.get(url, params={"symbol": symbol}) as resp:
                 resp.raise_for_status()
@@ -194,7 +198,7 @@ class BinanceRestPoller:
 
     async def _fetch_funding(self, session: aiohttp.ClientSession, symbol: str) -> None:
         """GET /fapi/v1/fundingRate → cache.set_funding_rate()"""
-        url = f"{_BINANCE_BASE}/fapi/v1/fundingRate"
+        url = f"{_BINANCE_DATA_BASE}/fapi/v1/fundingRate"
         try:
             async with session.get(url, params={"symbol": symbol, "limit": 1}) as resp:
                 resp.raise_for_status()
@@ -213,7 +217,7 @@ class BinanceRestPoller:
         limit: int,
     ) -> None:
         """GET /fapi/v1/klines → cache.push_candle() for each row."""
-        url = f"{_BINANCE_BASE}/fapi/v1/klines"
+        url = f"{_BINANCE_DATA_BASE}/fapi/v1/klines"
         try:
             async with session.get(
                 url,

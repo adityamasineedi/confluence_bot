@@ -290,6 +290,204 @@ async def _fetch_symbol(
     return result
 
 
+# ── Range fetch (specific start→end window) ──────────────────────────────────
+
+async def _fetch_klines_range(
+    session:  aiohttp.ClientSession,
+    symbol:   str,
+    tf:       str,
+    start_ms: int,
+    end_ms:   int,
+) -> list[dict]:
+    """Fetch all candles between start_ms and end_ms for a given timeframe."""
+    futures_url = f"{_FUTURES_BASE}/fapi/v1/klines"
+    spot_url    = f"{_SPOT_BASE}/api/v3/klines"
+    candles: dict[int, dict] = {}
+
+    futures_launch = _FUTURES_LAUNCH_MS.get(symbol, 0)
+
+    for url in [futures_url, spot_url]:
+        cursor = start_ms
+        while cursor < end_ms:
+            params: dict = {
+                "symbol":    symbol,
+                "interval":  tf,
+                "startTime": cursor,
+                "endTime":   end_ms,
+                "limit":     1500,
+            }
+            try:
+                async with session.get(url, params=params) as resp:
+                    resp.raise_for_status()
+                    rows = await resp.json()
+            except Exception as exc:
+                log.warning("range klines failed %s %s: %s", symbol, tf, exc)
+                break
+
+            if not rows:
+                break
+
+            for r in rows:
+                bar = _parse_kline(r)
+                if start_ms <= bar["ts"] <= end_ms:
+                    candles[bar["ts"]] = bar
+
+            last_ts = int(rows[-1][0])
+            if last_ts >= end_ms or len(rows) < 1500:
+                break
+            cursor = last_ts + _MS.get(tf, 60_000)
+            await asyncio.sleep(0.05)
+
+        # only use spot for pre-futures data
+        if url == futures_url and futures_launch <= start_ms:
+            break   # futures covers the whole range — skip spot
+
+    return sorted(candles.values(), key=lambda c: c["ts"])
+
+
+async def _fetch_oi_range(
+    session:  aiohttp.ClientSession,
+    symbol:   str,
+    start_ms: int,
+    end_ms:   int,
+) -> list[dict]:
+    """Fetch OI history for a specific time window."""
+    url    = f"{_FUTURES_BASE}/futures/data/openInterestHist"
+    result: dict[int, dict] = {}
+    cursor = start_ms
+
+    while cursor < end_ms:
+        params: dict = {
+            "symbol":    symbol,
+            "period":    "1h",
+            "startTime": cursor,
+            "endTime":   end_ms,
+            "limit":     500,
+        }
+        try:
+            async with session.get(url, params=params) as resp:
+                resp.raise_for_status()
+                rows = await resp.json()
+        except Exception as exc:
+            log.warning("range OI fetch failed %s: %s", symbol, exc)
+            break
+
+        if not rows:
+            break
+
+        for r in rows:
+            ts = int(r["timestamp"])
+            if start_ms <= ts <= end_ms:
+                result[ts] = {"ts": ts, "oi": float(r["sumOpenInterest"])}
+
+        last_ts = int(rows[-1]["timestamp"])
+        if last_ts >= end_ms or len(rows) < 500:
+            break
+        cursor = last_ts + 3_600_000
+        await asyncio.sleep(0.05)
+
+    return sorted(result.values(), key=lambda x: x["ts"])
+
+
+async def _fetch_funding_range(
+    session:  aiohttp.ClientSession,
+    symbol:   str,
+    start_ms: int,
+    end_ms:   int,
+) -> list[dict]:
+    url    = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
+    result: dict[int, dict] = {}
+    cursor = start_ms
+
+    while cursor < end_ms:
+        params: dict = {
+            "symbol":    symbol,
+            "startTime": cursor,
+            "endTime":   end_ms,
+            "limit":     1000,
+        }
+        try:
+            async with session.get(url, params=params) as resp:
+                resp.raise_for_status()
+                rows = await resp.json()
+        except Exception as exc:
+            log.warning("range funding fetch failed %s: %s", symbol, exc)
+            break
+
+        if not rows:
+            break
+
+        for r in rows:
+            ts = int(r["fundingTime"])
+            if start_ms <= ts <= end_ms:
+                result[ts] = {"ts": ts, "rate": float(r["fundingRate"])}
+
+        last_ts = int(rows[-1]["fundingTime"])
+        if last_ts >= end_ms or len(rows) < 1000:
+            break
+        cursor = last_ts + 28_800_000
+        await asyncio.sleep(0.05)
+
+    return sorted(result.values(), key=lambda x: x["ts"])
+
+
+async def fetch_period_async(
+    symbols:    list[str],
+    from_ms:    int,
+    to_ms:      int,
+    warmup_days: int = 45,
+) -> dict:
+    """Fetch OHLCV + OI + funding for a specific historical period.
+
+    Adds `warmup_days` days of context before `from_ms` so indicators
+    (EMA200, ADX, ATR) are properly warmed up at the start of the window.
+    Data is NOT cached to disk (always fresh for historical periods).
+    """
+    warmup_ms   = warmup_days * 86_400_000
+    fetch_start = from_ms - warmup_ms
+    merged: dict = {"ohlcv": {}, "oi": {}, "funding": {}}
+
+    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+        for symbol in symbols:
+            log.info("Fetching range %s (%s → %s + %dd warmup)...",
+                     symbol,
+                     _ms_to_date(from_ms), _ms_to_date(to_ms), warmup_days)
+
+            for tf in ["1m", "5m", "15m", "1h", "4h", "1d", "1w"]:
+                # Skip 1m — not used by any strategy (too large and not useful for backtest)
+                if tf == "1m":
+                    merged["ohlcv"][f"{symbol}:{tf}"] = []
+                    continue
+                log.info("  %s %s...", symbol, tf)
+                bars = await _fetch_klines_range(session, symbol, tf, fetch_start, to_ms)
+                merged["ohlcv"][f"{symbol}:{tf}"] = bars
+                await asyncio.sleep(0.1)
+
+            log.info("  %s OI...", symbol)
+            oi = await _fetch_oi_range(session, symbol, fetch_start, to_ms)
+            merged["oi"][symbol] = oi
+
+            log.info("  %s funding...", symbol)
+            fund = await _fetch_funding_range(session, symbol, fetch_start, to_ms)
+            merged["funding"][symbol] = fund
+
+    return merged
+
+
+def _ms_to_date(ms: int) -> str:
+    import datetime
+    return datetime.datetime.utcfromtimestamp(ms / 1000).strftime("%Y-%m-%d")
+
+
+def fetch_period_sync(
+    symbols:     list[str],
+    from_ms:     int,
+    to_ms:       int,
+    warmup_days: int = 45,
+) -> dict:
+    return asyncio.run(fetch_period_async(symbols, from_ms, to_ms, warmup_days))
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def fetch_all_async(symbols: list[str], force: bool = False) -> dict:

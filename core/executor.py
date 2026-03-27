@@ -107,6 +107,23 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         )
         return None
 
+    # Gate: DB-level open trade check — cross-process safe (catches duplicate instances)
+    import sqlite3 as _sqlite3
+    _db_path = os.environ.get("DB_PATH", "confluence_bot.db")
+    try:
+        with _sqlite3.connect(_db_path) as _conn:
+            _open_row = _conn.execute(
+                "SELECT id FROM trades WHERE symbol=? AND direction=? AND status='OPEN' LIMIT 1",
+                (symbol, direction),
+            ).fetchone()
+        if _open_row:
+            log.info("Skipping %s %s — OPEN trade already in DB (id=%s)",
+                     direction, symbol, _open_row[0])
+            _active_deals.add(deal_key)   # re-sync in-memory state
+            return None
+    except Exception as _exc:
+        log.debug("DB open trade pre-check failed: %s", _exc)
+
     # Gate: verify no open position on exchange (guards against _active_deals desync)
     from data.binance_rest import get_position_amt
     pos_amt = await get_position_amt(symbol)
@@ -119,20 +136,26 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
 
     # Strategy-specific pre-computed stop/TP keys (bypass ATR calculator)
     _PRESET_LEVELS: dict[str, tuple[str, str]] = {
-        "LEADLAG":    ("ll_stop",  "ll_tp"),
-        "MICRORANGE": ("mr_stop",  "mr_tp"),
-        "SESSION":    ("ss_stop",  "ss_tp"),
-        "INSIDEBAR":  ("ib_stop",  "ib_tp"),
-        "FUNDING":    ("fh_stop",  "fh_tp"),
+        "LEADLAG":     ("ll_stop",  "ll_tp"),
+        "MICRORANGE":  ("mr_stop",  "mr_tp"),
+        "SESSION":     ("ss_stop",  "ss_tp"),
+        "INSIDEBAR":   ("ib_stop",  "ib_tp"),
+        "FUNDING":     ("fh_stop",  "fh_tp"),
+        "SWEEP":       ("sw_stop",  "sw_tp"),
+        "EMA_PULLBACK":("ep_stop",  "ep_tp"),
+        "ZONE":        ("zn_stop",  "zn_tp"),
     }
 
     # Minimum RR requirement per strategy (scalps operate at lower RR)
     _MIN_RR: dict[str, float] = {
-        "LEADLAG":    _cfg["risk"]["rr_ratio"],   # 2.5
-        "MICRORANGE": 1.5,
-        "SESSION":    1.2,
-        "INSIDEBAR":  1.2,
-        "FUNDING":    1.2,
+        "LEADLAG":      _cfg["risk"]["rr_ratio"],   # 2.5
+        "MICRORANGE":   1.5,
+        "SESSION":      1.2,
+        "INSIDEBAR":    1.2,
+        "FUNDING":      1.2,
+        "SWEEP":        2.0,
+        "EMA_PULLBACK": 2.0,
+        "ZONE":         2.0,
     }
 
     stop_key, tp_key = _PRESET_LEVELS.get(regime, (None, None))
@@ -233,6 +256,15 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         set_cooldown(symbol)
     elif regime == "FUNDING":
         from .funding_harvest_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "SWEEP":
+        from .sweep_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "EMA_PULLBACK":
+        from .ema_pullback_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "ZONE":
+        from .zone_scorer import set_cooldown
         set_cooldown(symbol)
 
     return order

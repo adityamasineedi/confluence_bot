@@ -19,6 +19,8 @@ from signals.trend.rsi_divergence   import check_rsi_divergence_bullish
 from signals.trend.ema_cross        import check_ema_pullback_long
 from signals.trend.long_short_ratio import check_ls_crowded_short
 from signals.bear.funding_ramp      import check_funding_ramp_bullish
+from signals.trend.fvg              import check_fvg_bullish
+from signals.trend.bb_squeeze       import check_bb_squeeze_bullish
 from .filter import passes_trend_long_filters
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -75,6 +77,10 @@ def _available_signals(symbol: str, cache) -> set[str]:
     if cache.get_funding_rate(symbol) is not None:
         _add("funding_ramp_bull")
 
+    # FVG and BB squeeze use only OHLCV — always available
+    _add("fvg_bullish")
+    _add("bb_squeeze_bull")
+
     return available
 
 
@@ -106,10 +112,12 @@ async def score(symbol: str, cache) -> dict:
         "order_block":   check_order_block(symbol, cache),
         "options_flow":  check_options_flow(symbol, cache),
         "whale_flow":    check_whale_flow(symbol, cache),
-        "rsi_divergence":  check_rsi_divergence_bullish(symbol, cache),
-        "ema_pullback":    check_ema_pullback_long(symbol, cache),
+        "rsi_divergence":    check_rsi_divergence_bullish(symbol, cache),
+        "ema_pullback":      check_ema_pullback_long(symbol, cache),
         "ls_crowded_short":  check_ls_crowded_short(symbol, cache),
         "funding_ramp_bull": check_funding_ramp_bullish(symbol, cache),
+        "fvg_bullish":       check_fvg_bullish(symbol, cache),
+        "bb_squeeze_bull":   check_bb_squeeze_bullish(symbol, cache),
     }
 
     avail     = _available_signals(symbol, cache)

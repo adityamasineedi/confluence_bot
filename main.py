@@ -154,6 +154,30 @@ async def main() -> None:
         )
         log.info("Funding rate harvest enabled")
 
+    # 6b5. Liquidity Sweep Reversal (scans every 30s on 15m bars — any regime)
+    if cfg.get("sweep", {}).get("enabled", False):
+        from core.sweep_loop import run_sweep_loop
+        extra_tasks.append(
+            asyncio.create_task(run_sweep_loop(symbols, cache))
+        )
+        log.info("Sweep Reversal strategy enabled")
+
+    # 6b6. 15m EMA Pullback (trend-continuation at EMA21, 4H filtered)
+    if cfg.get("ema_pullback", {}).get("enabled", False):
+        from core.ema_pullback_loop import run_ema_pullback_loop
+        extra_tasks.append(
+            asyncio.create_task(run_ema_pullback_loop(symbols, cache))
+        )
+        log.info("EMA Pullback strategy enabled")
+
+    # 6b7. HTF Demand/Supply Zone (4H zone retests with 1H confirmation)
+    if cfg.get("zone", {}).get("enabled", False):
+        from core.zone_loop import run_zone_loop
+        extra_tasks.append(
+            asyncio.create_task(run_zone_loop(symbols, cache))
+        )
+        log.info("Zone Retest strategy enabled")
+
     # 6c. Micro-range flip strategy loop (independent, runs every 30s)
     if cfg.get("microrange", {}).get("enabled", False):
         from core.microrange_loop import run_microrange_loop

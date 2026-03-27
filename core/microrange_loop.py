@@ -40,12 +40,26 @@ async def run_microrange_loop(symbols: list[str], cache) -> None:
 
 
 def _regime_allows(symbol: str, direction: str, cache) -> bool:
-    """Block trades that contradict the macro regime direction."""
-    from core.regime_detector import detect_regime
-    r = str(detect_regime(symbol, cache))
-    if r == "TREND" and direction == "SHORT": return False
+    """Block trades that contradict the macro regime direction.
+
+    In a TREND regime, also checks the 4H directional bias (+DI vs -DI).
+    A bearish TREND will stop-out LONG micro-range entries every time the
+    range floor breaks — the most common cause of micro-range losses.
+    """
+    from core.regime_detector import detect_regime, get_trend_bias
+    r     = str(detect_regime(symbol, cache))
+    bias  = get_trend_bias(symbol, cache)   # "LONG" | "SHORT" | "NEUTRAL"
+
+    # Hard blocks: regime and direction fundamentally opposed
     if r == "CRASH" and direction == "LONG":  return False
     if r == "PUMP"  and direction == "SHORT": return False
+
+    # In a trending market, only trade WITH the 4H trend direction.
+    # NEUTRAL bias = ranging-within-trend → allow both sides.
+    if r == "TREND":
+        if direction == "LONG"  and bias == "SHORT": return False
+        if direction == "SHORT" and bias == "LONG":  return False
+
     return True
 
 
