@@ -282,18 +282,18 @@ microrange:
     - ETHUSDT               #   28.1% WR, -$419
     - AVAXUSDT              #   30.5% WR, -$204
   window_bars: 10           # completed 5m bars used to measure the box
-  range_max_pct: 0.010      # max (high-low)/mid to qualify as micro-range (1%)
-  entry_zone_pct: 0.002     # price within 0.2% of range boundary to enter
-  stop_pct: 0.003           # SL = 0.3% beyond range boundary
+  range_max_pct: 0.005      # max (high-low)/mid to qualify as micro-range (0.5%, tightened from 1.0%)
+  entry_zone_pct: 0.001     # price within 0.1% of range boundary to enter (tightened from 0.2%)
+  stop_pct: 0.002           # SL = 0.2% beyond range boundary (lowered from 0.3% to keep _MIN_BOX_PCT ≤ range_max_pct)
   tp_ratio: 0.75            # TP = 75% of range width from entry boundary
   max_hold_bars: 6          # max 6 × 5m bars = 30 min hold
   cooldown_mins: 20         # min gap between two trades on the same symbol
   max_positions: 3          # max simultaneous micro-range entries (conservative)
   max_vol_ratio: 1.3        # reject entries when vol > 1.3× 20-bar avg (breakout risk)
-  rsi_long_max: 40          # RSI(14) must be ≤ 40 for LONG entries
-  rsi_short_min: 60         # RSI(14) must be ≥ 60 for SHORT entries
+  rsi_long_max: 35          # RSI(14) must be ≤ 35 for LONG entries (tightened from 40)
+  rsi_short_min: 65         # RSI(14) must be ≥ 65 for SHORT entries (tightened from 60)
   use_rsi_filter: true      # set false to disable RSI gate
-  fire_threshold: 0.75      # 3 of 4 signals must fire (box + zone + vol + rsi)
+  fire_threshold: 1.0       # ALL 4 signals must fire (tightened from 0.75 / 3-of-4)
   check_interval_secs: 30   # how often the microrange loop scans
   risk_pct: 0.01            # 1% equity risk per trade
 

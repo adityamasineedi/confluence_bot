@@ -3,7 +3,7 @@ import os
 import sqlite3
 import json as _json
 import urllib.request
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 
 app = FastAPI(title="confluence_bot metrics", version="0.1.0")
@@ -699,9 +699,52 @@ async def dashboard() -> HTMLResponse:
 
 <!-- ── BACKTEST ──────────────────────────────────────────── -->
 <div id="panel-backtest" class="panel">
-  <div id="bt-meta" style="padding:14px 20px 0;font-size:0.75rem;color:#4b5563">—</div>
+  <div id="bt-form-wrap" style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;background:#1a1d27;border-bottom:1px solid #2a2d3a">
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Symbol</label>
+      <select id="bt-sym" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:130px">
+        <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
+        <option>BNBUSDT</option><option>AVAXUSDT</option><option>ADAUSDT</option>
+        <option>DOTUSDT</option><option>DOGEUSDT</option><option>SUIUSDT</option>
+        <option value="ALL">ALL (9 symbols)</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Strategy</label>
+      <select id="bt-strat" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:145px">
+        <option value="main">Main Trend/Range</option>
+        <option value="microrange">MicroRange</option>
+        <option value="ema_pullback">EMA Pullback</option>
+        <option value="sweep">Sweep Reversal</option>
+        <option value="zone">HTF Zone Retest</option>
+        <option value="leadlag">Lead-Lag</option>
+        <option value="session">Session Trap</option>
+        <option value="insidebar">Inside Bar</option>
+        <option value="funding">Funding Harvest</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">From Date</label>
+      <input id="bt-from" type="date" value="2024-01-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">To Date</label>
+      <input id="bt-to" type="date" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Capital ($)</label>
+      <input id="bt-capital" type="number" value="1000" min="100" step="100" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:100px">
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Risk %</label>
+      <input id="bt-risk" type="number" value="2" min="0.5" max="10" step="0.5" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:72px">
+    </div>
+    <button id="bt-run-btn" onclick="runBacktest()" style="padding:7px 20px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;white-space:nowrap;align-self:flex-end">&#9654; Run</button>
+    <span id="bt-status" style="font-size:0.75rem;color:#6b7280;align-self:center"></span>
+  </div>
+  <div id="bt-meta" style="padding:10px 20px 0;font-size:0.75rem;color:#4b5563"></div>
   <div id="bt-app">
-    <div style="padding:40px;color:#4b5563;text-align:center">Click Backtest tab to load…</div>
+    <div style="padding:60px;color:#4b5563;text-align:center">Configure a backtest above and click <b style="color:#a78bfa">Run</b>.</div>
   </div>
 </div>
 
@@ -1665,53 +1708,106 @@ function buildBarChart(monthly) {
       } },
   });
 }
-async function loadBacktest() {
+function loadBacktest() {
+  // Set default "to" date to today
+  const toEl = document.getElementById('bt-to');
+  if (toEl && !toEl.value) {
+    toEl.value = new Date().toISOString().slice(0,10);
+  }
+}
+
+async function runBacktest() {
+  const btn    = document.getElementById('bt-run-btn');
+  const status = document.getElementById('bt-status');
+  const app    = document.getElementById('bt-app');
+  const meta   = document.getElementById('bt-meta');
+
+  const symbol   = document.getElementById('bt-sym').value;
+  const strategy = document.getElementById('bt-strat').value;
+  const fromDate = document.getElementById('bt-from').value;
+  const toDate   = document.getElementById('bt-to').value;
+  const capital  = parseFloat(document.getElementById('bt-capital').value) || 1000;
+  const riskPct  = parseFloat(document.getElementById('bt-risk').value) / 100 || 0.02;
+
+  if (!fromDate || !toDate) { status.textContent = 'Set both dates.'; return; }
+  if (fromDate >= toDate)   { status.textContent = 'From date must be before To date.'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  status.textContent = 'Fetching data & running backtest — this may take 30–90 s…';
+  app.innerHTML = '<div style="padding:60px;color:#4b5563;text-align:center">Running backtest, please wait…</div>';
+  meta.textContent = '';
+
   let d;
   try {
-    const r = await fetch('/backtest/results');
-    if (!r.ok) throw new Error(await r.text());
+    const r = await fetch('/api/backtest/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ symbol, strategy, from_date: fromDate, to_date: toDate, capital, risk_pct: riskPct }),
+    });
     d = await r.json();
+    if (d.error) throw new Error(d.error);
   } catch(e) {
-    document.getElementById('bt-app').innerHTML =
-      `<div style="padding:40px;color:#ef4444;text-align:center">${e.message}</div>`;
+    app.innerHTML = `<div style="padding:40px;color:#ef4444;text-align:center">Error: ${e.message}</div>`;
+    status.textContent = '';
+    btn.disabled = false; btn.textContent = '▶ Run';
     return;
   }
-  const t=d.stats.total, monthly=d.stats.monthly||[], byReg=d.stats.by_regime||{},
-        bySym=d.stats.by_symbol||{}, trades=d.trades||[], sc=d.capital||1000;
-  document.getElementById('bt-meta').textContent =
-    `${d.symbols?.join(', ')} | Capital $${sc.toLocaleString()} | Risk ${(d.risk_pct*100).toFixed(0)}%/trade`;
-  const pf = btProfitFactor(trades);
+
+  btn.disabled = false; btn.textContent = '▶ Run';
+  status.textContent = `Done in ${new Date().toLocaleTimeString()}`;
+
+  const sc = d.capital || 1000;
+  const t  = d.stats.total;
+  const monthly = d.stats.monthly || [];
+  const byReg   = d.stats.by_regime || {};
+  const bySym   = d.stats.by_symbol || {};
+  const trades  = d.trades || [];
+  const pf      = btProfitFactor(trades);
+
+  meta.textContent = `${d.symbols?.join(', ')} | ${d.strategy?.toUpperCase()} | Capital $${sc.toLocaleString()} | Risk ${(d.risk_pct*100).toFixed(0)}%/trade | ${fromDate} → ${toDate}`;
+
   const kpis = [
     { label:'Starting Capital', val:'$'+sc.toLocaleString(), cls:'blue' },
     { label:'Final Equity',     val:'$'+(+t.final_equity).toLocaleString('en',{minimumFractionDigits:2}), cls:t.final_equity>=sc?'green':'red' },
     { label:'Total Return',     val:(t.total_return_pct>=0?'+':'')+t.total_return_pct+'%', cls:t.total_return_pct>=0?'green':'red' },
     { label:'Total Trades',     val:t.trades, cls:'blue' },
-    { label:'Win Rate',         val:(t.win_rate*100).toFixed(1)+'%', cls:'purple' },
+    { label:'Win Rate',         val:(t.win_rate*100).toFixed(1)+'%', cls:t.win_rate>=0.4?'green':'yellow' },
     { label:'Profit Factor',    val:pf, cls:parseFloat(pf)>=1.5?'green':'yellow' },
     { label:'Max Drawdown',     val:'$'+(+t.max_drawdown_usd).toFixed(0)+' ('+t.max_drawdown_pct+'%)', cls:'red' },
     { label:'Avg Win / Loss',   val:btPnlFmt(t.avg_win)+' / '+btPnlFmt(t.avg_loss), cls:'blue' },
+    { label:'Win / Loss / T-O', val:`${t.wins} / ${t.losses} / ${t.timeouts}`, cls:'gray' },
+    { label:'Win Streak',       val:`${t.longest_win_streak} W  /  ${t.longest_loss_streak} L`, cls:'gray' },
   ];
-  document.getElementById('bt-app').innerHTML = `
+
+  app.innerHTML = `
   <div class="kpi-grid">${kpis.map(k=>`
     <div class="kpi"><label>${k.label}</label><div class="v ${k.cls}">${k.val}</div></div>`).join('')}</div>
+  ${monthly.length ? `
   <div class="two-col">
     <div class="bt-panel"><h2>Equity Curve</h2>
       <div class="chart-wrap"><canvas id="eq-chart"></canvas></div></div>
     <div class="bt-panel"><h2>Monthly Return %</h2>
       <div class="chart-wrap"><canvas id="bar-chart"></canvas></div></div>
-  </div>
+  </div>` : ''}
   <div class="two-col">
-    <div class="bt-panel"><h2>By Regime</h2>${btBucketTable(byReg)}</div>
-    <div class="bt-panel"><h2>By Symbol</h2>${btBucketTable(bySym)}</div>
+    ${Object.keys(byReg).length ? `<div class="bt-panel"><h2>By Regime</h2>${btBucketTable(byReg)}</div>` : ''}
+    ${Object.keys(bySym).length ? `<div class="bt-panel"><h2>By Symbol</h2>${btBucketTable(bySym)}</div>` : ''}
   </div>
+  ${monthly.length ? `
   <div class="full">
     <div class="bt-panel"><h2>Monthly Returns</h2>${btMonthlyTable(monthly,sc)}</div>
-  </div>
+  </div>` : ''}
   <div class="full">
-    <div class="bt-panel"><h2>Last 20 Trades</h2>${btTradeTable(trades.slice(-20).reverse())}</div>
+    <div class="bt-panel"><h2>${trades.length ? 'All ' + trades.length + ' Trades' : 'No Trades'}</h2>
+      ${trades.length ? btTradeTable(trades.slice(-50).reverse()) : '<p style="color:#4b5563;padding:10px">No trades were generated for this period and symbol.</p>'}
+    </div>
   </div>`;
-  buildEquityCurve(monthly, sc);
-  buildBarChart(monthly);
+
+  if (monthly.length) {
+    buildEquityCurve(monthly, sc);
+    buildBarChart(monthly);
+  }
 }
 
 // ── DEBUG ──────────────────────────────────────────────────────────────────────
@@ -1822,6 +1918,102 @@ def backtest_results() -> JSONResponse:
             return JSONResponse(json.load(f))
     except FileNotFoundError:
         return JSONResponse({"error": "No backtest results yet. Run: python -m backtest.run"}, status_code=404)
+
+
+@app.post("/api/backtest/run")
+async def api_backtest_run(request: Request) -> JSONResponse:
+    """Run a backtest on demand from the web UI.
+
+    Body JSON: { symbol, strategy, from_date, to_date, capital, risk_pct }
+    Returns:   { stats, trades, symbols, capital, risk_pct, strategy }
+    """
+    import asyncio as _asyncio
+
+    body      = await request.json()
+    symbol    = str(body.get("symbol", "BTCUSDT")).upper()
+    strategy  = str(body.get("strategy", "main"))
+    from_date = str(body.get("from_date", ""))
+    to_date   = str(body.get("to_date",   ""))
+    capital   = float(body.get("capital",  1000))
+    risk_pct  = float(body.get("risk_pct", 0.02))
+
+    if not from_date or not to_date:
+        return JSONResponse({"error": "from_date and to_date are required (YYYY-MM-DD)"}, status_code=400)
+
+    def _run_sync():
+        import sys, os as _os
+        _root = _os.path.join(_os.path.dirname(__file__), "..")
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+
+        from backtest.fetcher  import fetch_period_sync
+        from backtest.reporter import compute_stats
+        from datetime import datetime, timezone
+
+        def _date_ms(d):
+            return int(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+        from_ms = _date_ms(from_date)
+        to_ms   = _date_ms(to_date) + 86_400_000
+
+        _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
+        symbols   = _ALL_SYMS if symbol == "ALL" else [symbol]
+
+        data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+        ohlcv   = data["ohlcv"]
+        oi      = data["oi"]
+        funding = data["funding"]
+
+        # Re-use _run_strategy dispatcher from backtest.run
+        import asyncio as _aio
+
+        def _run_async(coro):
+            loop = _aio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+        if strategy == "main":
+            from backtest.engine import run as _run
+            trades = _run_async(_run(symbols=symbols, ohlcv=ohlcv, oi=oi, funding=funding,
+                                     warmup_bars=210, starting_capital=capital, risk_pct=risk_pct))
+        elif strategy == "leadlag":
+            from backtest.leadlag_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "microrange":
+            from backtest.microrange_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "session":
+            from backtest.session_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "insidebar":
+            from backtest.insidebar_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "funding":
+            from backtest.funding_harvest_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, funding=funding, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "sweep":
+            from backtest.sweep_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "ema_pullback":
+            from backtest.ema_pullback_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "zone":
+            from backtest.zone_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        else:
+            trades = []
+
+        stats = compute_stats(trades, starting_capital=capital)
+        return {"stats": stats, "trades": trades, "symbols": symbols,
+                "capital": capital, "risk_pct": risk_pct, "strategy": strategy}
+
+    try:
+        result = await _asyncio.to_thread(_run_sync)
+        return JSONResponse(result)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/backtest", response_class=HTMLResponse)

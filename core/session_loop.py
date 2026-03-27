@@ -61,6 +61,20 @@ async def run_session_loop(symbols: list[str], cache) -> None:
         )
         await asyncio.sleep(sleep_secs)
 
+        # Lateness guard: if the event loop was blocked or the bot was restarting,
+        # we may wake up well past T+15 min — the session data is stale and any
+        # entry would be at the wrong bar. Skip and warn rather than fire blind.
+        actual_late_secs = datetime.now(tz=timezone.utc).timestamp() - fire_ts
+        _LATE_TOLERANCE_SECS = 5 * 60   # 5 minutes
+        if actual_late_secs > _LATE_TOLERANCE_SECS:
+            log.warning(
+                "SessionTrap window MISSED for session %d:00 UTC — woke %.0f min late "
+                "(event loop delay or restart). Skipping this session.",
+                session_hour, actual_late_secs / 60,
+            )
+            await asyncio.sleep(30)
+            continue
+
         try:
             await _tick(symbols, cache, session_hour)
         except Exception:

@@ -31,8 +31,9 @@ with open(_CONFIG_PATH) as _f:
 _LL_CFG    = _cfg.get("leadlag", {})
 _THRESHOLD = float(_LL_CFG.get("fire_threshold",  0.60))
 _COOLDOWN  = float(_LL_CFG.get("cooldown_mins",   30)) * 60.0   # → seconds
-_STOP_PCT  = float(_LL_CFG.get("stop_pct",  0.0020))
-_TP_PCT    = float(_LL_CFG.get("tp_pct",    0.0050))
+_STOP_ATR_MULT = float(_LL_CFG.get("stop_atr_mult", 0.8))   # stop = 5m ATR × mult
+_MIN_STOP_PCT  = float(_LL_CFG.get("min_stop_pct",  0.003)) # 0.3% floor (noise guard)
+_TP_RR         = float(_LL_CFG.get("tp_rr",         2.5))   # reward:risk ratio
 
 from core.cooldown_store import CooldownStore
 _cd = CooldownStore("LEADLAG")
@@ -55,20 +56,39 @@ def cooldown_remaining(symbol: str) -> float:
     return _cd.remaining(symbol)
 
 
-# ── Fixed-percentage RR calculator ───────────────────────────────────────────
+# ── ATR helper ────────────────────────────────────────────────────────────────
 
-def compute_levels(entry: float, direction: str) -> tuple[float, float]:
-    """Return (stop_loss, take_profit) using fixed percentage offsets.
+def _atr5m(candles: list[dict], period: int = 14) -> float:
+    """Average True Range over the last `period` 5m candles."""
+    if len(candles) < period + 1:
+        return 0.0
+    trs = []
+    for i in range(1, len(candles)):
+        prev_c = candles[i - 1]["c"]
+        c = candles[i]
+        trs.append(max(c["h"] - c["l"], abs(c["h"] - prev_c), abs(c["l"] - prev_c)))
+    return sum(trs[-period:]) / period
 
-    Uses config ``stop_pct`` and ``tp_pct`` — not ATR-based because this is
-    a short-horizon scalp where time-in-trade (not volatility) governs the risk.
+
+# ── ATR-relative RR calculator ────────────────────────────────────────────────
+
+def compute_levels(symbol: str, entry: float, direction: str, cache) -> tuple[float, float]:
+    """Return (stop_loss, take_profit) using ATR-relative stop distance.
+
+    Stop = entry ± max(5m ATR(14) × stop_atr_mult, entry × min_stop_pct).
+    Fixed 0.2% was routinely clipped by single-candle wicks on BTC vol spikes;
+    ATR adapts to the current volatility environment of the *alt* being entered.
     """
+    bars_5m = cache.get_ohlcv(symbol, window=20, tf="5m")
+    atr_val = _atr5m(bars_5m)
+    stop_dist = max(atr_val * _STOP_ATR_MULT, entry * _MIN_STOP_PCT)
+
     if direction == "LONG":
-        stop = round(entry * (1.0 - _STOP_PCT), 8)
-        tp   = round(entry * (1.0 + _TP_PCT),   8)
+        stop = round(entry - stop_dist, 8)
+        tp   = round(entry + stop_dist * _TP_RR, 8)
     else:
-        stop = round(entry * (1.0 + _STOP_PCT), 8)
-        tp   = round(entry * (1.0 - _TP_PCT),   8)
+        stop = round(entry + stop_dist, 8)
+        tp   = round(entry - stop_dist * _TP_RR, 8)
     return stop, tp
 
 
@@ -117,9 +137,9 @@ async def score(symbol: str, cache, btc_info: dict) -> dict:
         and cool_ok        # hard gate: no cooldown active
     )
 
-    # Pre-compute fixed-% stop/TP for the executor
+    # Pre-compute ATR-relative stop/TP for the executor
     entry          = cache.get_last_price(symbol)
-    ll_stop, ll_tp = compute_levels(entry, direction) if entry > 0.0 else (0.0, 0.0)
+    ll_stop, ll_tp = compute_levels(symbol, entry, direction, cache) if entry > 0.0 else (0.0, 0.0)
 
     return {
         "symbol":    symbol,

@@ -61,13 +61,20 @@ def _rsi(closes: list[float], period: int = _RSI_PERIOD) -> float:
     return 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
 
 
-def _oi_rising(symbol: str, cache) -> bool:
-    """OI increasing over last 3 snapshots — new longs being added."""
+def _oi_check(symbol: str, cache, direction: str) -> tuple[bool, bool]:
+    """Return (oi_ok, data_available) for the given direction.
+
+    When the OI feed has insufficient data (known outage, cold start, or REST
+    failure), oi_ok defaults to True so the signal is treated as passing rather
+    than silently degrading the scorer's numerator.
+    """
     oi = cache.get_open_interest(symbol)
     if not oi or len(oi) < _OI_RISE_LOOKBACK + 1:
-        return False
+        log.debug("Zone %s %s: OI feed dry — oi_supporting treated as passing", direction, symbol)
+        return True, False
     recent = oi[-(_OI_RISE_LOOKBACK + 1):]
-    return recent[-1] > recent[0]
+    rising = recent[-1] > recent[0]
+    return (rising if direction == "LONG" else not rising), True
 
 
 async def score(symbol: str, cache) -> list[dict]:
@@ -94,7 +101,7 @@ async def score(symbol: str, cache) -> list[dict]:
         # 1H confirmation already embedded in check_demand_zone_long
         htf_1h = True
 
-        oi_ok = _oi_rising(symbol, cache)
+        oi_ok, _ = _oi_check(symbol, cache, "LONG")
 
         signals = {
             "zone_active":     True,
@@ -127,7 +134,7 @@ async def score(symbol: str, cache) -> list[dict]:
         rsi_ok = rsi > _RSI_SHORT_MIN
 
         htf_1h = True
-        oi_ok  = not _oi_rising(symbol, cache)   # OI falling = longs being liquidated
+        oi_ok, _ = _oi_check(symbol, cache, "SHORT")
 
         signals = {
             "zone_active":     True,
