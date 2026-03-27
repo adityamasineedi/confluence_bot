@@ -28,6 +28,14 @@ _API_KEY         = os.environ.get("BINANCE_API_KEY", "")
 _SECRET          = os.environ.get("BINANCE_SECRET", "")
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
+# Session-level guard: once a trade ID is detected as closed it stays here.
+_closing_trade_ids: set[int] = set()
+
+# Per-cycle guard: tracks (symbol, direction) pairs already closed this poll
+# cycle. Prevents 3 separate DB rows (created by the duplicate-entry bug) from
+# each sending a Telegram alert. Reset at the top of every poll cycle.
+_cycle_closed_positions: set[tuple[str, str]] = set()
+
 
 # ── Binance signing ────────────────────────────────────────────────────────────
 
@@ -319,9 +327,17 @@ async def monitor_trades(cache) -> None:
         if not trades:
             continue
 
+        _cycle_closed_positions.clear()
+
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             for trade in trades:
                 try:
+                    trade_id = trade["id"]
+                    # Skip if already being closed this session (prevents duplicate
+                    # close alerts when multiple DB rows exist for the same position)
+                    if trade_id in _closing_trade_ids:
+                        continue
+
                     if _PAPER_MODE:
                         result = _check_paper_order(trade, cache)
                     else:
@@ -330,13 +346,26 @@ async def monitor_trades(cache) -> None:
                     if result is None:
                         continue
 
+                    # Claim the trade ID before any await — atomic in asyncio
+                    _closing_trade_ids.add(trade_id)
                     outcome, exit_price = result
                     pnl = _calc_pnl(trade, exit_price) if exit_price > 0 else 0.0
+
+                    pos_key = (trade["symbol"], trade["direction"])
+                    is_duplicate = pos_key in _cycle_closed_positions
+                    _cycle_closed_positions.add(pos_key)
 
                     if outcome == "CANCELLED":
                         await asyncio.to_thread(_cancel_trade_db, trade["id"])
                     else:
                         await asyncio.to_thread(_close_trade_db, trade["id"], exit_price, pnl)
+
+                    if is_duplicate:
+                        # Duplicate DB row from concurrent entry bug — silently close,
+                        # no executor call (already done), no Telegram alert.
+                        log.debug("Silently closed duplicate trade row id=%d %s %s",
+                                  trade_id, trade["direction"], trade["symbol"])
+                        continue
 
                     # Remove from executor's active set
                     from core.executor import close_deal

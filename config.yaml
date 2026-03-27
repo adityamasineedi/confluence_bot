@@ -135,7 +135,7 @@ risk:
   max_position_size_usdt: 300    # $300 notional = $100 margin at 3x leverage
   max_open_positions: 5          # 5 × $100 margin = $500 total (10% of balance)
   max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
-  rr_ratio: 2.5                # TP = entry ± stop_dist × 2.0
+  rr_ratio: 2.5                   # TP = entry ± stop_dist × 2.5
   leverage: 3
   margin_type: ISOLATED
   # ── Circuit breaker ───────────────────────────────────────────────────────

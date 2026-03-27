@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 # Active deal tracking: set of (symbol, direction) tuples
 _active_deals: set[tuple[str, str]] = set()
 
+# Pending deals: claimed immediately (before any await) to prevent concurrent
+# duplicate entries from the main loop, leadlag loop, and microrange loop.
+# Asyncio is single-threaded so check+add before first await is atomic.
+_pending_deals: set[tuple[str, str]] = set()
+
 # Post-trade cooldown: symbol → monotonic timestamp when cooldown expires
 _post_trade_until: dict[str, float] = {}
 
@@ -51,7 +56,6 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
 
     symbol    = score_dict["symbol"]
     direction = score_dict["direction"]
-    regime    = score_dict["regime"]
 
     # Gate: post-trade cooldown (prevents whipsaw re-entry after close)
     import time as _time
@@ -63,8 +67,29 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
 
     # Gate: no duplicate open position for same symbol+direction
     deal_key = (symbol, direction)
+    if deal_key in _active_deals or deal_key in _pending_deals:
+        log.debug("Skipping %s %s — already active or pending", direction, symbol)
+        return None
+
+    # Claim the slot NOW before any await — prevents concurrent callers (main loop,
+    # leadlag loop, microrange loop) from all passing this check simultaneously.
+    _pending_deals.add(deal_key)
+
+    try:
+        return await _execute_signal_inner(score_dict, cache, deal_key)
+    finally:
+        _pending_deals.discard(deal_key)
+
+
+async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dict | None:
+    """Inner execution — called only after deal_key is claimed in _pending_deals."""
+    symbol    = score_dict["symbol"]
+    direction = score_dict["direction"]
+    regime    = score_dict["regime"]
+
+    # Re-check active deals (may have changed while we were pending)
     if deal_key in _active_deals:
-        log.debug("Skipping %s %s — already active", direction, symbol)
+        log.debug("Skipping %s %s — became active while pending", direction, symbol)
         return None
 
     # Gate: max open positions

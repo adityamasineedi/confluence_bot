@@ -16,7 +16,7 @@ reversion back toward trend continuation provides the TP.
 
 _EMA_FAST    = 20
 _EMA_SLOW    = 50
-_TOUCH_PCT   = 0.020  # price must be within 2.0% of the 20 EMA to count as a touch
+_TOUCH_PCT   = 0.010  # price must be within 1.0% of the 20 EMA to count as a touch
 
 
 def _ema(closes: list[float], period: int) -> float:
@@ -54,8 +54,8 @@ def check_ema_pullback_long(symbol: str, cache) -> bool:
     if price > ema20 * (1 + _TOUCH_PCT):
         return False   # price is too far above EMA — not a pullback entry
 
-    # Price must remain within 3% of 50 EMA (allow slight dips below in strong trends)
-    if price < ema50 * 0.97:
+    # Price must remain above 50 EMA (trend not broken)
+    if price < ema50:
         return False
 
     # Bullish confirmation candle

@@ -27,3 +27,13 @@
 2026-03-26 12:00:27,651 [INFO] watchdog: Restarting in 5s  (restart #1 this hour)...
 2026-03-26 12:00:33,138 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
 2026-03-26 12:26:56,888 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-26 12:35:43,902 [WARNING] watchdog: Bot exited with code 4294967295 after 527s.
+2026-03-26 12:35:43,902 [INFO] watchdog: Restarting in 5s  (restart #1 this hour)...
+2026-03-26 12:35:49,258 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-26 16:21:54,075 [WARNING] watchdog: Bot exited with code 4294967295 after 13564s.
+2026-03-26 16:21:54,077 [INFO] watchdog: Restarting in 5s  (restart #1 this hour)...
+2026-03-26 16:21:56,994 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-26 16:56:02,772 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-26 16:56:32,553 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-27 08:45:49,852 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
+2026-03-27 08:45:59,428 [INFO] watchdog: Starting confluence_bot  (python=C:\projects\confluence_bot\venv\Scripts\python.exe)
