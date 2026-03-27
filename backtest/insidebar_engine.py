@@ -24,8 +24,9 @@ with open(_CONFIG_PATH) as _f:
 _IB = _cfg.get("insidebar", {})
 
 # Patchable by tuner
-_MIN_INSIDE     = int(_IB.get("min_inside_bars",  2))
-_MAX_ZONE_PCT   = float(_IB.get("max_zone_pct",   0.015))
+_MIN_INSIDE     = int(_IB.get("min_inside_bars",  3))
+_MAX_ZONE_PCT   = float(_IB.get("max_zone_pct",   0.010))   # tightened from 1.5% → 1.0%
+_NEAR_POC_PCT   = float(_IB.get("near_poc_pct",   0.005))   # within 0.5% of POC
 _ENTRY_ZONE_PCT = float(_IB.get("entry_zone_pct", 0.002))
 _SL_BUFFER_PCT  = float(_IB.get("sl_buffer_pct",  0.002))
 _RR_RATIO       = float(_IB.get("rr_ratio",        1.5))
@@ -138,7 +139,23 @@ def run(
             if zone["zone_pct"] > _MAX_ZONE_PCT:
                 continue
 
+            # Hard gate: volume must be declining into the compression
+            n_inside = zone["bar_count"]
+            inside_vols = [b.get("v", 0) for b in window_slice[-(n_inside + 1):-1]]
+            vol_before  = window_slice[-(n_inside + 2)].get("v", 0) if len(window_slice) >= n_inside + 3 else 0
+            vol_declining = (inside_vols and vol_before > 0
+                             and sum(inside_vols) / len(inside_vols) < vol_before)
+            if not vol_declining:
+                continue
+
             price = bar["c"]
+
+            # Hard gate: price must be within near_poc_pct of zone POC
+            poc = zone["poc"]
+            poc_dist = abs(price - poc) / poc if poc > 0 else 1.0
+            if poc_dist > _NEAR_POC_PCT:
+                continue
+
             direction = None
 
             if near_zone_low(price, zone["zone_low"], _ENTRY_ZONE_PCT):

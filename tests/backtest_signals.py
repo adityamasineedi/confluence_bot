@@ -44,6 +44,23 @@ class BacktestCache:
         candles = self._data.get(key, [])
         return candles[-1]["c"] if candles else 0.0
 
+    def get_vol_ma(self, symbol: str, window: int, tf: str) -> float:
+        key = f"{symbol}:{tf}"
+        candles = self._data.get(key, [])[-window:]
+        if not candles:
+            return 0.0
+        return sum(c["v"] for c in candles) / len(candles)
+
+    def get_vwap(self, symbol: str, window: int, tf: str) -> float:
+        key = f"{symbol}:{tf}"
+        candles = self._data.get(key, [])[-window:]
+        if not candles:
+            return 0.0
+        total_vol = sum(c["v"] for c in candles)
+        if total_vol == 0:
+            return 0.0
+        return sum(c["c"] * c["v"] for c in candles) / total_vol
+
     def get_account_balance(self) -> float:
         return 10000.0
 

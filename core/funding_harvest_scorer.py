@@ -24,7 +24,7 @@ with open(_CONFIG_PATH) as _f:
 
 _FH = _cfg.get("funding_harvest", {})
 
-_MIN_RATE_PCT    = float(_FH.get("min_rate_pct",       0.0005))  # 0.05% per 8h
+_MIN_RATE_PCT    = float(_FH.get("min_rate_pct",       0.0008))  # 0.08% per 8h (raised from 0.05%)
 _STRONG_RATE_PCT = float(_FH.get("strong_rate_pct",    0.0010))  # 0.10% per 8h
 _ENTRY_MINS      = int(_FH.get("entry_mins_before",     30))
 _EXIT_MINS       = int(_FH.get("exit_mins_after",       15))
@@ -45,6 +45,9 @@ def set_cooldown(symbol: str) -> None:
     log.debug("FundingHarvest cooldown set for %s (%.1fh)", symbol, _COOLDOWN_SECS / 3600)
 
 
+_TREND_FILTER = bool(_FH.get("trend_filter", True))
+
+
 async def score(symbol: str, cache) -> dict | None:
     """Score *symbol* for a funding harvest setup.
 
@@ -56,6 +59,7 @@ async def score(symbol: str, cache) -> dict | None:
         settlement_in_window,
         compute_levels,
     )
+    from core.regime_detector import detect_regime, get_trend_bias
 
     rate = cache.get_funding_rate(symbol)
     if rate is None:
@@ -70,6 +74,17 @@ async def score(symbol: str, cache) -> dict | None:
         return None   # funding not extreme enough — don't even log this
 
     rate_strong = abs(rate) >= _STRONG_RATE_PCT
+
+    # Trend direction gate — hard gate, not scored
+    trend_ok = True
+    if _TREND_FILTER:
+        regime = str(detect_regime(symbol, cache))
+        if regime == "TREND":
+            bias = get_trend_bias(symbol, cache)
+            if bias == "LONG" and direction == "SHORT":
+                trend_ok = False
+            elif bias == "SHORT" and direction == "LONG":
+                trend_ok = False
 
     signals = {
         "rate_extreme":  True,           # already confirmed above
@@ -90,6 +105,7 @@ async def score(symbol: str, cache) -> dict | None:
         score_val >= _THRESHOLD
         and in_win        # hard gate: must be in the settlement window
         and cool_ok
+        and trend_ok      # hard gate: never fade TREND regime
     )
 
     rr = _TP_PCT / _SL_PCT
@@ -99,7 +115,7 @@ async def score(symbol: str, cache) -> dict | None:
         "regime":        "FUNDING",
         "direction":     direction,
         "score":         round(score_val, 4),
-        "signals":       signals,
+        "signals":       {**signals, "trend_ok": trend_ok},   # shown in UI, not scored
         "fire":          fire,
         "fh_stop":       sl,
         "fh_tp":         tp,

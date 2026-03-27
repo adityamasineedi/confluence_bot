@@ -20,9 +20,9 @@ Signal functions follow the standard def check_X(symbol, cache) -> bool interfac
 
 _SWING_LOOKBACK   = 50    # bars to look back for swing highs/lows
 _SWING_PIVOT_N    = 5     # bars each side — 5 means only significant pivots (11-bar)
-_SWEEP_MARGIN_PCT = 0.0015  # wick must go at least 0.15% beyond the swing level
+_SWEEP_MARGIN_PCT = 0.005   # wick must go at least 0.5% beyond the swing level (raised from 0.15%)
 _CLOSE_BUFFER_PCT = 0.003   # close must be ≥ 0.3% inside the level (stronger reclaim)
-_VOL_SPIKE_MULT   = 1.4     # sweep candle volume must be ≥ 1.4× 20-bar average
+_VOL_SPIKE_MULT   = 2.0     # sweep candle volume must be ≥ 2.0× 20-bar average (raised from 1.4×)
 _BODY_STRENGTH    = 0.4     # close must be in top/bottom 40% of candle range
 _RSI_PERIOD       = 14
 _RSI_LONG_MAX     = 50      # RSI at sweep must be below 50 (oversold regime)

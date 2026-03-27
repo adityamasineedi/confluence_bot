@@ -2,7 +2,7 @@
 
 Entry  : close of the bounce candle (after pullback to EMA21 on 15m)
 SL     : EMA21 × (1 - 0.002) for LONG, × (1 + 0.002) for SHORT
-TP     : entry ± (entry - SL) × 2.5
+TP     : entry ± (entry - SL) × 1.5
 Macro  : 4H EMA21 vs EMA50 determines LONG / SHORT bias
 """
 import logging
@@ -15,19 +15,20 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
-_EMA_FAST      = 21
-_EMA_SLOW      = 50
-_TOUCH_PCT     = 0.004    # price must be within 0.4% of EMA21 to count as a touch
-_RSI_PERIOD    = 14
-_RSI_LONG_MIN  = 35
-_RSI_LONG_MAX  = 60
-_RSI_SHORT_MIN = 40
-_RSI_SHORT_MAX = 65
-_VOL_QUIET     = 1.2      # pullback volume must be ≤ 1.2× avg
-_COOLDOWN_BARS = 3        # 3 × 15m = 45 min
-_MAX_HOLD      = 8        # 8 × 15m = 2h max hold
-_RR            = 2.5
-_SL_BUFFER     = 0.002    # 0.2% below/above EMA21
+_EMA_FAST        = 21
+_EMA_SLOW        = 50
+_TOUCH_PCT       = 0.002   # within 0.2% of EMA21 (tightened from 0.4%)
+_MIN_BOUNCE_BODY = 0.002   # close must be ≥ 0.2% from EMA21 (not a marginal cross)
+_RSI_PERIOD      = 14
+_RSI_LONG_MIN    = 35
+_RSI_LONG_MAX    = 60
+_RSI_SHORT_MIN   = 40
+_RSI_SHORT_MAX   = 65
+_VOL_QUIET       = 1.2     # pullback volume must be ≤ 1.2× avg
+_COOLDOWN_BARS   = 3       # 3 × 15m = 45 min
+_MAX_HOLD        = 8       # 8 × 15m = 2h max hold
+_RR              = 1.5     # lowered from 2.5 — fewer timeouts, more trades hit TP
+_SL_BUFFER       = 0.002   # 0.2% below/above EMA21
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -188,11 +189,17 @@ def run(
             direction = None
             sl = tp = 0.0
 
+            # Volume gate: bounce bar must have more volume than pullback bar
+            vol_confirm = bar["v"] > prev_bar["v"]
+
             # ── LONG: 4H bullish, 15m EMA21 > EMA50, price bounced off EMA21 ──
             if htf_long and ema21_15m > ema50_15m:
                 touch = (abs(prev_low  - ema21_15m) / ema21_15m <= _TOUCH_PCT or
                          abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _TOUCH_PCT)
-                if touch and price > ema21_15m and quiet_pull:
+                # Close must be ≥ 0.2% above EMA21 (not a marginal cross)
+                ema_dist_long = (price - ema21_15m) / ema21_15m if ema21_15m > 0 else 0
+                if (touch and ema_dist_long >= _MIN_BOUNCE_BODY
+                        and quiet_pull and vol_confirm):
                     if _RSI_LONG_MIN <= rsi <= _RSI_LONG_MAX:
                         direction = "LONG"
                         sl = ema21_15m * (1 - _SL_BUFFER)
@@ -204,7 +211,10 @@ def run(
             if direction is None and htf_short and ema21_15m < ema50_15m:
                 touch = (abs(prev_high - ema21_15m) / ema21_15m <= _TOUCH_PCT or
                          abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _TOUCH_PCT)
-                if touch and price < ema21_15m and quiet_pull:
+                # Close must be ≥ 0.2% below EMA21 (not a marginal cross)
+                ema_dist_short = (ema21_15m - price) / ema21_15m if ema21_15m > 0 else 0
+                if (touch and ema_dist_short >= _MIN_BOUNCE_BODY
+                        and quiet_pull and vol_confirm):
                     if _RSI_SHORT_MIN <= rsi <= _RSI_SHORT_MAX:
                         direction = "SHORT"
                         sl = ema21_15m * (1 + _SL_BUFFER)

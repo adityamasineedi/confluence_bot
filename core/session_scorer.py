@@ -22,13 +22,14 @@ with open(_CONFIG_PATH) as _f:
 
 _SS = _cfg.get("session_trap", {})
 
-_MIN_MOVE_PCT    = float(_SS.get("min_move_pct",    0.003))   # 0.3% fake move to qualify
-_STRONG_MOVE_PCT = float(_SS.get("strong_move_pct", 0.006))   # 0.6% = strong bonus
-_MAX_RANGE_PCT   = float(_SS.get("max_range_pct",   0.015))   # reject gap-open sessions (>1.5%)
-_SL_BUFFER_PCT   = float(_SS.get("sl_buffer_pct",   0.002))   # 0.2% beyond session extreme
-_RR_RATIO        = float(_SS.get("rr_ratio",         1.5))
-_THRESHOLD       = float(_SS.get("fire_threshold",   0.50))   # 2 of 4 signals
-_COOLDOWN_SECS   = float(_SS.get("cooldown_mins",     60)) * 60.0
+_MIN_MOVE_PCT       = float(_SS.get("min_move_pct",       0.006))   # 0.6% fake move to qualify
+_STRONG_MOVE_PCT    = float(_SS.get("strong_move_pct",   0.006))   # 0.6% = strong bonus
+_MAX_RANGE_PCT      = float(_SS.get("max_range_pct",     0.015))   # hard gate: reject gap opens >1.5%
+_RANGE_COMPACT_MAX  = float(_SS.get("range_compact_max", 0.007))   # range_compact signal: ≤ 0.7%
+_SL_BUFFER_PCT      = float(_SS.get("sl_buffer_pct",     0.002))   # 0.2% beyond session extreme
+_RR_RATIO           = float(_SS.get("rr_ratio",           1.5))
+_THRESHOLD          = float(_SS.get("fire_threshold",     0.75))   # 3 of 4 signals
+_COOLDOWN_SECS      = float(_SS.get("cooldown_mins",       60)) * 60.0
 
 # symbol+session → monotonic timestamp when cooldown expires
 _cooldown_until: dict[str, float] = {}
@@ -74,7 +75,7 @@ async def score(symbol: str, cache, session_hour: int) -> dict | None:
         "fake_move_ok":   fake_abs >= _MIN_MOVE_PCT,   # sufficient sweep to fade
         "move_strong":    fake_abs >= _STRONG_MOVE_PCT, # strong sweep = better edge
         "reversal_bar":   reversal_bar,                 # bar-3 already reversing direction
-        "range_compact":  range_pct <= _MAX_RANGE_PCT * 0.6,  # very tight session range
+        "range_compact":  range_pct <= _RANGE_COMPACT_MAX,    # very tight session range (≤ 0.7%)
     }
 
     score_val = sum(0.25 for v in signals.values() if v)

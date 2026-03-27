@@ -3,15 +3,16 @@
 Fires when price returns to a 4H demand/supply zone for the first retest.
 Highest quality signal with lowest false positive rate.
 
-Score components (each 0.25):
+Score components (each 0.33):
     zone_active      — valid demand/supply zone detected on 4H
     htf_1h_confirm   — 1H close confirms direction (bullish in demand, bearish in supply)
-    oi_supporting    — OI rising (new positions being added, not short covering)
     rsi_not_extreme  — RSI is not extended in the wrong direction
                        (demand: RSI < 65, supply: RSI > 35)
 
-Threshold: 0.75 (3 of 4). zone_active is always True so effectively 2 of 3
-confirmations are needed.
+Hard gate (not scored — blocks fire if it fails):
+    oi_supporting    — OI rising (new positions). No OI data → gate FAILS (conservative).
+
+Threshold: 0.75 (effectively all 3 scored signals + OI hard gate required).
 """
 import logging
 import os
@@ -64,14 +65,13 @@ def _rsi(closes: list[float], period: int = _RSI_PERIOD) -> float:
 def _oi_check(symbol: str, cache, direction: str) -> tuple[bool, bool]:
     """Return (oi_ok, data_available) for the given direction.
 
-    When the OI feed has insufficient data (known outage, cold start, or REST
-    failure), oi_ok defaults to True so the signal is treated as passing rather
-    than silently degrading the scorer's numerator.
+    Hard gate: when OI feed is unavailable (cold start, outage, REST failure),
+    returns (False, False) — no data means no trade (conservative default).
     """
     oi = cache.get_open_interest(symbol)
     if not oi or len(oi) < _OI_RISE_LOOKBACK + 1:
-        log.debug("Zone %s %s: OI feed dry — oi_supporting treated as passing", direction, symbol)
-        return True, False
+        log.debug("Zone %s %s: OI feed dry — hard gate blocks trade", direction, symbol)
+        return False, False
     recent = oi[-(_OI_RISE_LOOKBACK + 1):]
     rising = recent[-1] > recent[0]
     return (rising if direction == "LONG" else not rising), True
@@ -106,19 +106,19 @@ async def score(symbol: str, cache) -> list[dict]:
         signals = {
             "zone_active":     True,
             "htf_1h_confirm":  htf_1h,
-            "oi_supporting":   oi_ok,
             "rsi_not_extreme": rsi_ok,
         }
-        score_val = sum(0.25 for v in signals.values() if v)
+        score_val = sum(round(1 / len(signals), 4) for v in signals.values() if v)
         entry, stop, tp = get_demand_zone_levels(symbol, cache)
-        fire = score_val >= _THRESHOLD and cool_ok and entry > 0
+        # oi_ok is a hard gate — not counted in score but blocks fire when False
+        fire = score_val >= _THRESHOLD and oi_ok and cool_ok and entry > 0
 
         results.append({
             "symbol":    symbol,
             "regime":    "ZONE",
             "direction": "LONG",
             "score":     round(score_val, 4),
-            "signals":   signals,
+            "signals":   {**signals, "oi_supporting": oi_ok},   # shown in UI, not scored
             "fire":      fire,
             "zn_stop":   stop,
             "zn_tp":     tp,
@@ -139,19 +139,19 @@ async def score(symbol: str, cache) -> list[dict]:
         signals = {
             "zone_active":     True,
             "htf_1h_confirm":  htf_1h,
-            "oi_supporting":   oi_ok,
             "rsi_not_extreme": rsi_ok,
         }
-        score_val = sum(0.25 for v in signals.values() if v)
+        score_val = sum(round(1 / len(signals), 4) for v in signals.values() if v)
         entry, stop, tp = get_supply_zone_levels(symbol, cache)
-        fire = score_val >= _THRESHOLD and cool_ok and entry > 0
+        # oi_ok is a hard gate — not counted in score but blocks fire when False
+        fire = score_val >= _THRESHOLD and oi_ok and cool_ok and entry > 0
 
         results.append({
             "symbol":    symbol,
             "regime":    "ZONE",
             "direction": "SHORT",
             "score":     round(score_val, 4),
-            "signals":   signals,
+            "signals":   {**signals, "oi_supporting": oi_ok},   # shown in UI, not scored
             "fire":      fire,
             "zn_stop":   stop,
             "zn_tp":     tp,

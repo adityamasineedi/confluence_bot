@@ -22,14 +22,15 @@ Entry confirmation (separate function):
   - Not a deep close below zone bottom (would invalidate the zone)
 """
 
-_LOOKBACK_4H     = 100     # bars of 4H history to scan for zones
-_BASE_MIN_BARS   = 2       # minimum consolidation bars to form a zone
-_BASE_RANGE_PCT  = 0.008   # max (high-low)/close per bar = 0.8% to qualify as base
-_IMPULSE_PCT     = 0.020   # impulsive move must be ≥ 2% from base mid
-_IMPULSE_BARS    = 3       # move must occur within this many bars after base
-_ZONE_BUFFER_PCT = 0.005   # price must be within 0.5% of zone boundary to trigger
-_MIN_ZONE_AGE    = 3       # zone must be at least 3 bars old (not brand new)
-_MAX_ZONE_AGE    = 80      # zone older than 80 bars is stale
+_LOOKBACK_4H      = 100     # bars of 4H history to scan for zones
+_BASE_MIN_BARS    = 2       # minimum consolidation bars to form a zone
+_BASE_RANGE_PCT   = 0.008   # max (high-low)/close per bar = 0.8% to qualify as base
+_IMPULSE_PCT      = 0.030   # impulsive move must be ≥ 3% from base mid (raised from 2%)
+_IMPULSE_BARS     = 3       # move must occur within this many bars after base
+_ZONE_BUFFER_PCT  = 0.005   # price must be within 0.5% of zone boundary to trigger
+_ZONE_WIDTH_MAX   = 0.015   # zone (high-low)/mid must be ≤ 1.5% — tight zones only
+_MIN_ZONE_AGE     = 3       # zone must be at least 3 bars old (not brand new)
+_MAX_ZONE_AGE     = 80      # zone older than 80 bars is stale
 
 
 def _find_demand_zones(bars: list[dict]) -> list[dict]:
@@ -61,17 +62,26 @@ def _find_demand_zones(bars: list[dict]) -> list[dict]:
         base_high = max(bars[j]["h"] for j in range(base_start, base_end))
         base_mid  = (base_low + base_high) / 2
 
+        # Reject wide zones — only tight price clusters qualify
+        if base_mid > 0 and (base_high - base_low) / base_mid > _ZONE_WIDTH_MAX:
+            i = base_end + 1
+            continue
+
         # Check for impulsive BULLISH move after the base
         for k in range(base_end, min(base_end + _IMPULSE_BARS, n)):
             impulse_high = bars[k]["h"]
             if (impulse_high - base_mid) / base_mid >= _IMPULSE_PCT:
                 age = n - 1 - k   # bars since zone origin
                 if _MIN_ZONE_AGE <= age <= _MAX_ZONE_AGE:
-                    # First retest check: price should not have closed below base_low
-                    # in the bars after the origin move
-                    post_bars  = bars[k + 1:]
-                    retested   = any(b["c"] < base_low for b in post_bars)
-                    if not retested:
+                    post_bars   = bars[k + 1:]
+                    prior_bars  = post_bars[:-1]   # all bars between origin and current
+                    # Zone is invalid if:
+                    # (a) price previously broke BELOW base_low (zone destroyed), OR
+                    # (b) any prior bar's wick already entered the zone from above
+                    #     (would be a second retest, not first)
+                    destroyed   = any(b["c"] < base_low for b in post_bars)
+                    prev_touch  = any(b["l"] <= base_high for b in prior_bars)
+                    if not destroyed and not prev_touch:
                         zones.append({
                             "low":        base_low,
                             "high":       base_high,
@@ -112,15 +122,24 @@ def _find_supply_zones(bars: list[dict]) -> list[dict]:
         base_high = max(bars[j]["h"] for j in range(base_start, base_end))
         base_mid  = (base_low + base_high) / 2
 
+        # Reject wide zones — only tight price clusters qualify
+        if base_mid > 0 and (base_high - base_low) / base_mid > _ZONE_WIDTH_MAX:
+            i = base_end + 1
+            continue
+
         # Check for impulsive BEARISH move after the base
         for k in range(base_end, min(base_end + _IMPULSE_BARS, n)):
             impulse_low = bars[k]["l"]
             if (base_mid - impulse_low) / base_mid >= _IMPULSE_PCT:
                 age = n - 1 - k
                 if _MIN_ZONE_AGE <= age <= _MAX_ZONE_AGE:
-                    post_bars = bars[k + 1:]
-                    retested  = any(b["c"] > base_high for b in post_bars)
-                    if not retested:
+                    post_bars  = bars[k + 1:]
+                    prior_bars = post_bars[:-1]
+                    # Zone invalid if price previously broke ABOVE base_high (destroyed)
+                    # or any prior bar's wick already entered the zone (second retest)
+                    destroyed  = any(b["c"] > base_high for b in post_bars)
+                    prev_touch = any(b["h"] >= base_low for b in prior_bars)
+                    if not destroyed and not prev_touch:
                         zones.append({
                             "low":        base_low,
                             "high":       base_high,
@@ -217,7 +236,7 @@ def check_supply_zone_short(symbol: str, cache) -> bool:
 
 
 def get_demand_zone_levels(symbol: str, cache) -> tuple[float, float, float]:
-    """Return (entry, stop, tp) for demand zone long. SL below zone, TP = 2.5× risk."""
+    """Return (entry, stop, tp) for demand zone long. SL below zone, TP = 1.5× risk."""
     bars_4h = cache.get_ohlcv(symbol, window=_LOOKBACK_4H, tf="4h")
     if not bars_4h:
         return 0.0, 0.0, 0.0
@@ -239,7 +258,7 @@ def get_demand_zone_levels(symbol: str, cache) -> tuple[float, float, float]:
     dist  = entry - stop
     if dist <= 0:
         return 0.0, 0.0, 0.0
-    tp = entry + dist * 2.5
+    tp = entry + dist * 1.5
     return entry, stop, tp
 
 
@@ -265,5 +284,5 @@ def get_supply_zone_levels(symbol: str, cache) -> tuple[float, float, float]:
     dist  = stop - entry
     if dist <= 0:
         return 0.0, 0.0, 0.0
-    tp = entry - dist * 2.5
+    tp = entry - dist * 1.5
     return entry, stop, tp

@@ -5514,4 +5514,91 @@ ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 80
 2026-03-27 22:28:04,918 [INFO] data.binance_rest: Account balance: 4748.47 USDT
 2026-03-27 22:29:05,921 [INFO] data.binance_rest: Account balance: 4748.47 USDT
 2026-03-27 22:30:07,022 [INFO] data.binance_rest: Account balance: 4748.47 USDT
-2026-03-27 22:31:08,090 
+2026-03-27 22:31:08,090 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:31:25,708 [INFO] core.microrange_loop: MicroRange FIRE LONG DOGEUSDT  score=0.75  width=0.688%  sl=0.089561  tp=0.090295
+2026-03-27 22:31:26,044 [INFO] core.executor: RR 0.75 below min 1.50 for LONG DOGEUSDT (entry=0.0900 sl=0.0896 tp=0.0903) — skipping
+2026-03-27 22:31:56,071 [INFO] core.microrange_loop: MicroRange FIRE LONG BNBUSDT  score=0.75  width=0.492%  sl=605.757260  tp=609.830000
+2026-03-27 22:31:59,357 [INFO] core.executor: RR 0.31 below min 1.50 for LONG BNBUSDT (entry=608.8600 sl=605.7573 tp=609.8300) — skipping
+2026-03-27 22:32:09,005 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:33:09,907 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:34:10,867 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:35:11,815 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:36:14,777 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:37:15,927 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:38:16,970 [INFO] data.binance_rest: Account balance: 4748.47 USDT
+2026-03-27 22:39:18,273 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:40:19,170 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:41:20,168 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:42:21,193 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:43:23,513 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:44:24,349 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:45:26,375 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:46:29,627 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:47:31,008 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:48:33,433 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:49:34,424 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:50:35,451 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:51:29,574 [INFO] core.microrange_loop: MicroRange FIRE LONG DOGEUSDT  score=0.75  width=0.643%  sl=0.089620  tp=0.090325
+2026-03-27 22:51:29,907 [INFO] core.executor: RR 1.20 below min 1.50 for LONG DOGEUSDT (entry=0.0899 sl=0.0896 tp=0.0903) — skipping
+2026-03-27 22:51:37,514 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:51:59,901 [INFO] core.microrange_loop: MicroRange FIRE LONG BNBUSDT  score=0.75  width=0.582%  sl=606.295640  tp=610.782500
+2026-03-27 22:52:00,236 [INFO] core.executor: RR 0.74 below min 1.50 for LONG BNBUSDT (entry=608.8800 sl=606.2956 tp=610.7825) — skipping
+2026-03-27 22:52:38,762 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:53:40,163 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:54:42,623 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:55:30,246 [INFO] core.microrange_loop: MicroRange FIRE LONG BTCUSDT  score=0.75  width=0.735%  sl=65584.654000  tp=66146.050000
+2026-03-27 22:55:43,991 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:56:44,965 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:57:00,272 [INFO] core.microrange_loop: MicroRange FIRE LONG ADAUSDT  score=0.75  width=0.930%  sl=0.245461  tp=0.247925
+2026-03-27 22:57:01,852 [INFO] core.executor: RR 0.99 below min 1.50 for LONG ADAUSDT (entry=0.2467 sl=0.2455 tp=0.2479) — skipping
+2026-03-27 22:57:45,901 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:58:47,318 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 22:59:48,241 [INFO] data.binance_rest: Account balance: 4747.31 USDT
+2026-03-27 22:59:59,015 [INFO] core.trade_monitor: \u274c Trade closed: LONG BTCUSDT  outcome=SL  exit=65534.6046  pnl=-1.30 USDT
+2026-03-27 23:00:00,209 [INFO] core.trade_monitor: \u274c Trade closed: LONG BTCUSDT  outcome=SL  exit=65534.6046  pnl=-1.30 USDT
+2026-03-27 23:00:32,677 [INFO] core.trade_monitor: \u274c Trade closed: SHORT BTCUSDT  outcome=SL  exit=66333.6674  pnl=-2.42 USDT
+2026-03-27 23:00:49,190 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:01:50,256 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:02:51,159 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:03:54,923 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:04:57,391 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:05:58,357 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:06:59,424 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:08:01,449 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:09:02,376 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:10:04,414 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:11:05,527 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:12:06,523 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:13:09,142 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:14:11,112 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:15:12,190 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:16:13,232 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:17:01,927 [INFO] core.microrange_loop: MicroRange FIRE LONG ADAUSDT  score=0.75  width=0.849%  sl=0.245661  tp=0.247975
+2026-03-27 23:17:01,929 [WARNING] core.circuit_breaker: CIRCUIT BREAKER TRIPPED: 6 consecutive losing trades >= 6 limit — all new entries halted until UTC midnight
+2026-03-27 23:17:01,931 [WARNING] core.executor: CIRCUIT BREAKER active — skipping signal. Reason: 6 consecutive losing trades >= 6 limit
+2026-03-27 23:17:14,769 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:18:15,715 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:19:17,518 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:20:21,569 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:21:23,040 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:22:23,978 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:23:25,214 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:24:27,709 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:25:29,800 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:26:12,826 [INFO] confluence_bot: SOLUSDT regime \u2192 RANGE
+2026-03-27 23:26:30,949 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:27:32,622 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:28:35,596 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:29:42,626 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:30:46,544 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:31:57,120 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:32:59,184 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:34:03,268 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:35:05,222 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:36:08,200 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:37:10,130 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:38:12,345 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:39:14,783 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:40:17,187 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:41:18,283 [INFO] data.binance_rest: Account balance: 4747.19 USDT
+2026-03-27 23:42:19,309 [INFO] data.binance_rest: Account balanc

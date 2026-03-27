@@ -88,6 +88,9 @@ async def _tick(symbols: list[str], cache, session_hour: int) -> None:
     from core.session_scorer import score as ss_score, set_cooldown
     from core.executor import execute_signal
     from logging_.logger import TradeLogger
+    from core.regime_detector import detect_regime
+
+    _ALLOWED_REGIMES = set(_SS_CFG.get("allowed_regimes", ["RANGE", "BREAKOUT"]))
 
     logger  = TradeLogger()
     fired   = 0
@@ -95,6 +98,17 @@ async def _tick(symbols: list[str], cache, session_hour: int) -> None:
     for symbol in symbols:
         if fired >= _MAX_ENTRIES:
             break
+
+        # Regime gate: session open traps only fade fake moves in non-trending markets.
+        # In TREND/PUMP/CRASH the session open typically continues the macro direction,
+        # making the reversal logic ineffective and a source of systematic losses.
+        regime = str(detect_regime(symbol, cache))
+        if regime not in _ALLOWED_REGIMES:
+            log.debug(
+                "SessionTrap skip %s — regime %s not in allowed %s",
+                symbol, regime, _ALLOWED_REGIMES,
+            )
+            continue
 
         score_dict = await ss_score(symbol, cache, session_hour)
         if score_dict is None:

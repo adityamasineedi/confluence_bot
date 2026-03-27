@@ -2,7 +2,7 @@
 
 Entry  : close of the 1H confirmation candle inside the zone
 SL     : zone_low × (1 - 0.002) for LONG, zone_high × (1 + 0.002) for SHORT
-TP     : entry ± (entry - SL) × 2.5
+TP     : entry ± (entry - SL) × 1.5
 Hold   : up to 12 × 1H bars (12h max)
 """
 import logging
@@ -18,14 +18,15 @@ with open(_CONFIG_PATH) as _f:
 _LOOKBACK_4H     = 100
 _BASE_MIN_BARS   = 2
 _BASE_RANGE_PCT  = 0.008    # max 0.8% range per bar in base
-_IMPULSE_PCT     = 0.020    # ≥ 2% impulse after base
+_IMPULSE_PCT     = 0.030    # ≥ 3% impulse after base (raised from 2%)
 _IMPULSE_BARS    = 3
 _ZONE_BUFFER_PCT = 0.005
+_ZONE_WIDTH_MAX  = 0.015    # zone (high-low)/mid must be ≤ 1.5% — tight zones only
 _MIN_ZONE_AGE    = 3
 _MAX_ZONE_AGE    = 80
 _COOLDOWN_BARS   = 12       # 12 × 1H = 12h cooldown
 _MAX_HOLD        = 12       # 12 × 1H bars = 12h max hold
-_RR              = 2.5
+_RR              = 1.5      # lowered from 2.5 — zones rarely sustain 2.5R
 _SL_BUFFER       = 0.002
 
 
@@ -58,6 +59,11 @@ def _find_zones(bars_4h: list[dict], bullish: bool) -> list[dict]:
         base_high = max(bars_4h[j]["h"] for j in range(base_start, base_end))
         base_mid  = (base_low + base_high) / 2
 
+        # Reject wide zones — only tight price clusters qualify
+        if base_mid > 0 and (base_high - base_low) / base_mid > _ZONE_WIDTH_MAX:
+            i = base_end + 1
+            continue
+
         for k in range(base_end, min(base_end + _IMPULSE_BARS, n)):
             if bullish:
                 move = (bars_4h[k]["h"] - base_mid) / base_mid
@@ -67,12 +73,19 @@ def _find_zones(bars_4h: list[dict], bullish: bool) -> list[dict]:
             if move >= _IMPULSE_PCT:
                 age = n - 1 - k
                 if _MIN_ZONE_AGE <= age <= _MAX_ZONE_AGE:
-                    post_bars = bars_4h[k + 1:]
+                    post_bars  = bars_4h[k + 1:]
+                    prior_bars = post_bars[:-1]
                     if bullish:
-                        retested = any(b["c"] < base_low for b in post_bars)
+                        # Zone destroyed if price closed below base_low
+                        # Zone invalid if any prior wick already entered from above
+                        destroyed  = any(b["c"] < base_low for b in post_bars)
+                        prev_touch = any(b["l"] <= base_high for b in prior_bars)
                     else:
-                        retested = any(b["c"] > base_high for b in post_bars)
-                    if not retested:
+                        # Zone destroyed if price closed above base_high
+                        # Zone invalid if any prior wick already entered from below
+                        destroyed  = any(b["c"] > base_high for b in post_bars)
+                        prev_touch = any(b["h"] >= base_low for b in prior_bars)
+                    if not destroyed and not prev_touch:
                         zones.append({
                             "low":      base_low,
                             "high":     base_high,

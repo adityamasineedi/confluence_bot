@@ -82,7 +82,10 @@ async def run_funding_harvest_loop(symbols: list[str], cache) -> None:
 async def _tick(symbols: list[str], cache) -> None:
     from core.funding_harvest_scorer import score as fh_score, set_cooldown
     from core.executor import execute_signal
+    from core.regime_detector import detect_regime, get_trend_bias
     from logging_.logger import TradeLogger
+
+    _TREND_FILTER = bool(_FH_CFG.get("trend_filter", True))
 
     logger = TradeLogger()
     fired  = 0
@@ -94,6 +97,19 @@ async def _tick(symbols: list[str], cache) -> None:
         score_dict = await fh_score(symbol, cache)
         if score_dict is None:
             continue
+
+        # Trend direction gate: never fade the macro trend for funding
+        if _TREND_FILTER:
+            direction = score_dict.get("direction")
+            regime    = str(detect_regime(symbol, cache))
+            if regime == "TREND":
+                bias = get_trend_bias(symbol, cache)
+                if bias == "LONG" and direction == "SHORT":
+                    log.debug("FundingHarvest skip %s SHORT — TREND bias is LONG", symbol)
+                    continue
+                if bias == "SHORT" and direction == "LONG":
+                    log.debug("FundingHarvest skip %s LONG — TREND bias is SHORT", symbol)
+                    continue
 
         try:
             asyncio.create_task(logger.log_signal(score_dict))

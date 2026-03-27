@@ -20,10 +20,11 @@ with open(_CONFIG_PATH) as _f:
 # Strategy parameters
 _SWING_LOOKBACK   = 50
 _SWING_PIVOT_N    = 5        # raised from 3 → more significant pivots only
-_SWEEP_MARGIN_PCT = 0.0015   # wick must go ≥ 0.15% beyond swing level
+_SWEEP_MARGIN_PCT = 0.005    # wick must go ≥ 0.5% beyond swing level (raised from 0.15%)
 _CLOSE_BUFFER_PCT = 0.003    # raised: close must reclaim ≥ 0.3% inside level
-_VOL_SPIKE_MULT   = 1.4
+_VOL_SPIKE_MULT   = 2.0      # institutional only — ≥ 2.0× average (raised from 1.4×)
 _BODY_STRENGTH    = 0.4      # close must be in top/bottom 40% of candle range
+_HTF_BLOCK_PCT    = 0.010    # 4H close must be within 1.0% of EMA21 to allow trade
 _RSI_PERIOD       = 14
 _COOLDOWN_BARS    = 6        # 6 × 15m = 90 min cooldown
 _MAX_HOLD         = 8        # 8 × 15m = 2h max hold
@@ -171,21 +172,21 @@ def run(
             direction = None
             sl = tp = 0.0
 
-            # ── 4H macro bias (block trades against strong trend) ─────────────
+            # ── 4H macro bias — hard gate, defaults False when no data ───────
             bar_ts   = bar["ts"]
             bars_4h  = ohlcv.get(f"{sym}:4h", [])
             b4h_now  = [b for b in bars_4h if b["ts"] <= bar_ts]
-            htf_long = htf_short_ok = True
+            htf_long = htf_short_ok = False   # default BLOCK — no data → no trade
             if len(b4h_now) >= 22:
                 c4h = [b["c"] for b in b4h_now]
                 k4  = 2.0 / 22
                 e4  = sum(c4h[:21]) / 21
                 for cv in c4h[21:]:
                     e4 = cv * k4 + e4 * (1 - k4)
-                # 4H bearish = close < EMA21 on 4H → block LONG sweeps
-                htf_long      = c4h[-1] >= e4 * 0.985
-                # 4H bullish = close > EMA21 on 4H → block SHORT sweeps
-                htf_short_ok  = c4h[-1] <= e4 * 1.015
+                # Block LONG if 4H is in strong downtrend (close > 1.0% below EMA21)
+                htf_long     = c4h[-1] >= e4 * (1 - _HTF_BLOCK_PCT)
+                # Block SHORT if 4H is in strong uptrend (close > 1.0% above EMA21)
+                htf_short_ok = c4h[-1] <= e4 * (1 + _HTF_BLOCK_PCT)
 
             # Body strength check: close in top 40% for long, bottom 40% for short
             candle_range = high - low

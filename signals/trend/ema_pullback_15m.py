@@ -18,7 +18,8 @@ Short setup: mirror image.
 
 _EMA_FAST    = 21
 _EMA_SLOW    = 50
-_TOUCH_PCT   = 0.004   # price must be within 0.4% of EMA21 to count as a touch
+_TOUCH_PCT         = 0.002   # price must be within 0.2% of EMA21 (tightened from 0.4%)
+_MIN_BOUNCE_BODY   = 0.002   # close must be ≥ 0.2% above/below EMA21 (meaningful bounce)
 _RSI_PERIOD  = 14
 _RSI_LONG_MIN  = 35    # RSI floor — not crashed below oversold (trend still up)
 _RSI_LONG_MAX  = 60    # RSI ceiling — not overbought on entry
@@ -106,8 +107,8 @@ def check_ema15m_pullback_long(symbol: str, cache) -> bool:
     if not touch:
         return False
 
-    # Current close is above EMA21 (bounce confirmed)
-    if price <= ema21:
+    # Close must be meaningfully above EMA21 (≥ 0.2% — not a marginal cross)
+    if (price - ema21) / ema21 < _MIN_BOUNCE_BODY:
         return False
 
     # RSI in healthy pullback zone
@@ -115,13 +116,18 @@ def check_ema15m_pullback_long(symbol: str, cache) -> bool:
     if not (_RSI_LONG_MIN <= rsi <= _RSI_LONG_MAX):
         return False
 
-    # Volume on the pullback bar was quiet (low-volume retreat = weak sellers)
+    # Volume checks (last 21 bars including current)
     vols = [b["v"] for b in bars[-21:]]
     if len(vols) >= 20:
         avg_vol    = sum(vols[:-1]) / len(vols[:-1])
         pullback_v = bars[-2]["v"]   # volume of the pullback/touch bar
+        bounce_v   = bars[-1]["v"]   # volume of the current bounce bar
+        # Pullback must be quiet (weak sellers)
         if avg_vol > 0 and pullback_v > avg_vol * _VOL_QUIET_MULT:
-            return False   # high-volume pullback = not a healthy dip, could be reversal
+            return False
+        # Bounce bar must have more volume than the pullback bar (buyers stepping in)
+        if bounce_v <= pullback_v:
+            return False
 
     return True
 
@@ -157,8 +163,8 @@ def check_ema15m_pullback_short(symbol: str, cache) -> bool:
     if not touch:
         return False
 
-    # Current close is below EMA21 (rejection confirmed)
-    if price >= ema21:
+    # Close must be meaningfully below EMA21 (≥ 0.2% — not a marginal cross)
+    if (ema21 - price) / ema21 < _MIN_BOUNCE_BODY:
         return False
 
     rsi = _rsi(closes)
@@ -169,7 +175,12 @@ def check_ema15m_pullback_short(symbol: str, cache) -> bool:
     if len(vols) >= 20:
         avg_vol    = sum(vols[:-1]) / len(vols[:-1])
         pullback_v = bars[-2]["v"]
+        bounce_v   = bars[-1]["v"]
+        # Pullback must be quiet (weak buyers)
         if avg_vol > 0 and pullback_v > avg_vol * _VOL_QUIET_MULT:
+            return False
+        # Bounce bar must have more volume than the pullback bar (sellers stepping in)
+        if bounce_v <= pullback_v:
             return False
 
     return True
@@ -193,7 +204,7 @@ def get_ema15m_long_levels(symbol: str, cache) -> tuple[float, float, float]:
     dist = entry - stop
     if dist <= 0:
         return 0.0, 0.0, 0.0
-    tp = entry + dist * 2.5
+    tp = entry + dist * 1.5
     return entry, stop, tp
 
 
@@ -215,5 +226,5 @@ def get_ema15m_short_levels(symbol: str, cache) -> tuple[float, float, float]:
     dist = stop - entry
     if dist <= 0:
         return 0.0, 0.0, 0.0
-    tp = entry - dist * 2.5
+    tp = entry - dist * 1.5
     return entry, stop, tp

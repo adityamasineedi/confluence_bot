@@ -101,6 +101,16 @@ class BacktestCache:
             return 0.0
         return sum(c["v"] for c in candles) / len(candles)
 
+    def get_vwap(self, symbol: str, window: int, tf: str) -> float:
+        """Rolling VWAP over the last `window` bars using close price × volume."""
+        candles = self._slice_ohlcv(symbol, tf, window)
+        if not candles:
+            return 0.0
+        total_vol = sum(c["v"] for c in candles)
+        if total_vol == 0.0:
+            return 0.0
+        return sum(c["c"] * c["v"] for c in candles) / total_vol
+
     def get_vol_24h(self, symbol: str) -> float | None:
         candles = self._slice_ohlcv(symbol, "1h", 24)
         if len(candles) < 2:

@@ -35,12 +35,37 @@ with open(_CONFIG_PATH) as _f:
 _FH = _cfg.get("funding_harvest", {})
 
 # Patchable by tuner
-_MIN_RATE    = float(_FH.get("min_rate_pct",       0.0005))
-_ENTRY_MINS  = int(_FH.get("entry_mins_before",     30))
-_EXIT_MINS   = int(_FH.get("exit_mins_after",       15))
-_SL_PCT      = float(_FH.get("sl_pct",             0.005))
-_TP_PCT      = float(_FH.get("tp_pct",             0.008))
-_RR          = _TP_PCT / _SL_PCT
+_MIN_RATE      = float(_FH.get("min_rate_pct",       0.0008))  # raised from 0.05% → 0.08%
+_ENTRY_MINS    = int(_FH.get("entry_mins_before",     30))
+_EXIT_MINS     = int(_FH.get("exit_mins_after",       15))
+_SL_PCT        = float(_FH.get("sl_pct",             0.005))
+_TP_PCT        = float(_FH.get("tp_pct",             0.008))
+_RR            = _TP_PCT / _SL_PCT
+_TREND_FILTER  = bool(_FH.get("trend_filter",         True))
+_EMA_PERIOD    = 21   # 4H EMA21 for trend bias
+_TREND_BAND    = 0.01  # >1% above/below EMA21 = directional trend
+
+
+def _get_trend_bias(bars_4h: list[dict]) -> str:
+    """Return 'LONG', 'SHORT', or 'NEUTRAL' from 4H EMA21.
+
+    Uses same logic as live get_trend_bias: EMA21 on 4H closes.
+    Returns NEUTRAL when data is insufficient.
+    """
+    needed = _EMA_PERIOD * 2
+    if len(bars_4h) < needed:
+        return "NEUTRAL"
+    closes = [b["c"] for b in bars_4h[-needed:]]
+    k = 2.0 / (_EMA_PERIOD + 1)
+    ema = sum(closes[:_EMA_PERIOD]) / _EMA_PERIOD
+    for c in closes[_EMA_PERIOD:]:
+        ema = c * k + ema * (1 - k)
+    last = closes[-1]
+    if last > ema * (1 + _TREND_BAND):
+        return "LONG"
+    if last < ema * (1 - _TREND_BAND):
+        return "SHORT"
+    return "NEUTRAL"
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -108,6 +133,7 @@ def run(
     for sym in symbols:
         fund_history = funding.get(sym, [])
         bars_5m      = ohlcv.get(f"{sym}:5m", [])
+        bars_4h      = ohlcv.get(f"{sym}:4h", [])
 
         if len(fund_history) < 5 or len(bars_5m) < 20:
             log.warning("FundingHarvest: insufficient data for %s", sym)
@@ -132,6 +158,15 @@ def run(
             direction = funding_direction(rate, _MIN_RATE)
             if direction is None:
                 continue
+
+            # Trend direction gate: never fade the macro trend for funding
+            if _TREND_FILTER and bars_4h:
+                b4h_now = [b for b in bars_4h if b["ts"] <= settle_ts]
+                bias = _get_trend_bias(b4h_now)
+                if bias == "LONG" and direction == "SHORT":
+                    continue
+                if bias == "SHORT" and direction == "LONG":
+                    continue
 
             # Find entry bar (approximately entry_mins before settlement)
             entry_ts = settle_ts - _ENTRY_MS
