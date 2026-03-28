@@ -31,7 +31,6 @@ with open(_CONFIG_PATH) as _f:
 
 _MR = _cfg.get("microrange", {})
 
-_WINDOW_BARS   = int(_MR.get("window_bars",   10))
 _COOLDOWN_SECS = float(_MR.get("cooldown_mins", 20)) * 60.0
 
 from core.cooldown_store import CooldownStore
@@ -70,6 +69,7 @@ async def score(symbol: str, cache) -> list[dict]:
     """
     from core.symbol_config import get_dynamic_config
     cfg = get_dynamic_config(symbol, "microrange", cache)
+    _WINDOW_BARS    = int(cfg.get("window_bars",      10))
     _RANGE_MAX_PCT  = float(cfg.get("range_max_pct",  0.010))
     _ENTRY_ZONE_PCT = float(cfg.get("entry_zone_pct", 0.002))
     _STOP_PCT       = float(cfg.get("stop_pct",       0.003))

@@ -20,7 +20,7 @@ _EP_CFG = _cfg.get("ema_pullback", {})
 async def run_ema_pullback_loop(symbols: list[str], cache) -> None:
     """Entry point — runs forever, called as an asyncio task from main.py."""
     _exclude = [s.upper() for s in _EP_CFG.get("exclude_symbols", [])]
-    symbols  = [s for s in symbols if s not in _exclude]
+    symbols  = [s for s in symbols if s.upper() not in _exclude]
     log.info("EMA Pullback symbols after exclusion: %s", symbols)
 
     interval      = float(_EP_CFG.get("check_interval_secs", 30))

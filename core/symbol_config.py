@@ -6,14 +6,28 @@ import yaml
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
+_cfg_cache: dict = {}
+
+
+def _load_cfg() -> dict:
+    global _cfg_cache
+    if not _cfg_cache:
+        with open(_CONFIG_PATH) as f:
+            _cfg_cache = yaml.safe_load(f)
+    return _cfg_cache
+
+
+def clear_config_cache() -> None:
+    global _cfg_cache
+    _cfg_cache = {}
+
 
 def get_symbol_config(symbol: str, strategy: str) -> dict:
     """Return strategy params for this symbol, merged from tier + base config.
 
     Priority: tier config > base strategy config > hardcoded defaults
     """
-    with open(_CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
+    cfg = _load_cfg()
 
     base = cfg.get(strategy, {}).copy()
     tiers = cfg.get("symbol_tiers", {})
@@ -31,8 +45,7 @@ def get_symbol_config(symbol: str, strategy: str) -> dict:
 
 def get_symbol_tier(symbol: str) -> str:
     """Return tier name for symbol: 'tier1', 'tier2', 'tier3', or 'base'."""
-    with open(_CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f)
+    cfg = _load_cfg()
     tiers = cfg.get("symbol_tiers", {})
     for tier_name, tier_data in tiers.items():
         if symbol.upper() in [s.upper() for s in tier_data.get("symbols", [])]:
@@ -55,59 +68,117 @@ def _calc_atr(bars: list[dict], period: int = 14) -> float:
 
 
 def _microrange_dynamic(base: dict, tier: str, atr_pct: float) -> dict:
-    """Scale microrange params to current ATR.
+    if atr_pct < 0.0004:
+        vol_regime = "calm"
+    elif atr_pct < 0.0008:
+        vol_regime = "normal"
+    else:
+        vol_regime = "volatile"
 
-    Tier multipliers:
-      tier1: tight — BTC, predictable reversion
-      tier2: medium — ETH/SOL/BNB, moderate volatility
-      tier3: wide — DOGE/AVAX, high volatility
-    """
-    multipliers = {
-        "tier1": {"box": 1.2, "stop": 0.8, "zone": 0.4},
-        "tier2": {"box": 1.5, "stop": 1.0, "zone": 0.5},
-        "tier3": {"box": 2.0, "stop": 1.2, "zone": 0.6},
-        "base":  {"box": 1.5, "stop": 1.0, "zone": 0.5},
+    # (box_mult, stop_mult, tp_ratio, rsi_long_max, rsi_short_min, max_hold)
+    params_table = {
+        "tier1": {
+            "calm":     (1.0, 0.6, 0.60, 33, 67, 3),
+            "normal":   (1.2, 0.8, 0.55, 35, 65, 3),
+            "volatile": (1.5, 1.0, 0.50, 38, 62, 4),
+        },
+        "tier2": {
+            "calm":     (1.2, 0.8, 0.65, 38, 62, 4),
+            "normal":   (1.5, 1.0, 0.60, 40, 60, 4),
+            "volatile": (1.8, 1.2, 0.55, 43, 57, 5),
+        },
+        "tier3": {
+            "calm":     (1.5, 0.9, 0.70, 42, 58, 4),
+            "normal":   (2.0, 1.2, 0.65, 45, 55, 5),
+            "volatile": (2.5, 1.5, 0.60, 48, 52, 6),
+        },
+        "base": {
+            "calm":     (1.2, 0.8, 0.60, 38, 62, 4),
+            "normal":   (1.5, 1.0, 0.55, 40, 60, 4),
+            "volatile": (1.8, 1.2, 0.50, 43, 57, 5),
+        },
     }
-    m = multipliers.get(tier, multipliers["base"])
+    tier_params = params_table.get(tier, params_table["base"])
+    box_mult, stop_mult, tp_ratio, rsi_long_max, rsi_short_min, max_hold = tier_params[vol_regime]
 
-    dynamic = base.copy()
-
-    # Box width = ATR × box_multiplier, clamped to tier min/max
-    tier_limits = {
+    tier_box_limits = {
         "tier1": (0.003, 0.010),
-        "tier2": (0.005, 0.015),
-        "tier3": (0.008, 0.025),
+        "tier2": (0.005, 0.018),
+        "tier3": (0.008, 0.030),
         "base":  (0.005, 0.020),
     }
-    lo, hi = tier_limits.get(tier, (0.005, 0.020))
-    dynamic["range_max_pct"]  = round(max(lo, min(hi, atr_pct * m["box"])), 4)
-    dynamic["stop_pct"]       = round(max(0.001, min(0.008, atr_pct * m["stop"])), 4)
-    dynamic["entry_zone_pct"] = round(max(0.001, min(0.005, atr_pct * m["zone"])), 4)
+    box_lo, box_hi = tier_box_limits.get(tier, (0.005, 0.020))
+    range_max_pct = round(max(box_lo, min(box_hi, atr_pct * box_mult)), 4)
 
-    # Validate invariant: stop_pct × 2 must be ≤ range_max_pct
-    if dynamic["stop_pct"] * 2 > dynamic["range_max_pct"]:
-        dynamic["stop_pct"] = round(dynamic["range_max_pct"] / 2.5, 4)
+    raw_stop = atr_pct * stop_mult
+    max_stop = range_max_pct / 2.2
+    stop_pct = round(max(0.001, min(max_stop, raw_stop)), 4)
 
-    dynamic["_atr_pct"] = round(atr_pct * 100, 4)
-    dynamic["_dynamic"] = True
+    entry_zone_pct = round(max(0.0005, min(0.005, stop_pct * 0.3)), 4)
+
+    tp_distance = range_max_pct * tp_ratio
+    actual_rr   = tp_distance / stop_pct if stop_pct > 0 else 0
+    if actual_rr < 1.3:
+        tp_ratio = round(min(0.90, (stop_pct * 1.3) / range_max_pct), 2)
+
+    dynamic = base.copy()
+    dynamic["range_max_pct"]  = range_max_pct
+    dynamic["stop_pct"]       = stop_pct
+    dynamic["entry_zone_pct"] = entry_zone_pct
+    dynamic["tp_ratio"]       = tp_ratio
+    dynamic["rsi_long_max"]   = rsi_long_max
+    dynamic["rsi_short_min"]  = rsi_short_min
+    dynamic["max_hold_bars"]  = max_hold
+    dynamic["_atr_pct"]       = round(atr_pct * 100, 4)
+    dynamic["_vol_regime"]    = vol_regime
+    dynamic["_dynamic"]       = True
+    final_tp = dynamic["range_max_pct"] * dynamic["tp_ratio"]
+    dynamic["_expected_rr"] = round(final_tp / dynamic["stop_pct"], 2) if dynamic["stop_pct"] > 0 else 0
     return dynamic
 
 
 def _ema_pullback_dynamic(base: dict, tier: str, atr_pct: float) -> dict:
-    """Scale EMA pullback params to current ATR."""
-    multipliers = {
-        "tier1": {"touch": 0.6, "body": 0.5},
-        "tier2": {"touch": 0.8, "body": 0.6},
-        "tier3": {"touch": 1.2, "body": 0.8},
-        "base":  {"touch": 0.8, "body": 0.6},
+    if atr_pct < 0.0004:
+        vol_regime = "calm"
+    elif atr_pct < 0.0008:
+        vol_regime = "normal"
+    else:
+        vol_regime = "volatile"
+
+    # (touch_mult, body_mult, rr_ratio, max_hold)
+    params_table = {
+        "tier1": {
+            "calm":     (0.5, 0.4, 1.5,  6),
+            "normal":   (0.6, 0.5, 1.8,  8),
+            "volatile": (0.8, 0.6, 2.0, 10),
+        },
+        "tier2": {
+            "calm":     (0.7, 0.5, 1.8,  6),
+            "normal":   (0.8, 0.6, 2.0,  8),
+            "volatile": (1.0, 0.7, 2.2, 10),
+        },
+        "tier3": {
+            "calm":     (0.9, 0.6, 2.0,  8),
+            "normal":   (1.1, 0.8, 2.2, 10),
+            "volatile": (1.4, 1.0, 2.5, 12),
+        },
+        "base": {
+            "calm":     (0.7, 0.5, 1.8,  6),
+            "normal":   (0.8, 0.6, 2.0,  8),
+            "volatile": (1.0, 0.7, 2.2, 10),
+        },
     }
-    m = multipliers.get(tier, multipliers["base"])
+    tier_params = params_table.get(tier, params_table["base"])
+    touch_mult, body_mult, rr_ratio, max_hold = tier_params[vol_regime]
 
     dynamic = base.copy()
-    dynamic["pullback_touch_pct"]  = round(max(0.001, min(0.008, atr_pct * m["touch"])), 4)
-    dynamic["min_bounce_body_pct"] = round(max(0.001, min(0.006, atr_pct * m["body"])), 4)
-    dynamic["_atr_pct"] = round(atr_pct * 100, 4)
-    dynamic["_dynamic"] = True
+    dynamic["pullback_touch_pct"]  = round(max(0.001, min(0.008, atr_pct * touch_mult)), 4)
+    dynamic["min_bounce_body_pct"] = round(max(0.001, min(0.006, atr_pct * body_mult)),  4)
+    dynamic["rr_ratio"]            = rr_ratio
+    dynamic["max_hold_bars"]       = max_hold
+    dynamic["_atr_pct"]            = round(atr_pct * 100, 4)
+    dynamic["_vol_regime"]         = vol_regime
+    dynamic["_dynamic"]            = True
     return dynamic
 
 
@@ -124,8 +195,8 @@ def get_dynamic_config(symbol: str, strategy: str, cache) -> dict:
     base = get_symbol_config(symbol, strategy)
     tier = base.get("_tier", "base")
 
-    bars = cache.get_ohlcv(symbol, window=20, tf="5m")
-    if not bars or len(bars) < 15:
+    bars = cache.get_ohlcv(symbol, window=30, tf="5m")
+    if not bars or len(bars) < 20:
         return base
 
     atr = _calc_atr(bars, period=14)
