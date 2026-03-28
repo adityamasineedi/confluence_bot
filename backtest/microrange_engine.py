@@ -41,7 +41,7 @@ _RSI_SHORT_MIN  = float(_MR.get("rsi_short_min",   60.0))
 _COOLDOWN_BARS  = int(_MR.get("cooldown_mins",     20) // 5)   # 20 min → 4 × 5m bars
 _MAX_HOLD       = int(_MR.get("max_hold_bars",      6))
 _USE_RSI_FILTER = bool(_MR.get("use_rsi_filter",   True))
-
+_THRESHOLD      = float(_MR.get("fire_threshold",   0.75))
 _WARMUP_BARS = _WINDOW_BARS + 22   # need vol MA(20) + window + 1
 
 
@@ -225,7 +225,7 @@ def run(
                 "entry_ts":        bar["ts"],
                 "bar_idx":         bar_idx,
                 "risk_amount":     risk_amount,
-                "score":           0.75,   # all 3 required signals fired
+                "score":           _THRESHOLD,   # all 3 required signals fired
                 "range_width_pct": round(box["range_width_pct"] * 100, 4),
                 "signals": {
                     "box_detected": True,

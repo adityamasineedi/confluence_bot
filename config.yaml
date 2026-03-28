@@ -202,19 +202,17 @@ leadlag:
 # ── Session open trap ────────────────────────────────────────────────────────
 # Fade the first 15-min fake move at Asia / London / NY opens.
 session_trap:
-  enabled: false  # DISABLED pending re-validation with regime gate
-  sessions: [1, 8, 13]           # UTC hours: Asia=1, London=8, NY=13
-  min_move_pct: 0.006            # fake move must be ≥ 0.6% in first 15 min (tightened from 0.3%)
-  strong_move_pct: 0.006         # ≥ 0.6% = strong signal tier (aligned with min_move_pct)
-  max_range_pct: 0.015           # hard gate: reject gap opens wider than 1.5%
-  range_compact_max: 0.007       # range_compact signal: session range ≤ 0.7% (tightened from 0.9%)
-  sl_buffer_pct: 0.002           # SL 0.2% beyond session extreme
-  rr_ratio: 1.5                  # TP = entry ± SL_dist × 1.5
-  fire_threshold: 0.75           # 3 of 4 signals required (raised from 0.50)
-  max_hold_bars: 12              # 12 × 5m bars = 1h max hold
-  cooldown_mins: 60              # one trade per symbol per session
-  max_entries_per_session: 3     # simultaneous entries cap per session fire
-  allowed_regimes: [RANGE, BREAKOUT]  # only fade session opens in non-trending markets
+  enabled: false
+  sessions: [1, 8, 13]
+  min_move_pct: 0.006        # 0.6% minimum fake move (tightened from 0.3%)
+  strong_move_pct: 0.009     # 0.9% = strong tier (tightened from 0.6%)
+  max_range_pct: 0.007       # reject sessions wider than 0.7% (tightened from 1.5%)
+  sl_buffer_pct: 0.002
+  rr_ratio: 1.5
+  max_hold_bars: 12
+  cooldown_mins: 60
+  max_entries_per_session: 3
+  fire_threshold: 0.75       # 3 of 4 (tightened from 0.50)
 
 # ── 1H inside bar flip ────────────────────────────────────────────────────────
 # Mean-reversion off 1H compression zones (3+ consecutive inside bars).
@@ -272,8 +270,9 @@ ema_pullback:
   fire_threshold: 0.75
   pullback_touch_pct: 0.002     # price must be within 0.2% of EMA21 (tightened from 0.4%)
   min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
-  rr_ratio: 1.5                 # TP = risk × 1.5 (lowered from 2.5× — fewer timeouts)
-
+  rr_ratio: 1.5                 # revert BTC back to 1.5
+  vol_quiet_mult: 0.8           # tightened from 1.2 — only enter on very quiet pullbacks
+  max_hold_bars: 8              # 8 × 15m = 2h max hold
 # ── HTF Demand / Supply Zone strategy ───────────────────────────────────────
 # 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
 # Highest quality, lowest frequency: 1-3x per symbol per day.
@@ -293,7 +292,7 @@ zone:
 # Confirmed by wick rejection on the 15m bar + volume spike (liquidation cascade).
 # Skips when OI data unavailable (Binance + Bybit both missing).
 oi_spike:
-  enabled: true
+  enabled: false
   spike_pct: 0.15             # OI must increase ≥ 15% within lookback_hours
   lookback_hours: 2.0         # compare current OI vs 2h ago
   wick_pct: 0.005             # lower/upper wick must be ≥ 0.5% of price
@@ -314,7 +313,7 @@ oi_spike:
 # and closes back inside.  Blocked in strong trends (ADX > 30) where bands
 # expand continuously and reversion fails.  Target = VWAP midline (TP dynamic).
 vwap_band:
-  enabled: true
+  enabled: false
   window_bars: 20             # 20 × 15m = 5h rolling VWAP window
   band_mult: 2.0              # ±2σ standard deviation bands
   rsi_long_max: 35            # RSI must be ≤ this for LONG entry (oversold)
@@ -331,7 +330,7 @@ vwap_band:
 # Low frequency (15-40 per symbol per year), high quality, 2.5× RR minimum.
 # Skips PUMP and CRASH regimes — structure breaks there are unreliable.
 bos:
-  enabled: true
+  enabled: false
   pivot_n: 3                  # bars each side to confirm a swing point
   lookback_bars: 50           # 1H candles to scan for swing structure
   vol_confirm_mult: 1.3       # break bar volume ≥ this × 20-bar average
@@ -346,7 +345,7 @@ bos:
 # Entry into unfilled 1H price imbalance zones (FVGs).
 # Fires when price returns to a virgin gap with HTF alignment + RSI confirmation.
 fvg:
-  enabled: true
+  enabled: false
   min_gap_pct: 0.003          # FVG must be ≥ 0.3% wide (filters micro-noise)
   check_interval_secs: 60     # align with 1H bar close
   cooldown_mins: 45           # per-symbol cooldown after entry
@@ -356,30 +355,29 @@ fvg:
   lookback_bars: 50           # scan last 50 1H candles for FVGs
 
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
-# Mean-reversion scalp inside a tight 5m consolidation box.
-# 3-6 trades per sideways session; highest-frequency component.
 microrange:
-  enabled: true   # ENABLED: 7/9 symbols profitable in backtest (+143% on $9k, 6 months)
-  exclude_symbols:          # unprofitable in backtest — keep excluded
-    - ETHUSDT               #   28.1% WR, -$419
-    - AVAXUSDT              #   30.5% WR, -$204
-  window_bars: 10           # completed 5m bars used to measure the box
-  range_max_pct: 0.005      # max (high-low)/mid to qualify as micro-range (0.5%, tightened from 1.0%)
-  entry_zone_pct: 0.001     # price within 0.1% of range boundary to enter (tightened from 0.2%)
-  stop_pct: 0.002           # SL = 0.2% beyond range boundary (lowered from 0.3% to keep _MIN_BOX_PCT ≤ range_max_pct)
-  tp_ratio: 0.75            # TP = 75% of range width from entry boundary
-  max_hold_bars: 6          # max 6 × 5m bars = 30 min hold
-  cooldown_mins: 20         # min gap between two trades on the same symbol
-  max_positions: 3          # max simultaneous micro-range entries (conservative)
-  max_vol_ratio: 1.3        # reject entries when vol > 1.3× 20-bar avg (breakout risk)
-  rsi_long_max: 35          # RSI(14) must be ≤ 35 for LONG entries (tightened from 40)
-  rsi_short_min: 65         # RSI(14) must be ≥ 65 for SHORT entries (tightened from 60)
-  use_rsi_filter: true      # set false to disable RSI gate
-  fire_threshold: 1.0       # ALL 4 signals must fire (tightened from 0.75 / 3-of-4)
-  check_interval_secs: 30   # how often the microrange loop scans
-  risk_pct: 0.01            # 1% equity risk per trade (normal conditions)
-  drawdown_reduce_threshold: 0.15  # when account DD exceeds 15%, halve risk to 0.5%
-  max_drawdown_pause: 0.20         # pause all micro-range entries if DD exceeds 20%
+  enabled: true
+  exclude_symbols:
+    - ETHUSDT               # 28.1% WR, -$419
+    - AVAXUSDT              # 30.5% WR, -$204
+  window_bars: 10
+  range_max_pct: 0.005      # 0.5% max box width (tightened from 1.0%)
+  entry_zone_pct: 0.001     # within 0.1% of boundary (tightened from 0.2%)
+  stop_pct: 0.002           # 0.2% SL — MUST satisfy: stop_pct × 2 ≤ range_max_pct
+                            # invariant check: 0.004 ≤ 0.005 ✓
+  tp_ratio: 0.55
+  max_hold_bars: 3
+  cooldown_mins: 20
+  max_positions: 3
+  max_vol_ratio: 1.3
+  rsi_long_max: 35          # tightened from 40
+  rsi_short_min: 65         # tightened from 60
+  use_rsi_filter: true
+  fire_threshold: 1.0       # ALL 4 required (tightened from 0.75)
+  check_interval_secs: 30
+  risk_pct: 0.01
+  drawdown_reduce_threshold: 0.15   # halve risk above 15% DD
+  max_drawdown_pause: 0.20          # pause entries above 20% DD
 
 # ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
 long_short_ratio:

@@ -41,7 +41,7 @@ _W_REJECTION   = 0.35
 _W_EMA         = 0.15
 _W_RSI         = 0.10
 
-from logging_.cooldown_store import CooldownStore as _CooldownStore
+from core.cooldown_store import CooldownStore as _CooldownStore
 _cooldown = _CooldownStore("OISPIKE")
 
 
@@ -57,7 +57,7 @@ async def score(symbol: str, cache) -> list[dict]:
         check_fn = check_oi_spike_long if direction == "LONG" else check_oi_spike_short
 
         # Cooldown gate
-        if _cooldown.active(symbol):
+        if _cooldown.is_active(symbol):
             log.debug("OI Spike %s %s — cooldown active", direction, symbol)
             continue
 

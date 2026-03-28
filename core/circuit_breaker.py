@@ -126,6 +126,17 @@ def _get_balance() -> float:
         return 0.0
 
 
+def reset() -> dict:
+    """Manually clear the circuit breaker. Re-evaluates from DB immediately."""
+    global _tripped, _trip_reason
+    _tripped     = False
+    _trip_reason = ""
+    log.warning("Circuit breaker manually reset via API")
+    # Re-evaluate so state reflects current DB
+    _evaluate()
+    return status()
+
+
 def status() -> dict:
     """Return current circuit breaker state (for dashboard / health check)."""
     _reset_if_new_day()

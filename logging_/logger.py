@@ -11,6 +11,7 @@ _log = logging.getLogger(__name__)
 _DB_PATH     = os.environ.get("DB_PATH", "confluence_bot.db")
 _SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 _PRUNE_DAYS  = int(os.environ.get("LOG_PRUNE_DAYS", "7"))
+_pruned      = False   # prune runs once per process, not once per instantiation
 
 
 def _utcnow() -> str:
@@ -21,9 +22,12 @@ class TradeLogger:
     """Async-safe SQLite logger for signals, trades, and regime events."""
 
     def __init__(self, db_path: str = _DB_PATH) -> None:
+        global _pruned
         self.db_path = db_path
         self._init_db()
-        self._prune(days=_PRUNE_DAYS)
+        if not _pruned:
+            self._prune(days=_PRUNE_DAYS)
+            _pruned = True
 
     def _init_db(self) -> None:
         with open(_SCHEMA_PATH) as f:

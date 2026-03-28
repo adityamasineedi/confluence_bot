@@ -15,8 +15,9 @@ must fire: entry_zone (always True) + near_poc must also be True.
 """
 import logging
 import os
-import time
 import yaml
+
+from core.cooldown_store import CooldownStore
 
 log = logging.getLogger(__name__)
 
@@ -35,16 +36,16 @@ _RR_RATIO       = float(_IB.get("rr_ratio",        1.5))
 _THRESHOLD      = float(_IB.get("fire_threshold",  0.75))
 _COOLDOWN_SECS  = float(_IB.get("cooldown_mins",    60)) * 60.0
 
-_cooldown_until: dict[str, float] = {}
+_cd = CooldownStore("INSIDEBAR")
 
 
 def is_on_cooldown(symbol: str) -> bool:
-    return time.monotonic() < _cooldown_until.get(symbol, 0.0)
+    return _cd.is_active(symbol)
 
 
 def set_cooldown(symbol: str) -> None:
-    _cooldown_until[symbol] = time.monotonic() + _COOLDOWN_SECS
-    log.debug("InsideBar cooldown set for %s", symbol)
+    _cd.set(symbol, _COOLDOWN_SECS)
+    log.debug("InsideBar cooldown set for %s (%.0f min)", symbol, _COOLDOWN_SECS / 60)
 
 
 async def score(symbol: str, cache) -> list[dict]:

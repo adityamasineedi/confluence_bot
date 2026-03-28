@@ -15,19 +15,23 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
+_EP = _cfg.get("ema_pullback", {})
+
+_RR              = float(_EP.get("rr_ratio",           1.5))
+_PULLBACK_PCT    = float(_EP.get("pullback_touch_pct", 0.002))
+_MIN_BOUNCE_PCT  = float(_EP.get("min_bounce_body_pct",0.002))
+_VOL_QUIET       = float(_EP.get("vol_quiet_mult",     1.2))
+_COOLDOWN_BARS   = int(_EP.get("cooldown_mins",        45) // 15)  # 45 min → 3 × 15m bars
+_MAX_HOLD        = int(_EP.get("max_hold_bars",         8))
+_FIRE_THRESHOLD  = float(_EP.get("fire_threshold",     0.75))
+
 _EMA_FAST        = 21
 _EMA_SLOW        = 50
-_TOUCH_PCT       = 0.002   # within 0.2% of EMA21 (tightened from 0.4%)
-_MIN_BOUNCE_BODY = 0.002   # close must be ≥ 0.2% from EMA21 (not a marginal cross)
 _RSI_PERIOD      = 14
 _RSI_LONG_MIN    = 35
 _RSI_LONG_MAX    = 60
 _RSI_SHORT_MIN   = 40
 _RSI_SHORT_MAX   = 65
-_VOL_QUIET       = 1.2     # pullback volume must be ≤ 1.2× avg
-_COOLDOWN_BARS   = 3       # 3 × 15m = 45 min
-_MAX_HOLD        = 8       # 8 × 15m = 2h max hold
-_RR              = 1.5     # lowered from 2.5 — fewer timeouts, more trades hit TP
 _SL_BUFFER       = 0.002   # 0.2% below/above EMA21
 
 
@@ -194,11 +198,11 @@ def run(
 
             # ── LONG: 4H bullish, 15m EMA21 > EMA50, price bounced off EMA21 ──
             if htf_long and ema21_15m > ema50_15m:
-                touch = (abs(prev_low  - ema21_15m) / ema21_15m <= _TOUCH_PCT or
-                         abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _TOUCH_PCT)
+                touch = (abs(prev_low  - ema21_15m) / ema21_15m <= _PULLBACK_PCT or
+                         abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _PULLBACK_PCT)
                 # Close must be ≥ 0.2% above EMA21 (not a marginal cross)
                 ema_dist_long = (price - ema21_15m) / ema21_15m if ema21_15m > 0 else 0
-                if (touch and ema_dist_long >= _MIN_BOUNCE_BODY
+                if (touch and ema_dist_long >= _MIN_BOUNCE_PCT
                         and quiet_pull and vol_confirm):
                     if _RSI_LONG_MIN <= rsi <= _RSI_LONG_MAX:
                         direction = "LONG"
@@ -209,11 +213,11 @@ def run(
 
             # ── SHORT: 4H bearish, 15m EMA21 < EMA50, price rejected at EMA21 ─
             if direction is None and htf_short and ema21_15m < ema50_15m:
-                touch = (abs(prev_high - ema21_15m) / ema21_15m <= _TOUCH_PCT or
-                         abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _TOUCH_PCT)
+                touch = (abs(prev_high - ema21_15m) / ema21_15m <= _PULLBACK_PCT or
+                         abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _PULLBACK_PCT)
                 # Close must be ≥ 0.2% below EMA21 (not a marginal cross)
                 ema_dist_short = (ema21_15m - price) / ema21_15m if ema21_15m > 0 else 0
-                if (touch and ema_dist_short >= _MIN_BOUNCE_BODY
+                if (touch and ema_dist_short >= _MIN_BOUNCE_PCT
                         and quiet_pull and vol_confirm):
                     if _RSI_SHORT_MIN <= rsi <= _RSI_SHORT_MAX:
                         direction = "SHORT"
@@ -237,7 +241,7 @@ def run(
                 "entry_ts":    bar["ts"],
                 "bar_idx":     bar_idx,
                 "risk_amount": risk_amount,
-                "score":       0.75,
+                "score":       _FIRE_THRESHOLD,
             }
 
         if open_trade is not None:

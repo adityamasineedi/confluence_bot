@@ -50,6 +50,25 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/circuit-breaker/status")
+async def cb_status() -> JSONResponse:
+    try:
+        from core.circuit_breaker import status as cb_status_fn
+        return JSONResponse(cb_status_fn())
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/circuit-breaker/reset")
+async def cb_reset() -> JSONResponse:
+    try:
+        from core.circuit_breaker import reset as cb_reset_fn
+        result = cb_reset_fn()
+        return JSONResponse({"ok": True, **result})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @app.get("/signals/recent")
 async def recent_signals(limit: int = 50) -> JSONResponse:
     try:
@@ -664,6 +683,14 @@ async def dashboard() -> HTMLResponse:
     <div class="tl-card"><h3>Win Rate</h3><div class="val green" id="stat-winrate">—</div></div>
     <div class="tl-card"><h3>Total PnL (USDT)</h3><div class="val" id="stat-pnl">—</div></div>
     <div class="tl-card"><h3>Signals Fired Today</h3><div class="val purple" id="stat-fired">—</div></div>
+    <div class="tl-card" id="cb-card" style="border-left:3px solid #22c55e">
+      <h3>Circuit Breaker</h3>
+      <div class="val green" id="cb-status-val">—</div>
+      <div id="cb-reason" style="font-size:0.7rem;color:#6b7280;margin-top:4px;min-height:16px"></div>
+      <button id="cb-reset-btn" onclick="cbReset()" style="display:none;margin-top:8px;padding:4px 12px;
+        background:#7f1d1d;color:#fca5a5;border:1px solid #dc2626;border-radius:4px;
+        font-size:0.72rem;cursor:pointer;font-weight:600">&#x21BA; Reset Breaker</button>
+    </div>
   </div>
   <section style="padding-top:0">
     <h2>Live Signal Snapshot <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— Binance live data</span></h2>
@@ -1730,6 +1757,9 @@ async function refreshTradelog() {
   pnlEl.className = 'val ' + (stats.total_pnl_usdt >= 0 ? 'green' : 'red');
   document.getElementById('stat-fired').textContent = stats.fired_today;
 
+  // Circuit Breaker status
+  fetchCB();
+
   const regimes = await Promise.all(ALL_SYMBOLS.map(s => fetchJSON('/regime/' + s)));
   document.getElementById('regime-body').innerHTML = regimes.map(r =>
     `<tr><td>${r.symbol}</td><td>${badge('regime', r.regime)}</td><td>${toIST(r.ts)}</td></tr>`
@@ -1866,6 +1896,42 @@ async function refreshTradelog() {
 }
 refreshTradelog();
 setInterval(refreshTradelog, 5000);
+
+// ── CIRCUIT BREAKER ────────────────────────────────────────────────────────────
+async function fetchCB() {
+  try {
+    const cb = await fetchJSON('/api/circuit-breaker/status');
+    const card   = document.getElementById('cb-card');
+    const valEl  = document.getElementById('cb-status-val');
+    const rsn    = document.getElementById('cb-reason');
+    const btn    = document.getElementById('cb-reset-btn');
+    if (cb.tripped) {
+      valEl.textContent = 'TRIPPED';
+      valEl.className   = 'val red';
+      card.style.borderLeftColor = '#dc2626';
+      rsn.textContent  = cb.reason || '';
+      btn.style.display = 'inline-block';
+    } else {
+      valEl.textContent = 'OK';
+      valEl.className   = 'val green';
+      card.style.borderLeftColor = '#22c55e';
+      rsn.textContent  = `${cb.consecutive_losses} consec losses  |  daily PnL $${cb.daily_pnl.toFixed(2)}`;
+      btn.style.display = 'none';
+    }
+  } catch(e) {}
+}
+async function cbReset() {
+  const btn = document.getElementById('cb-reset-btn');
+  btn.disabled = true;
+  btn.textContent = 'Resetting…';
+  try {
+    await fetch('/api/circuit-breaker/reset', { method: 'POST' });
+    await fetchCB();
+  } catch(e) {}
+  btn.disabled = false;
+  btn.textContent = '↺ Reset Breaker';
+}
+setInterval(fetchCB, 10000);
 
 // ── MARKET ────────────────────────────────────────────────────────────────────
 const REGIME_META = {

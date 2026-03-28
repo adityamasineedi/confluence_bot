@@ -18,7 +18,7 @@ _FUTURES_BASE = "https://fapi.binance.com"
 _SPOT_BASE    = "https://api.binance.com"
 _TIMEOUT      = aiohttp.ClientTimeout(total=60)
 _DATA_DIR     = os.path.join(os.path.dirname(__file__), "data")
-_CACHE_TTL    = 86_400   # 24 h in seconds
+_CACHE_TTL    = 172_800  # 48 h in seconds — reduces re-fetch frequency on daily runs
 
 # Candles per timeframe — enough to cover ~9 years
 _TF_LIMITS: dict[str, int] = {
@@ -316,15 +316,25 @@ async def _fetch_klines_range(
                 "endTime":   end_ms,
                 "limit":     1500,
             }
-            try:
-                async with session.get(url, params=params) as resp:
-                    resp.raise_for_status()
-                    rows = await resp.json()
-            except Exception as exc:
-                log.warning("range klines failed %s %s: %s", symbol, tf, exc)
-                break
+            rows = None
+            for attempt in range(3):
+                try:
+                    async with session.get(url, params=params) as resp:
+                        resp.raise_for_status()
+                        rows = await resp.json()
+                    break
+                except Exception as exc:
+                    if attempt == 2:
+                        log.warning("range klines failed %s %s after 3 attempts: %s",
+                                    symbol, tf, exc)
+                    else:
+                        await asyncio.sleep(1.5 ** attempt)
 
             if not rows:
+                if not candles:
+                    log.warning("range klines: 0 bars returned for %s %s "
+                                "(start=%d end=%d) — possible rate-limit or gap",
+                                symbol, tf, cursor, end_ms)
                 break
 
             for r in rows:
@@ -342,7 +352,14 @@ async def _fetch_klines_range(
         if url == futures_url and futures_launch <= start_ms:
             break   # futures covers the whole range — skip spot
 
-    return sorted(candles.values(), key=lambda c: c["ts"])
+    result = sorted(candles.values(), key=lambda c: c["ts"])
+    if not result:
+        log.warning("range klines: final result empty for %s %s", symbol, tf)
+    return result
+
+
+_OI_MAX_WINDOW_MS = 30 * 86_400_000   # Binance OI API: max 30 days per request
+_OI_HISTORY_LIMIT_MS = 30 * 86_400_000  # OI history only available ~30 days back
 
 
 async def _fetch_oi_range(
@@ -351,17 +368,32 @@ async def _fetch_oi_range(
     start_ms: int,
     end_ms:   int,
 ) -> list[dict]:
-    """Fetch OI history for a specific time window."""
+    """Fetch OI history for a specific time window.
+
+    Binance /futures/data/openInterestHist constraints:
+      - max 30 days per request (endTime - startTime ≤ 30 days)
+      - only ~30 days of history available (older requests return 400)
+    Paginates forward in 30-day chunks; silently skips chunks older than
+    the API's retention window.
+    """
     url    = f"{_FUTURES_BASE}/futures/data/openInterestHist"
     result: dict[int, dict] = {}
-    cursor = start_ms
+    # Clamp start to avoid requesting data older than API retention
+    now_ms    = int(time.time() * 1000)
+    effective_start = max(start_ms, now_ms - _OI_HISTORY_LIMIT_MS)
+    cursor    = effective_start
+
+    if effective_start > end_ms:
+        log.info("OI range %s: entire window older than API retention — skipping", symbol)
+        return []
 
     while cursor < end_ms:
+        window_end = min(cursor + _OI_MAX_WINDOW_MS, end_ms)
         params: dict = {
             "symbol":    symbol,
             "period":    "1h",
             "startTime": cursor,
-            "endTime":   end_ms,
+            "endTime":   window_end,
             "limit":     500,
         }
         try:
@@ -373,7 +405,8 @@ async def _fetch_oi_range(
             break
 
         if not rows:
-            break
+            cursor = window_end + 3_600_000
+            continue
 
         for r in rows:
             ts = int(r["timestamp"])
@@ -381,9 +414,10 @@ async def _fetch_oi_range(
                 result[ts] = {"ts": ts, "oi": float(r["sumOpenInterest"])}
 
         last_ts = int(rows[-1]["timestamp"])
-        if last_ts >= end_ms or len(rows) < 500:
-            break
-        cursor = last_ts + 3_600_000
+        if len(rows) < 500:
+            cursor = window_end + 3_600_000   # advance to next window
+        else:
+            cursor = last_ts + 3_600_000
         await asyncio.sleep(0.05)
 
     return sorted(result.values(), key=lambda x: x["ts"])
