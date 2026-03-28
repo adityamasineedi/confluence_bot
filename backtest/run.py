@@ -233,6 +233,11 @@ def main() -> None:
         help="Comma-separated symbols (default: all 9 configured symbols)",
     )
     parser.add_argument(
+        "--symbol", dest="symbols",
+        default=argparse.SUPPRESS,
+        help="Alias for --symbols (single symbol shorthand)",
+    )
+    parser.add_argument(
         "--refresh", action="store_true",
         help="Force re-download even if cached data exists",
     )
@@ -274,7 +279,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    _ALL_SYMS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT",
+                 "ADAUSDT", "DOTUSDT", "DOGEUSDT", "SUIUSDT"]
+    raw = getattr(args, "symbols", "BTCUSDT")
+    symbols = _ALL_SYMS if raw.upper() == "ALL" else [s.strip().upper() for s in raw.split(",")]
 
     # ── Crash periods mode ─────────────────────────────────────────────────────
     if args.crash_periods:

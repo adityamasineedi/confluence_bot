@@ -35,7 +35,7 @@ _EMA_FAST        = 21
 _EMA_SLOW        = 50
 _TOUCH_PCT       = float(_EP_CFG.get("pullback_touch_pct",   0.002))  # within 0.2% of EMA21
 _MIN_BODY_PCT    = float(_EP_CFG.get("min_bounce_body_pct",  0.002))  # body ≥ 0.2%
-_MIN_EMA_DIST    = float(_EP_CFG.get("min_bounce_body_pct",  0.002))  # close ≥ 0.2% from EMA21
+_MIN_EMA_DIST    = float(_EP_CFG.get("min_ema_dist_pct",     0.002))  # close ≥ 0.2% from EMA21
 
 
 def is_on_cooldown(symbol: str) -> bool:
@@ -63,6 +63,8 @@ async def score(symbol: str, cache) -> list[dict]:
         check_ema15m_pullback_short,
         get_ema15m_long_levels,
         get_ema15m_short_levels,
+        _htf_bullish,
+        _htf_bearish,
     )
 
     results  = []
@@ -81,7 +83,7 @@ async def score(symbol: str, cache) -> list[dict]:
     # ── LONG ─────────────────────────────────────────────────────────────────
     pullback_long = check_ema15m_pullback_long(symbol, cache)
     if pullback_long:
-        htf_aligned    = True   # already checked inside check_ema15m_pullback_long
+        htf_aligned    = _htf_bullish(symbol, cache)
         ema_structure  = ema21_15m > ema50_15m if ema21_15m > 0 else False
 
         # Hard gate 1: bounce candle body ≥ 0.2% AND close ≥ 0.2% above EMA21
@@ -120,7 +122,7 @@ async def score(symbol: str, cache) -> list[dict]:
     # ── SHORT ─────────────────────────────────────────────────────────────────
     pullback_short = check_ema15m_pullback_short(symbol, cache)
     if pullback_short:
-        htf_aligned   = True
+        htf_aligned   = _htf_bearish(symbol, cache)
         ema_structure = ema21_15m < ema50_15m if ema21_15m > 0 else False
 
         # Hard gate 1: bounce candle body ≥ 0.2% AND close ≥ 0.2% below EMA21

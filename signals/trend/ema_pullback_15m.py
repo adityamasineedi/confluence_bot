@@ -16,16 +16,22 @@ Long setup:
 Short setup: mirror image.
 """
 
+import os, yaml
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+with open(_CONFIG_PATH) as _f:
+    _cfg = yaml.safe_load(_f)
+_EP = _cfg.get("ema_pullback", {})
+
 _EMA_FAST    = 21
 _EMA_SLOW    = 50
-_TOUCH_PCT         = 0.002   # price must be within 0.2% of EMA21 (tightened from 0.4%)
-_MIN_BOUNCE_BODY   = 0.002   # close must be ≥ 0.2% above/below EMA21 (meaningful bounce)
 _RSI_PERIOD  = 14
-_RSI_LONG_MIN  = 35    # RSI floor — not crashed below oversold (trend still up)
-_RSI_LONG_MAX  = 60    # RSI ceiling — not overbought on entry
-_RSI_SHORT_MIN = 40    # RSI floor — not oversold (trend still down)
-_RSI_SHORT_MAX = 65    # RSI ceiling — was overbought, now pulling back
-_VOL_QUIET_MULT = 1.2  # pullback volume must be ≤ 1.2× average (low-vol pullback)
+_TOUCH_PCT       = float(_EP.get("pullback_touch_pct",   0.002))
+_MIN_BOUNCE_BODY = float(_EP.get("min_bounce_body_pct",  0.002))
+_VOL_QUIET_MULT  = float(_EP.get("vol_quiet_mult",       0.8))
+_RSI_LONG_MIN    = float(_EP.get("rsi_long_min",         30.0))
+_RSI_LONG_MAX    = float(_EP.get("rsi_long_max",         50.0))
+_RSI_SHORT_MIN   = float(_EP.get("rsi_short_min",        50.0))
+_RSI_SHORT_MAX   = float(_EP.get("rsi_short_max",        70.0))
 
 
 def _ema(closes: list[float], period: int) -> float:

@@ -28,10 +28,10 @@ _FIRE_THRESHOLD  = float(_EP.get("fire_threshold",     0.75))
 _EMA_FAST        = 21
 _EMA_SLOW        = 50
 _RSI_PERIOD      = 14
-_RSI_LONG_MIN    = 35
-_RSI_LONG_MAX    = 60
-_RSI_SHORT_MIN   = 40
-_RSI_SHORT_MAX   = 65
+_RSI_LONG_MIN    = float(_EP.get("rsi_long_min",  30.0))
+_RSI_LONG_MAX    = float(_EP.get("rsi_long_max",  50.0))
+_RSI_SHORT_MIN   = float(_EP.get("rsi_short_min", 50.0))
+_RSI_SHORT_MAX   = float(_EP.get("rsi_short_max", 70.0))
 _SL_BUFFER       = 0.002   # 0.2% below/above EMA21
 
 

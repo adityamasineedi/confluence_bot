@@ -270,9 +270,22 @@ ema_pullback:
   fire_threshold: 0.75
   pullback_touch_pct: 0.002     # price must be within 0.2% of EMA21 (tightened from 0.4%)
   min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
+  min_ema_dist_pct: 0.002       # separate key for scorer _MIN_EMA_DIST (fixes duplicate key bug)
   rr_ratio: 1.5                 # revert BTC back to 1.5
   vol_quiet_mult: 0.8           # tightened from 1.2 — only enter on very quiet pullbacks
   max_hold_bars: 8              # 8 × 15m = 2h max hold
+  rsi_long_min: 30              # lower bound for LONG RSI (non-overlapping: 30–50)
+  rsi_long_max: 50              # upper bound for LONG RSI
+  rsi_short_min: 50             # lower bound for SHORT RSI (non-overlapping: 50–70)
+  rsi_short_max: 70             # upper bound for SHORT RSI
+  exclude_symbols:
+    - ETHUSDT    # not tested — excluded pending backtest
+    - AVAXUSDT   # not tested — excluded pending backtest
+    - BNBUSDT    # PF 1.00 on microrange, likely similar on EMA pullback
+    - DOGEUSDT   # high volatility, unsuitable for EMA pullback
+    - DOTUSDT    # insufficient liquidity for 15m strategy
+    - ADAUSDT    # not tested — excluded pending backtest
+    - SUIUSDT    # -12.6% return, 41.6% DD confirmed loser
 # ── HTF Demand / Supply Zone strategy ───────────────────────────────────────
 # 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
 # Highest quality, lowest frequency: 1-3x per symbol per day.
@@ -392,3 +405,65 @@ telegram:
   # alert_on_regime_change: true — alert when regime switches
   alert_on_signal: true
   alert_on_regime_change: true
+
+# ── Symbol tiers — per-volatility strategy parameter overrides ────────────────
+# Priority: tier config > base strategy config > hardcoded defaults
+# Used by core/symbol_config.py  get_symbol_config(symbol, strategy)
+symbol_tiers:
+  tier1:
+    symbols: [BTCUSDT]
+    label: "tight — low volatility"
+    microrange:
+      range_max_pct: 0.005
+      entry_zone_pct: 0.001
+      stop_pct: 0.002
+      tp_ratio: 0.55
+      max_hold_bars: 3
+      rsi_long_max: 35
+      rsi_short_min: 65
+      fire_threshold: 1.0
+      max_vol_ratio: 1.3
+    ema_pullback:
+      pullback_touch_pct: 0.002
+      min_bounce_body_pct: 0.002
+      vol_quiet_mult: 0.8
+      rr_ratio: 1.5
+      max_hold_bars: 8
+  tier2:
+    symbols: [ETHUSDT, BNBUSDT, SOLUSDT, ADAUSDT]
+    label: "medium volatility"
+    microrange:
+      range_max_pct: 0.008
+      entry_zone_pct: 0.002
+      stop_pct: 0.003
+      tp_ratio: 0.65
+      max_hold_bars: 4
+      rsi_long_max: 40
+      rsi_short_min: 60
+      fire_threshold: 1.0
+      max_vol_ratio: 1.3
+    ema_pullback:
+      pullback_touch_pct: 0.003
+      min_bounce_body_pct: 0.002
+      vol_quiet_mult: 1.0
+      rr_ratio: 2.0
+      max_hold_bars: 8
+  tier3:
+    symbols: [AVAXUSDT, DOTUSDT, DOGEUSDT, SUIUSDT]
+    label: "high volatility"
+    microrange:
+      range_max_pct: 0.012
+      entry_zone_pct: 0.003
+      stop_pct: 0.004
+      tp_ratio: 0.70
+      max_hold_bars: 4
+      rsi_long_max: 45
+      rsi_short_min: 55
+      fire_threshold: 0.75
+      max_vol_ratio: 1.5
+    ema_pullback:
+      pullback_touch_pct: 0.004
+      min_bounce_body_pct: 0.003
+      vol_quiet_mult: 1.2
+      rr_ratio: 2.0
+      max_hold_bars: 10

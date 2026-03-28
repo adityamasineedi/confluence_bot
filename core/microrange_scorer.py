@@ -31,22 +31,8 @@ with open(_CONFIG_PATH) as _f:
 
 _MR = _cfg.get("microrange", {})
 
-_WINDOW_BARS    = int(_MR.get("window_bars",      10))
-_RANGE_MAX_PCT  = float(_MR.get("range_max_pct",   0.010))
-_ENTRY_ZONE_PCT = float(_MR.get("entry_zone_pct",  0.002))
-_STOP_PCT       = float(_MR.get("stop_pct",        0.003))
-_TP_RATIO       = float(_MR.get("tp_ratio",        0.75))
-_MAX_VOL_RATIO  = float(_MR.get("max_vol_ratio",   1.3))
-_RSI_LONG_MAX   = float(_MR.get("rsi_long_max",    40.0))
-_RSI_SHORT_MIN  = float(_MR.get("rsi_short_min",   60.0))
-_COOLDOWN_SECS  = float(_MR.get("cooldown_mins",   20)) * 60.0
-_THRESHOLD      = float(_MR.get("fire_threshold",  0.75))   # 3/4 signals required
-
-# Minimum box width to guarantee RR ≥ 1.5×.
-# TP = range_width × tp_ratio = width × 0.75.  SL = stop_pct × range_low ≈ stop_pct × mid.
-# For RR ≥ 1.5: width × 0.75 / stop_pct ≥ 1.5  →  width_pct ≥ stop_pct × 2.0
-# INVARIANT: _MIN_BOX_PCT must be ≤ range_max_pct (currently 0.004 ≤ 0.005 ✓)
-_MIN_BOX_PCT = _STOP_PCT * 2.0   # 0.002 × 2 = 0.004 (0.4% minimum box width)
+_WINDOW_BARS   = int(_MR.get("window_bars",   10))
+_COOLDOWN_SECS = float(_MR.get("cooldown_mins", 20)) * 60.0
 
 from core.cooldown_store import CooldownStore
 _cd = CooldownStore("MICRORANGE")
@@ -82,6 +68,19 @@ async def score(symbol: str, cache) -> list[dict]:
         mr_stop, mr_tp   — boundary-anchored levels (executor reads these)
         range_low, range_high, range_width_pct
     """
+    from core.symbol_config import get_dynamic_config
+    cfg = get_dynamic_config(symbol, "microrange", cache)
+    _RANGE_MAX_PCT  = float(cfg.get("range_max_pct",  0.010))
+    _ENTRY_ZONE_PCT = float(cfg.get("entry_zone_pct", 0.002))
+    _STOP_PCT       = float(cfg.get("stop_pct",       0.003))
+    _TP_RATIO       = float(cfg.get("tp_ratio",       0.75))
+    _MAX_VOL_RATIO  = float(cfg.get("max_vol_ratio",  1.3))
+    _RSI_LONG_MAX   = float(cfg.get("rsi_long_max",   40.0))
+    _RSI_SHORT_MIN  = float(cfg.get("rsi_short_min",  60.0))
+    _THRESHOLD      = float(cfg.get("fire_threshold", 0.75))
+    _MAX_HOLD       = int(cfg.get("max_hold_bars",    6))
+    _MIN_BOX_PCT    = _STOP_PCT * 2.0
+
     from signals.microrange.detector import (
         detect_micro_range,
         near_range_low,
@@ -139,6 +138,9 @@ async def score(symbol: str, cache) -> list[dict]:
             "range_low":       box["range_low"],
             "range_high":      box["range_high"],
             "range_width_pct": round(box["range_width_pct"] * 100, 4),
+            "_atr_pct":        cfg.get("_atr_pct", 0),
+            "_tier":           cfg.get("_tier", "base"),
+            "_dynamic":        cfg.get("_dynamic", False),
         })
 
     # ── SHORT: price near range_high ───────────────────────────────────────────
@@ -169,6 +171,9 @@ async def score(symbol: str, cache) -> list[dict]:
             "range_low":       box["range_low"],
             "range_high":      box["range_high"],
             "range_width_pct": round(box["range_width_pct"] * 100, 4),
+            "_atr_pct":        cfg.get("_atr_pct", 0),
+            "_tier":           cfg.get("_tier", "base"),
+            "_dynamic":        cfg.get("_dynamic", False),
         })
 
     return results

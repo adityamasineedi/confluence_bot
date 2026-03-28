@@ -29,20 +29,10 @@ with open(_CONFIG_PATH) as _f:
 
 _MR = _cfg.get("microrange", {})
 
-# Default parameters (overridden by tuner via module-level attribute patching)
-_WINDOW_BARS    = int(_MR.get("window_bars",      10))
-_RANGE_MAX_PCT  = float(_MR.get("range_max_pct",   0.010))
-_ENTRY_ZONE_PCT = float(_MR.get("entry_zone_pct",  0.002))
-_STOP_PCT       = float(_MR.get("stop_pct",        0.003))
-_TP_RATIO       = float(_MR.get("tp_ratio",        0.75))
-_MAX_VOL_RATIO  = float(_MR.get("max_vol_ratio",   1.3))
-_RSI_LONG_MAX   = float(_MR.get("rsi_long_max",    40.0))
-_RSI_SHORT_MIN  = float(_MR.get("rsi_short_min",   60.0))
-_COOLDOWN_BARS  = int(_MR.get("cooldown_mins",     20) // 5)   # 20 min → 4 × 5m bars
-_MAX_HOLD       = int(_MR.get("max_hold_bars",      6))
-_USE_RSI_FILTER = bool(_MR.get("use_rsi_filter",   True))
-_THRESHOLD      = float(_MR.get("fire_threshold",   0.75))
-_WARMUP_BARS = _WINDOW_BARS + 22   # need vol MA(20) + window + 1
+_WINDOW_BARS    = int(_MR.get("window_bars",    10))
+_COOLDOWN_BARS  = int(_MR.get("cooldown_mins",  20) // 5)   # 20 min → 4 × 5m bars
+_USE_RSI_FILTER = bool(_MR.get("use_rsi_filter", True))
+_WARMUP_BARS    = _WINDOW_BARS + 22   # need vol MA(20) + window + 1
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -98,6 +88,30 @@ def _force_close(trade: dict, bar: dict) -> dict:
     return {**trade, "exit_ts": bar["ts"], "outcome": "TIMEOUT", "pnl": round(pnl, 4)}
 
 
+# ── Dynamic param helper ───────────────────────────────────────────────────────
+
+def _get_dynamic_params(sym: str, bars_5m: list[dict], bar_idx: int) -> dict:
+    """Calculate ATR-based params at a specific point in the backtest."""
+    from core.symbol_config import get_symbol_config, _calc_atr, get_symbol_tier
+
+    base = get_symbol_config(sym, "microrange")
+    tier = get_symbol_tier(sym)
+
+    window = bars_5m[max(0, bar_idx - 19) : bar_idx + 1]
+    if len(window) < 15:
+        return base
+
+    atr   = _calc_atr(window, period=14)
+    price = window[-1]["c"]
+    if atr <= 0 or price <= 0:
+        return base
+
+    atr_pct = atr / price
+
+    from core.symbol_config import _microrange_dynamic
+    return _microrange_dynamic(base, tier, atr_pct)
+
+
 # ── Main backtest runner ───────────────────────────────────────────────────────
 
 def run(
@@ -149,6 +163,18 @@ def run(
 
         for bar_idx, bar in enumerate(eval_bars):
             global_idx = _WARMUP_BARS + bar_idx   # index into full `bars` list
+
+            params = _get_dynamic_params(sym, bars, global_idx)
+            _RANGE_MAX_PCT  = float(params["range_max_pct"])
+            _ENTRY_ZONE_PCT = float(params["entry_zone_pct"])
+            _STOP_PCT       = float(params["stop_pct"])
+            _TP_RATIO       = float(params["tp_ratio"])
+            _MAX_VOL_RATIO  = float(params.get("max_vol_ratio",  1.3))
+            _RSI_LONG_MAX   = float(params.get("rsi_long_max",   40.0))
+            _RSI_SHORT_MIN  = float(params.get("rsi_short_min",  60.0))
+            _THRESHOLD      = float(params.get("fire_threshold", 0.75))
+            _MAX_HOLD       = int(params.get("max_hold_bars",    6))
+            _MIN_BOX_PCT    = _STOP_PCT * 2.0
 
             # ── 1. Resolve open trade ─────────────────────────────────────────
             if open_trade is not None:

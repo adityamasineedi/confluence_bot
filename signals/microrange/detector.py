@@ -7,6 +7,16 @@ No look-ahead: the box is always computed from the N bars *before* the current b
 (``bars[-window_bars-1:-1]``), so the entry signal only fires after the current bar
 has printed — safe for backtest and live use.
 """
+import os, yaml
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+with open(_CONFIG_PATH) as _f:
+    _cfg = yaml.safe_load(_f)
+_MR = _cfg.get("microrange", {})
+
+_ENTRY_ZONE_PCT = float(_MR.get("entry_zone_pct", 0.002))
+_MAX_VOL_RATIO  = float(_MR.get("max_vol_ratio",  1.3))
+_RSI_LONG_MAX   = float(_MR.get("rsi_long_max",   40.0))
+_RSI_SHORT_MIN  = float(_MR.get("rsi_short_min",  60.0))
 
 
 # ── RSI helper (Wilder smoothing) ─────────────────────────────────────────────
