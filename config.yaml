@@ -52,7 +52,7 @@ thresholds:
   range_long_fire: 0.60
   range_short_fire: 1.10          # disabled: 25% WR in backtest (consistent money-loser)
   crash_short_fire: 0.75          # higher bar for crash shorts
-  pump_long_fire: 0.50            # htf_structure alone = score 0.55 → fires; backtest shows 82% WR
+  pump_long_fire: 0.65            # htf+ob or htf+oi = 0.70 → fires; htf alone = 0.40 → blocked
   breakout_long_fire: 0.60
   breakout_short_fire: 0.75       # raised: breakout short had 0% WR in backtest
 
@@ -121,9 +121,9 @@ weights:
     whale_inflow:   0.05          # reduced
 
   pump:
-    htf_structure: 0.55           # raised: dominant signal, +45% edge, drives pump WR
-    oi_funding:    0.20           # reduced: fired only 2x in backtest
-    order_block:   0.25           # keep: confluence entry point
+    htf_structure: 0.40           # reduced: no longer sole gatekeeper (min_ok requires confluence)
+    oi_funding:    0.30           # raised: OI confirms new money entering the pump
+    order_block:   0.30           # raised: entry timing confirmation — avoids local high entries
 
   breakout_long:
     htf_structure: 0.45           # dominant signal
@@ -288,6 +288,73 @@ zone:
   rr_ratio: 1.5                 # TP = risk × 1.5 (lowered from 2.5× — zones timeout too often)
   max_zone_retests: 1           # only fire on first touch — prior wick into zone invalidates it
 
+# ── OI Spike Fade strategy ───────────────────────────────────────────────────
+# Fades liquidation cascades triggered by sudden OI surges ≥ spike_pct in 2h.
+# Confirmed by wick rejection on the 15m bar + volume spike (liquidation cascade).
+# Skips when OI data unavailable (Binance + Bybit both missing).
+oi_spike:
+  enabled: true
+  spike_pct: 0.15             # OI must increase ≥ 15% within lookback_hours
+  lookback_hours: 2.0         # compare current OI vs 2h ago
+  wick_pct: 0.005             # lower/upper wick must be ≥ 0.5% of price
+  sl_buffer: 0.002            # SL 0.2% beyond the wick tip
+  atr_mult: 2.0               # TP = entry ± ATR(14, 15m) × atr_mult
+  atr_window: 14
+  ema_period: 21              # 15m EMA21 alignment gate
+  rsi_window: 14
+  vol_mult: 1.5               # volume must be ≥ 1.5× 20-bar average
+  threshold: 0.75             # minimum score to fire (oi_spike 0.40 + rejection 0.35)
+  check_interval_secs: 60
+  cooldown_mins: 60           # 1h per-symbol cooldown after entry
+  max_positions: 2            # concentrated-risk strategy
+  rr_ratio: 2.0
+
+# ── VWAP Band Reversion strategy ─────────────────────────────────────────────
+# Mean-reversion entries when price touches the ±2σ rolling VWAP band on 15m
+# and closes back inside.  Blocked in strong trends (ADX > 30) where bands
+# expand continuously and reversion fails.  Target = VWAP midline (TP dynamic).
+vwap_band:
+  enabled: true
+  window_bars: 20             # 20 × 15m = 5h rolling VWAP window
+  band_mult: 2.0              # ±2σ standard deviation bands
+  rsi_long_max: 35            # RSI must be ≤ this for LONG entry (oversold)
+  rsi_short_min: 65           # RSI must be ≥ this for SHORT entry (overbought)
+  adx_max: 30                 # block if 4H ADX > 30 (too trendy for mean reversion)
+  vol_max_mult: 1.5           # volume must be ≤ this × 20-bar avg (not a dump)
+  check_interval_secs: 30     # 15m bars — poll every 30s to catch rejections early
+  cooldown_mins: 30           # per-symbol cooldown after entry
+  max_positions: 3
+  sl_buffer_pct: 0.002        # SL 0.2% beyond the ±2σ band edge
+
+# ── Break of Structure / Change of Character strategy ────────────────────────
+# Trades confirmed 1H structure breaks (swing high/low closes) with volume.
+# Low frequency (15-40 per symbol per year), high quality, 2.5× RR minimum.
+# Skips PUMP and CRASH regimes — structure breaks there are unreliable.
+bos:
+  enabled: true
+  pivot_n: 3                  # bars each side to confirm a swing point
+  lookback_bars: 50           # 1H candles to scan for swing structure
+  vol_confirm_mult: 1.3       # break bar volume ≥ this × 20-bar average
+  max_extension_pct: 0.02     # block if price already 2% beyond break level
+  check_interval_secs: 60
+  cooldown_mins: 60
+  max_positions: 2            # low frequency — cap at 2 simultaneous positions
+  rr_ratio: 2.5
+  sl_buffer_pct: 0.001        # SL 0.1% beyond the prior swing point
+
+# ── Fair Value Gap Fill strategy ─────────────────────────────────────────────
+# Entry into unfilled 1H price imbalance zones (FVGs).
+# Fires when price returns to a virgin gap with HTF alignment + RSI confirmation.
+fvg:
+  enabled: true
+  min_gap_pct: 0.003          # FVG must be ≥ 0.3% wide (filters micro-noise)
+  check_interval_secs: 60     # align with 1H bar close
+  cooldown_mins: 45           # per-symbol cooldown after entry
+  max_positions: 3            # max simultaneous FVG trades
+  rr_ratio: 2.0               # TP = entry ± dist × 2.0
+  sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
+  lookback_bars: 50           # scan last 50 1H candles for FVGs
+
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
 # Mean-reversion scalp inside a tight 5m consolidation box.
 # 3-6 trades per sideways session; highest-frequency component.
@@ -310,7 +377,9 @@ microrange:
   use_rsi_filter: true      # set false to disable RSI gate
   fire_threshold: 1.0       # ALL 4 signals must fire (tightened from 0.75 / 3-of-4)
   check_interval_secs: 30   # how often the microrange loop scans
-  risk_pct: 0.01            # 1% equity risk per trade
+  risk_pct: 0.01            # 1% equity risk per trade (normal conditions)
+  drawdown_reduce_threshold: 0.15  # when account DD exceeds 15%, halve risk to 0.5%
+  max_drawdown_pause: 0.20         # pause all micro-range entries if DD exceeds 20%
 
 # ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
 long_short_ratio:

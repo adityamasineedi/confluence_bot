@@ -126,10 +126,14 @@ def passes_trend_long_filters(symbol: str, cache) -> bool:
         log.info("TREND LONG filter BLOCKED %s: Gate2 +DI=%.1f -DI=%.1f gap<%.1f", symbol, plus_di, minus_di, _DI_MIN_EDGE)
         return False
 
-    # Gate 3: ADX must be rising (avoid exhausted trends — key fix for bad months)
-    if not _adx_is_rising(symbol, cache):
-        log.info("TREND LONG filter BLOCKED %s: Gate3 ADX declining", symbol)
-        return False
+    # Gate 3: ADX must be rising (avoid exhausted trends — key fix for bad months).
+    # Exception: in PUMP regime, ADX can flatten during parabolic moves while price
+    # still trends strongly — skip the ADX gate to avoid blocking valid pump entries.
+    from core.regime_detector import detect_regime
+    if str(detect_regime(symbol, cache)) != "PUMP":
+        if not _adx_is_rising(symbol, cache):
+            log.info("TREND LONG filter BLOCKED %s: Gate3 ADX declining", symbol)
+            return False
 
     # Gate 4: BTC not in parabolic overextension
     if not _btc_not_overextended(cache):
@@ -196,11 +200,12 @@ def passes_pump_filters(symbol: str, cache) -> bool:
     """Return True when all PUMP LONG hard filters are satisfied.
 
     PUMP is already validated by regime detection (price > EMA50, +12% 7-day).
-    Filters here are lightweight: just block extreme greed and illiquidity.
+    Filters here block extreme greed, illiquidity, and parabolic blow-off tops.
 
     Gates:
     1. Funding not extreme positive (avoid buying into a fully crowded long)
     2. 24H volume above minimum liquidity threshold
+    3. Price not >20% above 1D EMA50 (blow-off top / exhaustion guard)
     """
     # Gate 1: Funding not in extreme greed territory
     funding = cache.get_funding_rate(symbol)
@@ -212,6 +217,14 @@ def passes_pump_filters(symbol: str, cache) -> bool:
     vol_24h = cache.get_vol_24h(symbol)
     if vol_24h is not None and vol_24h < _MIN_24H_VOL:
         return False
+
+    # Gate 3: Price not extended >20% above 1D EMA50 (blow-off top guard)
+    closes_1d = cache.get_closes(symbol, window=60, tf="1d")
+    if len(closes_1d) >= 50:
+        ema50 = sum(closes_1d[-50:]) / 50
+        if closes_1d[-1] > ema50 * 1.20:
+            log.info("PUMP filter BLOCKED %s: Gate3 price >20%% above 1D EMA50 (%.4f > %.4f)", symbol, closes_1d[-1], ema50 * 1.20)
+            return False
 
     return True
 

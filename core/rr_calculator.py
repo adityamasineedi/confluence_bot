@@ -80,12 +80,22 @@ def compute(symbol: str, direction: str, cache) -> tuple[float, float, float]:
     return entry, round(stop, 8), round(take_profit, 8)
 
 
-def position_size(entry: float, stop: float, cache, symbol: str = "") -> float:
+def position_size(
+    entry: float,
+    stop: float,
+    cache,
+    symbol: str = "",
+    risk_pct: float | None = None,
+) -> float:
     """Return position size in base currency units.
 
     Formula: size = (balance × risk_pct) / |entry − stop|
     Capped at max_position_size_usdt / entry.
     Rounded to the symbol's Binance lot-size step precision.
+
+    Args:
+        risk_pct: override the config risk fraction (e.g. for drawdown scaling).
+                  None = use the global _RISK_PER_TRADE from config.
     """
     if entry == 0.0 or stop == 0.0 or entry == stop:
         return 0.0
@@ -98,7 +108,8 @@ def position_size(entry: float, stop: float, cache, symbol: str = "") -> float:
         else:
             return 0.0
 
-    risk_usdt = min(balance * _RISK_PER_TRADE, _MAX_RISK_USDT)
+    effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
+    risk_usdt = min(balance * effective_risk, _MAX_RISK_USDT)
     # Inflate stop distance by round-trip fees so risk_usdt is the true net loss
     # including commissions (entry + exit taker fees).
     fee_per_unit     = entry * _TAKER_FEE_RT

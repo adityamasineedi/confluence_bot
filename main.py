@@ -146,6 +146,38 @@ async def main() -> None:
         )
         log.info("1H inside bar flip enabled")
 
+    # 6b3a0. OI Spike Fade (fades liquidation cascades on OI surge + wick rejection)
+    if cfg.get("oi_spike", {}).get("enabled", False):
+        from core.oi_spike_loop import run_oi_spike_loop
+        extra_tasks.append(
+            asyncio.create_task(run_oi_spike_loop(symbols, cache))
+        )
+        log.info("OI Spike Fade strategy enabled")
+
+    # 6b3a. VWAP Band Reversion (15m ±2σ band touch rejections — mean reversion)
+    if cfg.get("vwap_band", {}).get("enabled", False):
+        from core.vwap_band_loop import run_vwap_band_loop
+        extra_tasks.append(
+            asyncio.create_task(run_vwap_band_loop(symbols, cache))
+        )
+        log.info("VWAP Band Reversion strategy enabled")
+
+    # 6b3b. BOS/CHoCH strategy (1H structure break entries)
+    if cfg.get("bos", {}).get("enabled", False):
+        from core.bos_loop import run_bos_loop
+        extra_tasks.append(
+            asyncio.create_task(run_bos_loop(symbols, cache))
+        )
+        log.info("BOS/CHoCH strategy enabled")
+
+    # 6b3c. FVG Fill strategy (scans every 60s for 1H imbalance zone retests)
+    if cfg.get("fvg", {}).get("enabled", False):
+        from core.fvg_loop import run_fvg_loop
+        extra_tasks.append(
+            asyncio.create_task(run_fvg_loop(symbols, cache))
+        )
+        log.info("FVG Fill strategy enabled")
+
     # 6b4. Funding rate harvest (wakes before each 8h settlement window)
     if cfg.get("funding_harvest", {}).get("enabled", False):
         from core.funding_harvest_loop import run_funding_harvest_loop

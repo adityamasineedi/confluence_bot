@@ -144,6 +144,10 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "SWEEP":       ("sw_stop",  "sw_tp"),
         "EMA_PULLBACK":("ep_stop",  "ep_tp"),
         "ZONE":        ("zn_stop",  "zn_tp"),
+        "FVG":         ("fvg_stop", "fvg_tp"),
+        "BOS":         ("bos_stop", "bos_tp"),
+        "VWAPBAND":    ("vb_stop",  "vb_tp"),
+        "OISPIKE":     ("os_stop",  "os_tp"),
     }
 
     # Minimum RR requirement per strategy (scalps operate at lower RR)
@@ -156,6 +160,10 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "SWEEP":        2.0,
         "EMA_PULLBACK": 2.0,
         "ZONE":         2.0,
+        "FVG":          2.0,
+        "BOS":          2.5,
+        "VWAPBAND":     1.5,
+        "OISPIKE":      2.0,
     }
 
     stop_key, tp_key = _PRESET_LEVELS.get(regime, (None, None))
@@ -187,7 +195,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
                  direction, symbol, entry, stop, tp)
         return None
 
-    qty = position_size(entry, stop, cache, symbol)
+    # Allow per-signal risk override (e.g. drawdown scaling from strategy loops)
+    signal_risk_pct = score_dict.get("risk_pct")
+    qty = position_size(entry, stop, cache, symbol, risk_pct=signal_risk_pct)
     if qty <= 0.0:
         log.warning("Position size 0 for %s %s — skipping", direction, symbol)
         return None
@@ -265,6 +275,18 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         set_cooldown(symbol)
     elif regime == "ZONE":
         from .zone_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "FVG":
+        from .fvg_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "BOS":
+        from .bos_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "VWAPBAND":
+        from .vwap_band_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "OISPIKE":
+        from .oi_spike_scorer import set_cooldown
         set_cooldown(symbol)
 
     return order

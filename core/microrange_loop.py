@@ -2,10 +2,17 @@
 
 Sequence each tick
 ------------------
-1. For each symbol, score it via microrange_scorer.score().
-2. Log every evaluation to the signals DB.
-3. If fire=True and max_positions not exceeded: execute via executor.execute_signal().
-4. Set per-symbol cooldown after each entry.
+1. Check account drawdown — pause or reduce risk if DD thresholds are breached.
+2. For each symbol, score it via microrange_scorer.score().
+3. Log every evaluation to the signals DB.
+4. If fire=True and max_positions not exceeded: execute via executor.execute_signal().
+5. Set per-symbol cooldown after each entry.
+
+Drawdown protection
+-------------------
+  DD > drawdown_reduce_threshold (15%): risk halved (0.5% per trade instead of 1%).
+  DD > max_drawdown_pause (20%):        all entries skipped this tick — logged as WARNING.
+  Peak equity is tracked in memory; resets to current balance if bot restarts above prior peak.
 """
 import asyncio
 import logging
@@ -19,6 +26,13 @@ with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
 _MR_CFG = _cfg.get("microrange", {})
+
+_RISK_PCT_NORMAL  = float(_MR_CFG.get("risk_pct", 0.01))
+_DD_REDUCE        = float(_MR_CFG.get("drawdown_reduce_threshold", 0.15))
+_DD_PAUSE         = float(_MR_CFG.get("max_drawdown_pause", 0.20))
+
+# Peak equity tracker — module-level so it persists across ticks within one process run
+_peak_equity: float = 0.0
 
 
 async def run_microrange_loop(symbols: list[str], cache) -> None:
@@ -63,6 +77,31 @@ def _regime_allows(symbol: str, direction: str, cache) -> bool:
     return True
 
 
+def _drawdown_risk(cache) -> tuple[float | None, float]:
+    """Return (current_drawdown_fraction, effective_risk_pct).
+
+    current_drawdown_fraction: 0.0 = at peak, 0.20 = 20% below peak.
+    Returns None as drawdown when balance is unavailable.
+    """
+    global _peak_equity
+    balance = cache.get_account_balance()
+    if balance <= 0.0:
+        return None, _RISK_PCT_NORMAL
+
+    if balance > _peak_equity:
+        _peak_equity = balance
+
+    if _peak_equity <= 0.0:
+        return None, _RISK_PCT_NORMAL
+
+    dd = (_peak_equity - balance) / _peak_equity
+
+    if dd >= _DD_REDUCE:
+        # Halve risk during drawdown — less exposure while recovering
+        return dd, _RISK_PCT_NORMAL / 2.0
+    return dd, _RISK_PCT_NORMAL
+
+
 async def _tick(symbols: list[str], cache, max_positions: int) -> None:
     from core.microrange_scorer import score as mr_score, set_cooldown
     from core.executor import execute_signal
@@ -70,6 +109,24 @@ async def _tick(symbols: list[str], cache, max_positions: int) -> None:
 
     logger  = TradeLogger()
     open_count = 0   # approximate: we track fired this tick to cap max_positions
+
+    # ── Drawdown guard ────────────────────────────────────────────────────────
+    dd, effective_risk = _drawdown_risk(cache)
+    if dd is not None and dd >= _DD_PAUSE:
+        log.warning(
+            "MicroRange PAUSED — drawdown %.1f%% exceeds pause threshold %.0f%%"
+            " (peak=%.2f  current=%.2f)",
+            dd * 100, _DD_PAUSE * 100,
+            _peak_equity, cache.get_account_balance(),
+        )
+        return
+    if dd is not None and dd >= _DD_REDUCE:
+        log.info(
+            "MicroRange risk REDUCED — drawdown %.1f%% > %.0f%% threshold"
+            "  risk %.2f%% → %.2f%%",
+            dd * 100, _DD_REDUCE * 100,
+            _RISK_PCT_NORMAL * 100, effective_risk * 100,
+        )
 
     for symbol in symbols:
         if open_count >= max_positions:
@@ -104,14 +161,18 @@ async def _tick(symbols: list[str], cache, max_positions: int) -> None:
                 continue
 
             log.info(
-                "MicroRange FIRE %s %s  score=%.2f  width=%.3f%%  sl=%.6f  tp=%.6f",
+                "MicroRange FIRE %s %s  score=%.2f  width=%.3f%%"
+                "  sl=%.6f  tp=%.6f  risk_pct=%.2f%%",
                 score_dict["direction"], symbol,
                 score_dict["score"],
                 score_dict.get("range_width_pct", 0),
                 score_dict.get("mr_stop", 0),
                 score_dict.get("mr_tp", 0),
+                effective_risk * 100,
             )
 
+            # Inject drawdown-scaled risk so executor uses the right position size
+            score_dict["risk_pct"] = effective_risk
             order = await execute_signal(score_dict, cache)
             set_cooldown(symbol)   # always cool down after a fire attempt
             if order:

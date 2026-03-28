@@ -419,17 +419,30 @@ async def dashboard() -> HTMLResponse:
   .pos { color: #22c55e; } .neg { color: #ef4444; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
            font-size: 0.7rem; font-weight: 600; }
-  .badge-TREND    { background: #1d4ed8; color: #bfdbfe; }
-  .badge-RANGE    { background: #713f12; color: #fef3c7; }
-  .badge-CRASH    { background: #7f1d1d; color: #fecaca; }
-  .badge-PUMP     { background: #14532d; color: #bbf7d0; }
-  .badge-BREAKOUT { background: #1d4ed8; color: #bfdbfe; }
-  .badge-LONG     { background: #14532d; color: #bbf7d0; }
-  .badge-SHORT    { background: #7f1d1d; color: #fecaca; }
-  .badge-FIRE     { background: #7c3aed; color: #ede9fe; }
-  .badge-WIN      { background: #14532d; color: #bbf7d0; }
-  .badge-LOSS     { background: #7f1d1d; color: #fecaca; }
-  .badge-TIMEOUT  { background: #713f12; color: #fef3c7; }
+  .badge-TREND      { background: #1d4ed8; color: #bfdbfe; }
+  .badge-RANGE      { background: #713f12; color: #fef3c7; }
+  .badge-CRASH      { background: #7f1d1d; color: #fecaca; }
+  .badge-PUMP       { background: #14532d; color: #bbf7d0; }
+  .badge-BREAKOUT   { background: #1d4ed8; color: #bfdbfe; }
+  .badge-LONG       { background: #14532d; color: #bbf7d0; }
+  .badge-SHORT      { background: #7f1d1d; color: #fecaca; }
+  .badge-FIRE       { background: #7c3aed; color: #ede9fe; }
+  .badge-WIN        { background: #14532d; color: #bbf7d0; }
+  .badge-LOSS       { background: #7f1d1d; color: #fecaca; }
+  .badge-TIMEOUT    { background: #713f12; color: #fef3c7; }
+  /* Strategy-specific regime badges */
+  .badge-LEADLAG    { background: #0f3460; color: #93c5fd; }
+  .badge-MICRORANGE { background: #3b0764; color: #e9d5ff; }
+  .badge-SESSION    { background: #164e63; color: #a5f3fc; }
+  .badge-INSIDEBAR  { background: #1c1917; color: #d6d3d1; }
+  .badge-FUNDING    { background: #0c4a6e; color: #7dd3fc; }
+  .badge-SWEEP      { background: #422006; color: #fed7aa; }
+  .badge-EMA_PULLBACK { background: #052e16; color: #86efac; }
+  .badge-ZONE       { background: #1e1b4b; color: #c7d2fe; }
+  .badge-FVG        { background: #14532d; color: #6ee7b7; }
+  .badge-BOS        { background: #7c2d12; color: #fdba74; }
+  .badge-VWAPBAND   { background: #134e4a; color: #5eead4; }
+  .badge-OISPIKE    { background: #4a044e; color: #f5d0fe; }
 
   /* ── KPI cards (shared by signals + tradelog panels) ── */
   .tl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
@@ -608,6 +621,21 @@ async def dashboard() -> HTMLResponse:
   .sltp-box { font-size: 0.77rem; color: #9ca3af; line-height: 1.6; }
   .sltp-box code { background: #12141e; border-radius: 3px; padding: 1px 5px;
     font-size: 0.72rem; color: #34d399; font-family: monospace; }
+  /* Backtest data requirements block */
+  .bt-req { background: #0c0e17; border: 1px solid #1e2130; border-radius: 6px;
+    padding: 8px 12px; margin-top: 4px; font-size: 0.76rem; }
+  .bt-req-row { display: flex; justify-content: space-between; align-items: baseline;
+    padding: 4px 0; border-bottom: 1px solid #1e2130; gap: 8px; }
+  .bt-req-row:last-of-type { border-bottom: none; }
+  .bt-req-lbl { color: #4b5563; font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: .05em; white-space: nowrap; flex-shrink: 0; }
+  .bt-req-val { color: #d1d5db; font-weight: 500; text-align: right; }
+  .bt-req-val.ok  { color: #22c55e; }
+  .bt-req-val.opt { color: #fbbf24; }
+  .bt-req-val.warn{ color: #f87171; }
+  .bt-cmd { display: block; background: #12141e; border-radius: 4px;
+    padding: 6px 10px; margin-top: 8px; color: #86efac;
+    font-family: monospace; font-size: 0.70rem; word-break: break-all; }
   @media (max-width: 600px) { .strat-grid { grid-template-columns: 1fr; }
     .param-grid { grid-template-columns: 1fr; } .strat-name { font-size: 0.85rem; } }
 </style>
@@ -662,8 +690,8 @@ async def dashboard() -> HTMLResponse:
   <section style="padding-top:20px">
     <h2>Recent Trades</h2>
     <table>
-      <thead><tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th><th>Size</th><th>PnL</th><th>Status</th></tr></thead>
-      <tbody id="trades-body"><tr><td colspan="9" style="color:#4b5563">loading…</td></tr></tbody>
+      <thead><tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th><th>Size</th><th>PnL</th><th>Status</th></tr></thead>
+      <tbody id="trades-body"><tr><td colspan="10" style="color:#4b5563">loading…</td></tr></tbody>
     </table>
   </section>
 </div>
@@ -721,6 +749,10 @@ async def dashboard() -> HTMLResponse:
         <option value="session">Session Trap</option>
         <option value="insidebar">Inside Bar</option>
         <option value="funding">Funding Harvest</option>
+        <option value="fvg">FVG Fill</option>
+        <option value="bos">BOS / CHoCH</option>
+        <option value="vwap_band">VWAP Band Reversion</option>
+        <option value="oi_spike">OI Spike Fade</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
@@ -768,9 +800,10 @@ async def dashboard() -> HTMLResponse:
 <div id="panel-strategies" class="panel">
   <h1>&#128218; Strategy Reference</h1>
   <p class="intro">
-    All 9 active strategies running in confluence_bot &mdash; what each one does, when it fires, which signals it uses,
+    All strategies running in confluence_bot &mdash; what each one does, when it fires, which signals it uses,
     and how stops &amp; targets are calculated. Strategies run independently as asyncio tasks; the executor deduplicates
     entries via <code style="background:#12141e;padding:1px 5px;border-radius:3px;font-size:0.72rem;color:#34d399">_pending_deals</code> and DB guard so only one position per symbol+direction can be open at a time.
+    <br><span style="color:#f59e0b;font-size:0.77rem">&#9888; HARD gate = blocks fire regardless of score; no-data defaults to block (conservative). Soft signals contribute to score.</span>
   </p>
   <div class="strat-grid">
 
@@ -811,32 +844,42 @@ async def dashboard() -> HTMLResponse:
       </div>
       <div class="strat-desc">
         Mean-reversion inside a tight 5-minute consolidation box. Detects when price compresses into a low-volatility range
-        on the last N completed 5m bars, then fades the move back to the opposite boundary. Highest-frequency strategy in the bot.
+        on the last N completed 5m bars, then fades the move back to the opposite boundary.
+        Tightened heavily to reduce overtrading: all 4 signals required (threshold = 1.0).
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
-        Finds a box where (high − low) / mid ≤ 1.0% over the last 10 bars. Price near <em>range_low</em> → LONG target = range_high × 0.75.
-        Price near <em>range_high</em> → SHORT target = range_low × 0.75. SL placed just outside the boundary (not a fixed ATR multiple)
-        so RR stays ~1.5–2.5× regardless of where the fill lands inside the entry zone.
-        Blocked in CRASH (no longs) and PUMP (no shorts). In TREND regime, only trades with the 4H DI bias.
+        Finds a box where (high − low) / mid ≤ <strong>0.5%</strong> over the last 10 bars (tightened from 1.0%).
+        Entry zone within 0.1% of boundary. SL just outside the boundary.
+        Blocked in CRASH (no longs) and PUMP (no shorts). In TREND regime, only trades with the 4H DI+ bias.
+        <strong>Invariant:</strong> stop_pct × 2 ≤ range_max_pct must hold or live scorer rejects all boxes.
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Signals (equal weight 0.25 each — ALL 4 required)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">box_detected</span><span class="sig-desc">Tight range box confirmed on last 10 bars (range_max_pct ≤ 1.0%). Always True when scored.</span></div>
-        <div class="sig-row"><span class="sig-name">entry_zone</span><span class="sig-desc">Price within 0.2% of range_low (LONG) or range_high (SHORT). Always True when scored.</span></div>
+        <div class="sig-row"><span class="sig-name">box_detected</span><span class="sig-desc">Tight range box confirmed on last 10 bars (range_max_pct ≤ 0.5%). Always True when scored.</span></div>
+        <div class="sig-row"><span class="sig-name">entry_zone</span><span class="sig-desc">Price within 0.1% of range_low (LONG) or range_high (SHORT). Always True when scored.</span></div>
         <div class="sig-row"><span class="sig-name">volume_ok</span><span class="sig-desc">Current bar volume ≤ 1.3× 20-bar average. High-volume bars signal potential breakout, not mean reversion.</span></div>
-        <div class="sig-row"><span class="sig-name">rsi_aligned</span><span class="sig-desc">RSI ≤ 40 for LONG (oversold dip), RSI ≥ 60 for SHORT (overbought peak).</span></div>
+        <div class="sig-row"><span class="sig-name">rsi_aligned</span><span class="sig-desc">RSI ≤ 35 for LONG (tightened from 40), RSI ≥ 65 for SHORT (tightened from 60). Stronger confirmation needed.</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
-        LONG: <code>SL = range_low × (1 − stop_pct)</code> &nbsp; <code>TP = range_low + range_width × 0.75</code><br>
-        SHORT: <code>SL = range_high × (1 + stop_pct)</code> &nbsp; <code>TP = range_high − range_width × 0.75</code>
+        LONG: <code>SL = range_low × (1 − 0.2%)</code> &nbsp; <code>TP = range_low + range_width × 0.75</code><br>
+        SHORT: <code>SL = range_high × (1 + 0.2%)</code> &nbsp; <code>TP = range_high − range_width × 0.75</code>
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (3 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">1.5×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">1.0 (ALL 4)</div></div>
+        <div class="param-row"><div class="param-label">Box max width</div><div class="param-val yellow">0.5% of mid</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">20 min / symbol</div></div>
-        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">30 s</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">5m OHLCV &mdash; min 400 bars (32 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">32 &times; 5m (vol MA-20 + window + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:5m"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-07 &rarr; 2024-01 (sideways + range-bound)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy microrange --from-date 2023-07-01 --to-date 2024-01-31</code>
       </div>
     </div>
 
@@ -852,34 +895,49 @@ async def dashboard() -> HTMLResponse:
       <div class="strat-desc">
         Trend-continuation entries at EMA21 on the 15m chart, filtered by 4H macro direction.
         Catches the "healthy pullback in a trend" setup &mdash; price dips to the fast EMA, volume quiets,
-        then closes back in trend direction. High frequency relative to main scorer.
+        then closes back in trend direction with a confirmed bounce candle.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
         4H macro filter first: bullish = close &gt; 4H EMA50 OR 4H EMA21 &gt; EMA50 (for LONG).
-        On 15m: EMA21 &gt; EMA50 (uptrend intact). Prior bar <em>touched</em> EMA21 (within 0.4%). Current close
-        is back above EMA21 (bounce confirmed). RSI in healthy zone 35–60 (not overbought on entry).
-        Pullback bar volume ≤ 1.2× average (weak sellers = sustainable pullback).
-        SL is placed below the pullback bar's actual low (not a fixed EMA offset), preventing wicks from clipping the stop.
+        On 15m: EMA21 &gt; EMA50 (uptrend intact). Prior bar <em>touched</em> EMA21 (within <strong>0.2%</strong>). Current bar
+        must close back in trend direction with body ≥ 0.2% AND be at least 0.2% above EMA21 (LONG) —
+        these ensure a real reversal candle, not a scratch. <strong>Volume hard gate:</strong> bounce bar volume must exceed
+        pullback bar volume (buyers stepping in). RSI in healthy zone 35–60. SL placed below pullback bar low (LONG) or above pullback bar high (SHORT).
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Scored signals (equal weight 0.33 each — max 1.0)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">htf_aligned</span><span class="sig-desc">4H macro direction agrees: close &gt; 4H EMA50 or 4H EMA21 &gt; EMA50 (LONG). Always True when scored.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">htf_aligned</span><span class="sig-desc">4H macro direction agrees: close &gt; 4H EMA50 or 4H EMA21 &gt; EMA50 (LONG). Always True when scored.</span></div>
         <div class="sig-row"><span class="sig-name">ema_structure</span><span class="sig-desc">15m EMA21 &gt; EMA50 (LONG) or &lt; EMA50 (SHORT). Confirms trend on entry timeframe.</span></div>
-        <div class="sig-row"><span class="sig-name">pullback_touch</span><span class="sig-desc">Previous bar low within 0.4% of EMA21 (LONG) or previous bar high within 0.4% (SHORT). Always True when scored.</span></div>
-        <div class="sig-row"><span class="sig-name">bounce_confirm</span><span class="sig-desc">Current 15m candle closed back above EMA21 (LONG) / below EMA21 (SHORT) with body ≥ 0.1%.</span></div>
+        <div class="sig-row"><span class="sig-name">pullback_touch</span><span class="sig-desc">Previous bar within 0.2% of EMA21 (tightened from 0.4%). Always True when scored.</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">bounce_confirm</span><span class="sig-desc">Close back in trend direction, candle body ≥ 0.2%, close ≥ 0.2% away from EMA21. No marginal wicks.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">vol_confirm</span><span class="sig-desc">Bounce bar volume &gt; pullback bar volume. Buyers/sellers stepping in confirms the reversal is real.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
         LONG: <code>SL = min(EMA21 × 0.998,  pullback_bar_low × 0.999)</code><br>
         SHORT: <code>SL = max(EMA21 × 1.002,  pullback_bar_high × 1.001)</code><br>
-        <code>TP = entry ± dist × 2.5</code>
+        <code>TP = entry ± dist × 1.5</code> &nbsp; (reduced from 2.5× to cut timeouts)
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (3 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">2.0×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (all 3 scored)</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">1.5×</div></div>
+        <div class="param-row"><div class="param-label">Pullback touch</div><div class="param-val">0.2% of EMA21</div></div>
+        <div class="param-row"><div class="param-label">Min bounce body</div><div class="param-val">0.2%</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">45 min / symbol</div></div>
-        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">60 s</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">15m OHLCV &mdash; min 500 bars (45 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; macro EMA50/EMA21 alignment gate</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">45 &times; 15m (EMA50 + vol MA-20 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:15m"] &nbsp; ohlcv["SYM:4h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 (trending market, mixed regimes)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy ema_pullback --from-date 2023-01-01 --to-date 2024-12-31</code>
       </div>
     </div>
 
@@ -889,24 +947,25 @@ async def dashboard() -> HTMLResponse:
         <div class="strat-name">&#9889; Lead-Lag (BTC → Alt)</div>
         <div class="strat-badges">
           <span class="sb sb-any">ANY REGIME</span>
-          <span class="sb sb-tf">5M · 1H</span>
+          <span class="sb sb-tf">5M (BTC + Alt)</span>
         </div>
       </div>
       <div class="strat-desc">
-        Exploits the structural lag between BTC and correlated alts. When BTC breaks its 1H VWAP
-        with a confirmed volume spike, alts that have not yet moved are entered in the same direction
-        before the correlated move propagates.
+        Exploits the structural lag between BTC and correlated alts. When BTC breaks its rolling
+        <strong>5m VWAP</strong> with a confirmed volume spike, alts that have not yet moved are entered in the
+        same direction before the correlated move propagates.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
-        BTC is the dominant price-discovery asset. Alt positions are taken immediately after BTC's
-        VWAP breakout, with a strength bonus proportional to BTC's distance above/below VWAP.
+        BTC is the dominant price-discovery asset. The loop monitors BTC's 5m bars for a VWAP break on
+        elevated volume. Alt positions are taken immediately, with a score bonus proportional to BTC's
+        distance above/below VWAP.
         <strong>Hard gate:</strong> the alt must NOT have already moved ≥ max_alt_premove_pct (lag window closed).
         Very tight SL (0.2%) because the entry should be near the alt's last price before propagation.
       </div>
       <div class="strat-section">Signals (equal weight 0.25 each)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">btc_vwap_break</span><span class="sig-desc">BTC crossed its rolling 1H VWAP. Always True when scored (pre-filtered before calling scorer).</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">btc_vwap_break</span><span class="sig-desc">BTC crossed its rolling 5m VWAP. Always True when scored (pre-filtered before calling scorer).</span><span class="sig-hard">HARD</span></div>
         <div class="sig-row"><span class="sig-name">vol_spike</span><span class="sig-desc">BTC 5m bar volume ≥ 1.5× 20-bar average. Institutional participation confirms the break.</span></div>
         <div class="sig-row"><span class="sig-name">alt_not_premoved</span><span class="sig-desc">Alt price has NOT already moved ≥ max_alt_premove_pct. Entry window still open.</span><span class="sig-hard">HARD</span></div>
         <div class="sig-row"><span class="sig-name">cooldown_ok</span><span class="sig-desc">Symbol not in post-trade cooldown window (30 min).</span><span class="sig-hard">HARD</span></div>
@@ -923,45 +982,70 @@ async def dashboard() -> HTMLResponse:
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">30 min / symbol</div></div>
         <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">30 s</div></div>
       </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">5m OHLCV &mdash; BTCUSDT <em>and</em> all alt symbols</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">50 &times; 5m (VWAP window + vol MA)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["BTCUSDT:5m"] &nbsp; ohlcv["SYM:5m"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Special requirement</span><span class="bt-req-val warn">BTCUSDT must be in the symbols list — it is the lead indicator</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy leadlag --from-date 2023-01-01 --to-date 2024-12-31</code>
+      </div>
     </div>
 
     <!-- ── SESSION ────────────────────────────── -->
-    <div class="strat-card indep">
+    <div class="strat-card range">
       <div class="strat-head">
         <div class="strat-name">&#9200; Session Open Trap</div>
         <div class="strat-badges">
-          <span class="sb sb-any">ANY REGIME</span>
+          <span class="sb sb-range">RANGE / BREAKOUT</span>
           <span class="sb sb-tf">5M</span>
         </div>
       </div>
       <div class="strat-desc">
         Captures the classic session open fake-out reversal. At Asia (01:00 UTC), London (08:00 UTC), and New York (13:00 UTC)
         opens, market makers frequently run stops in one direction before reversing. This strategy enters the reversal
-        exactly 15 minutes into the session when direction is clear.
+        exactly 15 minutes into the session when direction is clear. Only fires in RANGE or BREAKOUT regime — trend environments
+        are less likely to reverse cleanly at session opens.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
         At T+15 min the 5m bars show whether the session "fake move" occurred: price spiked one way but is now
-        reversing back. <strong>Logic:</strong> if first 15 min moved ≥ 0.3% in one direction but is now pulling back,
-        enter the reversal. SL = session extreme + 0.2% buffer (above the spike for longs, below for shorts).
+        reversing back. <strong>Logic:</strong> if first 15 min moved ≥ 0.6% in one direction but is now pulling back,
+        enter the reversal. Range gate: session range ≤ 0.7% of open — confirms a clean sweep, not a gap or
+        trend continuation. SL = session extreme + 0.2% buffer.
         The entry is available for only ~15 minutes &mdash; the loop fires once per session window, not on a polling interval.
       </div>
       <div class="strat-section">Signals (equal weight 0.25 each)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">fake_move_ok</span><span class="sig-desc">|session_move| ≥ 0.3% — sufficient price displacement to confirm a stop-hunt occurred.</span><span class="sig-hard">HARD</span></div>
-        <div class="sig-row"><span class="sig-name">move_strong</span><span class="sig-desc">|session_move| ≥ 0.6% — stronger displacement = higher reversal conviction.</span></div>
-        <div class="sig-row"><span class="sig-name">reversal_bar</span><span class="sig-desc">Bar −3 already reversing: 5m candle body ≥ 0.1% in the opposite direction.</span></div>
-        <div class="sig-row"><span class="sig-name">range_compact</span><span class="sig-desc">Session range (high − low) / open ≤ 0.9%. Tight range = clean sweep, not a gap or trend continuation.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">fake_move_ok</span><span class="sig-desc">|session_move| ≥ 0.6% — sufficient price displacement to confirm a stop-hunt occurred.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">move_strong</span><span class="sig-desc">|session_move| ≥ 0.9% — even stronger displacement = higher reversal conviction.</span></div>
+        <div class="sig-row"><span class="sig-name">reversal_bar</span><span class="sig-desc">Last 5m candle body ≥ 0.1% in the opposite direction. Momentum already turning.</span></div>
+        <div class="sig-row"><span class="sig-name">range_compact</span><span class="sig-desc">Session range (high − low) / open ≤ 0.7% (tightened from 0.9%). Excludes gaps and trend bursts.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
         <code>SL = session_extreme + 0.2% buffer</code> &nbsp; <code>TP = entry + |entry − SL| × 1.5</code>
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.50 (2 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">1.2×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (3 of 4)</div></div>
+        <div class="param-row"><div class="param-label">Min move</div><div class="param-val">0.6% (was 0.3%)</div></div>
+        <div class="param-row"><div class="param-label">Range compact</div><div class="param-val">≤ 0.7% (was 0.9%)</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">60 min / symbol / session</div></div>
         <div class="param-row"><div class="param-label">Sessions (UTC)</div><div class="param-val">01:00 · 08:00 · 13:00</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">5m OHLCV &mdash; min 300 bars per symbol</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">5 &times; 5m (minimal — session opens are time-anchored)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:5m"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Note</span><span class="bt-req-val">Low-frequency: ~3 entry windows per day &mdash; use long date ranges for statistical validity</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 (&ge;500 session windows)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy session --from-date 2023-01-01 --to-date 2024-12-31</code>
       </div>
     </div>
 
@@ -977,21 +1061,26 @@ async def dashboard() -> HTMLResponse:
       <div class="strat-desc">
         Detects multi-bar compression zones on the 1H chart (inside bars where each bar fits within the previous).
         Enters at the compression zone boundary when price touches it from inside, targeting a move to the opposite boundary.
-        Signals a "coiled spring" about to release.
+        Requires a genuine "coiled spring" with at least 3 inside bars, declining volume, and entry near the zone POC.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
-        Scans last 16 × 1H bars for ≥ 2 consecutive inside bars (each bar's high &lt; prior high AND low &gt; prior low).
-        Zone = (zone_low, zone_high). Entry: price touches zone_low (LONG) or zone_high (SHORT) within 0.2%.
+        Scans last 16 × 1H bars for ≥ <strong>3</strong> consecutive inside bars (tightened from 2). Each bar's high &lt; prior high
+        AND low &gt; prior low forms the zone = (zone_low, zone_high). <strong>Zone width cap: ≤ 1.0%</strong> of mid price — excludes
+        wide, low-quality compressions. Volume must decline through the inside bar run (sellers exhausted).
+        Entry: price touches zone_low (LONG) or zone_high (SHORT) within 0.2%, AND is within 0.5% of the zone POC.
         SL placed just outside the zone boundary + 0.2% buffer.
-        Regime gate: TREND → LONG only; CRASH → SHORT only; PUMP → LONG only.
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Scored signals (equal weight 0.5 each — max 1.0)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">entry_zone</span><span class="sig-desc">Price within 0.2% of zone_low (LONG) or zone_high (SHORT). Hard entry gate.</span><span class="sig-hard">HARD</span></div>
-        <div class="sig-row"><span class="sig-name">strong_compression</span><span class="sig-desc">3 or more inside bars (vs minimum 2). More bars = stronger coiling, higher conviction.</span></div>
-        <div class="sig-row"><span class="sig-name">volume_declining</span><span class="sig-desc">Average volume of inside bars &lt; volume before the compression. Quiet = accumulation, not distribution.</span></div>
-        <div class="sig-row"><span class="sig-name">near_poc</span><span class="sig-desc">Price within 1% of the zone's volume Point of Control. Entering near POC increases probability of support/resistance holding.</span></div>
+        <div class="sig-row"><span class="sig-name">entry_zone</span><span class="sig-desc">Price within 0.2% of zone_low (LONG) or zone_high (SHORT). Always True when scored.</span></div>
+        <div class="sig-row"><span class="sig-name">near_poc</span><span class="sig-desc">Price within 0.5% of zone POC (tightened from 1.0%). Entering near volume gravity = higher hold probability.</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">strong_compression</span><span class="sig-desc">≥ 3 consecutive inside bars required (raised from 2). 2-bar compressions are too common and unreliable.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">volume_declining</span><span class="sig-desc">Avg inside-bar volume &lt; volume of the bar before the run. Quiet compression only — rising volume = distribution.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">zone_ok</span><span class="sig-desc">Zone width ≤ 1.0% of mid price (tightened from 1.5%). Wide zones have too much internal noise.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
@@ -999,10 +1088,22 @@ async def dashboard() -> HTMLResponse:
         SHORT: <code>SL = zone_high × (1 + 0.2%)</code> &nbsp; <code>TP = zone_high − zone_range × 1.5</code>
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.50 (2 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">1.2×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (both scored — near_poc required)</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">1.5×</div></div>
+        <div class="param-row"><div class="param-label">Min inside bars</div><div class="param-val">3 (was 2)</div></div>
+        <div class="param-row"><div class="param-label">Max zone width</div><div class="param-val">1.0% of mid (was 1.5%)</div></div>
+        <div class="param-row"><div class="param-label">Near POC</div><div class="param-val">0.5% (was 1.0%)</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">60 min / symbol</div></div>
-        <div class="param-row"><div class="param-label">Max zone width</div><div class="param-val">1.5% of mid</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">1H OHLCV &mdash; min 200 bars (16 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">20 &times; 1H (16 lookback + vol MA + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:1h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 (range-heavy months preferred)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy insidebar --from-date 2023-01-01 --to-date 2024-12-31</code>
       </div>
     </div>
 
@@ -1012,37 +1113,56 @@ async def dashboard() -> HTMLResponse:
         <div class="strat-name">&#128176; Funding Rate Harvest</div>
         <div class="strat-badges">
           <span class="sb sb-any">ANY REGIME</span>
-          <span class="sb sb-tf">Window-based</span>
+          <span class="sb sb-tf">5M + 4H + Funding</span>
         </div>
       </div>
       <div class="strat-desc">
-        Systematic income from extreme perpetual funding rates. When funding is extreme (e.g. +0.1% per 8h),
+        Systematic income from extreme perpetual funding rates. When funding is extreme (e.g. +0.08% per 8h),
         longs are paying shorts heavily. By entering SHORT before settlement and exiting after, the bot earns
         the funding payment plus a potential price mean-reversion bonus.
+        <strong>Trend filter prevents counter-trend fades in strong directional markets.</strong>
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
         Binance settles funding every 8h at 00:00, 08:00, 16:00 UTC. The strategy wakes 30 minutes before each window.
-        <strong>Direction logic:</strong> positive funding (&gt;0.05%) → SHORT (collect from longs).
-        Negative funding (&lt;−0.05%) → LONG (collect from shorts).
-        <strong>Break-even WR at 0.1% funding with 0.5% SL / 0.8% TP = 38.5%.</strong> Actual WR is typically 55–65% as funding reverts post-settlement.
+        <strong>Direction logic:</strong> positive funding (&gt;0.08%) → SHORT (collect from longs).
+        Negative funding (&lt;−0.08%) → LONG (collect from shorts).
+        <strong>Trend filter (hard gate):</strong> if 4H EMA21 signals a trend, only take trades <em>aligned</em> with the macro bias
+        (e.g., no shorting into a bull trend just because positive funding is high — market can stay funded for weeks).
+        <strong>Break-even WR at 0.1% funding with 0.5% SL / 0.8% TP = 38.5%.</strong>
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Scored signals (equal weight 0.25 each)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">rate_extreme</span><span class="sig-desc">|funding_rate| ≥ 0.05% per 8h. Minimum threshold to justify the trade.</span><span class="sig-hard">HARD</span></div>
-        <div class="sig-row"><span class="sig-name">rate_very_high</span><span class="sig-desc">|funding_rate| ≥ 0.10% per 8h. Elevated extreme = higher expected value.</span></div>
+        <div class="sig-row"><span class="sig-name">rate_extreme</span><span class="sig-desc">|funding_rate| ≥ 0.08% per 8h (raised from 0.05%). Minimum threshold to justify the trade.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">rate_very_high</span><span class="sig-desc">|funding_rate| ≥ 0.15% per 8h. Elevated extreme = higher expected mean-reversion bonus.</span></div>
         <div class="sig-row"><span class="sig-name">in_window</span><span class="sig-desc">Within 30 min before OR 15 min after a settlement window. Outside this window = no trade.</span><span class="sig-hard">HARD</span></div>
         <div class="sig-row"><span class="sig-name">cooldown_ok</span><span class="sig-desc">No recent harvest on this symbol (8h cooldown = full funding cycle).</span><span class="sig-hard">HARD</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">trend_ok</span><span class="sig-desc">In TREND regime: trade direction must match 4H EMA21 bias (LONG or NEUTRAL). Blocks shorting into a bull run or longing into a bear run.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
         Fixed: <code>SL = entry × (1 ∓ 0.5%)</code> &nbsp; <code>TP = entry × (1 ± 0.8%)</code> &nbsp; RR = 1.6×
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.50 (2 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">1.2×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.50 (2 of 4 scored)</div></div>
+        <div class="param-row"><div class="param-label">Min rate</div><div class="param-val">0.08% / 8h (was 0.05%)</div></div>
+        <div class="param-row"><div class="param-label">Trend filter</div><div class="param-val">4H EMA21 bias check</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">8h / symbol</div></div>
         <div class="param-row"><div class="param-label">Windows (UTC)</div><div class="param-val">00:00 · 08:00 · 16:00</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">5m OHLCV &mdash; for entry/exit timing around settlement windows</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; trend filter (EMA21 macro bias)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val warn">Funding rate history &mdash; required (fetched from Binance /fundingRate endpoint)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">50 &times; 5m + 26 &times; 4H (EMA21 warmup)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:5m"] &nbsp; ohlcv["SYM:4h"] &nbsp; funding["SYM"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Note</span><span class="bt-req-val">Only 3 entry windows/day — need 6+ months for &ge;50 trades</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 (volatile funding periods)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy funding --from-date 2023-01-01 --to-date 2024-12-31</code>
       </div>
     </div>
 
@@ -1056,23 +1176,27 @@ async def dashboard() -> HTMLResponse:
         </div>
       </div>
       <div class="strat-desc">
-        Detects institutional stop-hunts: a 15m candle whose wick pierces a prior swing high/low but whose
-        body closes back inside the range. This "sweep and reverse" pattern indicates smart money absorbed
+        Detects institutional stop-hunts: a 15m candle whose wick pierces a prior swing high/low by at least 0.5%
+        but whose body closes back inside the range. This "sweep and reverse" pattern indicates smart money absorbed
         retail stops and is now driving price the opposite direction.
         Works in all regimes — specifically fills the bear-market gap where main TREND scorer rarely fires.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
-        Looks for a 15m bar where: <strong>wick</strong> exceeds the recent swing high/low (stop-hunt), but the
-        <strong>close</strong> is back inside (rejection). Volume on the sweep bar must be ≥ 1.4× average (institutional).
-        4H structure is checked as a soft filter only — the strategy fires even in downtrends as long as the 4H isn't <em>strongly</em> opposed.
+        Looks for a 15m bar where: <strong>wick</strong> extends ≥ 0.5% beyond the recent swing high/low (stop-hunt), but the
+        <strong>close</strong> is back inside (rejection). Volume on the sweep bar must be ≥ 2.0× average — raised from
+        1.4× to ensure only high-conviction institutional moves qualify, filtering out normal volatility sweeps.
+        4H structure check is a <strong>hard gate</strong> — if 4H trend is strongly opposed, the trade is blocked.
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Scored signals (equal weight 0.33 each — max 1.0)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">sweep_detected</span><span class="sig-desc">Wick through swing level, close back inside. Core pattern — always True when scored.</span><span class="sig-hard">HARD</span></div>
-        <div class="sig-row"><span class="sig-name">volume_spike</span><span class="sig-desc">Sweep candle volume ≥ 1.4× 20-bar average. Institutional participation = real reversal, not noise.</span></div>
+        <div class="sig-row"><span class="sig-name">sweep_detected</span><span class="sig-desc">Wick ≥ 0.5% through swing level, close back inside. Core pattern — always True when scored.</span></div>
+        <div class="sig-row"><span class="sig-name">volume_spike</span><span class="sig-desc">Sweep candle volume ≥ 2.0× 20-bar average (raised from 1.4×). High volume confirms institutional participation.</span></div>
         <div class="sig-row"><span class="sig-name">rsi_zone</span><span class="sig-desc">RSI ≤ 50 for LONG (dipped, not overbought), RSI ≥ 50 for SHORT (spiked, not oversold).</span></div>
-        <div class="sig-row"><span class="sig-name">htf_no_block</span><span class="sig-desc">4H close within ±1.5% of 4H EMA20 (no strong opposing trend). Soft filter — defaults True if data missing.</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">htf_no_block</span><span class="sig-desc">4H trend not strongly opposing. If 4H is in a strong trend against the trade direction, the gate blocks — previously a soft filter.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
@@ -1080,10 +1204,21 @@ async def dashboard() -> HTMLResponse:
         <code>TP = entry ± dist × 2.0</code>
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (3 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">2.0×</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (all 3 scored)</div></div>
+        <div class="param-row"><div class="param-label">Min wick</div><div class="param-val">0.5% beyond swing</div></div>
+        <div class="param-row"><div class="param-label">Volume</div><div class="param-val">≥ 2.0× avg (was 1.4×)</div></div>
         <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">30 min / symbol</div></div>
         <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">30 s</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">15m OHLCV &mdash; min 600 bars (55 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; HTF macro bias hard gate (EMA21)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">55 &times; 15m (swing lookback 50 + pivot_n 5 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:15m"] &nbsp; ohlcv["SYM:4h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-05 &rarr; 2024-11 (volatile + trending — sweeps frequent)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy sweep --from-date 2023-05-01 --to-date 2024-11-30</code>
       </div>
     </div>
 
@@ -1098,33 +1233,281 @@ async def dashboard() -> HTMLResponse:
       </div>
       <div class="strat-desc">
         Highest-quality, lowest-frequency signal. Identifies 4H demand (bullish origin) and supply (bearish origin) zones —
-        where price previously left impulsively — and enters on the <em>first retest</em> of that zone.
+        where price previously left impulsively (≥ 3% move) — and enters on the <em>first retest only</em> of that zone.
         First retests historically have the highest reversal probability before the zone degrades.
       </div>
       <div class="strat-section">How it works</div>
       <div class="why-box">
-        A demand zone = 4H base candle just before a strong bullish impulse. A supply zone = 4H base before a strong bearish impulse.
-        When price returns to the zone for the first time, enter in the origin direction.
-        OI confirmation distinguishes <em>new position building</em> (healthy) from <em>forced short-covering / long-liquidation</em> (unsustainable).
+        A demand zone = 4H base candles just before a strong bullish impulse (≥ 3%). A supply zone = 4H base before a strong
+        bearish impulse (≥ 3%). <strong>Zone width cap: ≤ 1.5% of mid price</strong> — wide consolidations are excluded.
+        <strong>First retest only:</strong> any prior wick that entered the zone from the wrong side invalidates it — the
+        zone's virgin status is the key edge. When price returns for the <em>first time</em>, enter in the origin direction.
+        OI is confirmed as a hard gate — if OI data is unavailable, the trade is blocked.
         1H confirmation adds a lower-timeframe entry signal.
       </div>
-      <div class="strat-section">Signals (equal weight 0.25 each)</div>
+      <div class="strat-section">Scored signals (equal weight 0.33 each — max 1.0)</div>
       <div class="sig-list">
-        <div class="sig-row"><span class="sig-name">zone_active</span><span class="sig-desc">Valid 4H demand/supply zone detected and price is currently retesting it. Always True when scored.</span><span class="sig-hard">HARD</span></div>
-        <div class="sig-row"><span class="sig-name">htf_1h_confirm</span><span class="sig-desc">1H close confirms direction at the zone (bullish in demand, bearish in supply). Embedded in detection.</span></div>
-        <div class="sig-row"><span class="sig-name">oi_supporting</span><span class="sig-desc">LONG: OI rising over last 3 snapshots (new longs building). SHORT: OI falling (longs liquidating).</span></div>
+        <div class="sig-row"><span class="sig-name">zone_active</span><span class="sig-desc">Valid 4H demand/supply zone detected and price is currently retesting it. Always True when scored.</span></div>
+        <div class="sig-row"><span class="sig-name">htf_1h_confirm</span><span class="sig-desc">1H close confirms direction at the zone (bullish close in demand, bearish close in supply).</span></div>
         <div class="sig-row"><span class="sig-name">rsi_not_extreme</span><span class="sig-desc">Demand LONG: RSI &lt; 65 (not yet overbought). Supply SHORT: RSI &gt; 35 (not yet oversold).</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">oi_supporting</span><span class="sig-desc">LONG: OI rising over last 3 snapshots (new longs building). SHORT: OI falling (longs liquidating). No data = blocked.</span><span class="sig-hard">HARD</span></div>
       </div>
       <div class="strat-section">SL / TP</div>
       <div class="sltp-box">
         <code>SL = beyond zone boundary + buffer</code> &nbsp; (zone invalidation = thesis is wrong)<br>
+        <code>TP = entry ± dist × 1.5</code> &nbsp; (reduced from 2.0× to cut timeouts)
+      </div>
+      <div class="param-grid">
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (all 3 scored)</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">1.5× (was 2.0×)</div></div>
+        <div class="param-row"><div class="param-label">Min impulse</div><div class="param-val">3% (was 2%)</div></div>
+        <div class="param-row"><div class="param-label">Zone width max</div><div class="param-val">1.5% of mid</div></div>
+        <div class="param-row"><div class="param-label">Retests</div><div class="param-val">1st retest only</div></div>
+        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">120 min / symbol</div></div>
+        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">60 s</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">4H OHLCV &mdash; zone origin detection (impulse candles)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">1H OHLCV &mdash; 1H confirmation close at zone</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val warn">OI snapshots &mdash; hard gate; oi["SYM"] from fetcher</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">50 &times; 4H (zone detection lookback + impulse scan)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:4h"] &nbsp; ohlcv["SYM:1h"] &nbsp; oi["SYM"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Note</span><span class="bt-req-val">Extremely low frequency — favour wide date ranges for significance</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 + stress: 2022-05 &rarr; 2022-06</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy zone --from-date 2023-01-01 --to-date 2024-12-31</code>
+      </div>
+    </div>
+
+    <!-- ── FVG FILL ──────────────────────────────── -->
+    <div class="strat-card trend">
+      <div class="strat-head">
+        <div class="strat-name">&#9643; FVG Fill</div>
+        <div class="strat-badges">
+          <span class="sb sb-trend">TREND / RANGE</span>
+          <span class="sb sb-tf">1H · 4H</span>
+        </div>
+      </div>
+      <div class="strat-desc">
+        Trades price returning into unfilled 1H Fair Value Gaps (3-bar price imbalances). When price moves so fast
+        that one candle's high is lower than a candle two bars later's low, an inefficiency zone is created.
+        Price frequently returns to fill these gaps before continuing. Only virgin gaps (not yet retested) are traded.
+      </div>
+      <div class="strat-section">How it works</div>
+      <div class="why-box">
+        Bullish FVG: <code>bar[k].low &gt; bar[k-2].high</code> — gap between two candles. Price re-entering from above
+        signals institutional support in the imbalance zone. 4H EMA21 must confirm direction. Entry = first bar that
+        closes inside the gap. Gap is marked touched and never re-traded once the signal fires.
+      </div>
+      <div class="strat-section">Scored signals (0.33 each — threshold 0.67)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">fvg_detected</span><span class="sig-desc">Virgin 1H FVG found and price is currently inside it. Hard gate — always True when scored.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">htf_aligned</span><span class="sig-desc">4H EMA21 agrees: price above EMA21 for LONG, below for SHORT.</span></div>
+        <div class="sig-row"><span class="sig-name">rsi_confirm</span><span class="sig-desc">RSI ≤ 45 for LONG (not overbought), ≥ 55 for SHORT (not oversold).</span></div>
+      </div>
+      <div class="strat-section">SL / TP</div>
+      <div class="sltp-box">
+        <code>LONG:  SL = gap_low × (1 − 0.2%)</code> &nbsp; (just below the gap bottom)<br>
+        <code>SHORT: SL = gap_high × (1 + 0.2%)</code><br>
         <code>TP = entry ± dist × 2.0</code>
       </div>
       <div class="param-grid">
-        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (3 of 4)</div></div>
-        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">2.0×</div></div>
-        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">120 min / symbol</div></div>
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.67 (fvg + one confirm)</div></div>
+        <div class="param-row"><div class="param-label">Min gap size</div><div class="param-val">0.3% of price</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">2.0×</div></div>
+        <div class="param-row"><div class="param-label">Lookback</div><div class="param-val">50 × 1H bars</div></div>
+        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">45 min / symbol</div></div>
         <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">60 s</div></div>
+        <div class="param-row"><div class="param-label">Max positions</div><div class="param-val">3</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">1H OHLCV &mdash; min 400 bars (55 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; HTF EMA21 alignment (LONG above, SHORT below)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">55 &times; 1H (lookback 50 + EMA21 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:1h"] &nbsp; ohlcv["SYM:4h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Backtest engine</span><span class="bt-req-val ok">backtest/fvg_engine.py</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2023-12 (target: WR &gt; 50%, PF &gt; 1.5)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy fvg --from-date 2023-01-01 --to-date 2023-12-31</code>
+      </div>
+    </div>
+
+    <!-- ── BOS / CHoCH ──────────────────────────── -->
+    <div class="strat-card trend">
+      <div class="strat-head">
+        <div class="strat-name">&#9654; BOS / CHoCH</div>
+        <div class="strat-badges">
+          <span class="sb sb-trend">TREND / RANGE</span>
+          <span class="sb sb-tf">1H · 4H</span>
+        </div>
+      </div>
+      <div class="strat-desc">
+        Trades confirmed 1H market structure breaks. A Break of Structure (BOS) = price closes beyond the last
+        confirmed swing high/low with volume — trend continuation. A Change of Character (CHoCH) = structure break
+        opposing the prevailing trend — early reversal entry. Low frequency (15–40/year), high quality.
+      </div>
+      <div class="strat-section">How it works</div>
+      <div class="why-box">
+        Swing points confirmed by <strong>pivot_n = 3 bars</strong> each side. BOS LONG: prior close &lt; swing_high,
+        current close &gt; swing_high + volume ≥ 1.3× average. 4H HTF alignment is a hard requirement —
+        HH+HL for LONG, LH+LL for SHORT. Entry blocked if price already 2% extended past the break level.
+        SL anchored to the prior swing low (the last structure point that would invalidate the thesis).
+      </div>
+      <div class="strat-section">Scored signals (threshold 0.75)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">bos_confirmed</span><span class="sig-desc">Close beyond swing point with prior close inside. Weight 0.50. Hard gate.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">htf_4h</span><span class="sig-desc">4H structure aligned (HH+HL or LH+LL). Weight 0.25. Hard gate.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">choch</span><span class="sig-desc">Change of Character — structural reversal opposing the prior trend. Weight 0.15.</span></div>
+        <div class="sig-row"><span class="sig-name">volume_spike</span><span class="sig-desc">Break bar volume ≥ 1.3× 20-bar average. Weight 0.10.</span></div>
+      </div>
+      <div class="strat-section">SL / TP</div>
+      <div class="sltp-box">
+        <code>SL = prior_swing_point × (1 ∓ 0.1%)</code> &nbsp; (just beyond the last confirmed structure)<br>
+        <code>TP = entry ± dist × 2.5</code>
+      </div>
+      <div class="param-grid">
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (BOS + HTF = exact)</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">2.5×</div></div>
+        <div class="param-row"><div class="param-label">Pivot N</div><div class="param-val">3 bars each side</div></div>
+        <div class="param-row"><div class="param-label">Max extension</div><div class="param-val">2% beyond break</div></div>
+        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">60 min / symbol</div></div>
+        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">60 s</div></div>
+        <div class="param-row"><div class="param-label">Max positions</div><div class="param-val">2</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">1H OHLCV &mdash; min 400 bars (55 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; HTF structure (HH+HL or LH+LL) hard gate</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">55 &times; 1H (pivot lookback 50 + pivot_n 3 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:1h"] &nbsp; ohlcv["SYM:4h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Backtest engine</span><span class="bt-req-val ok">backtest/bos_engine.py</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Note</span><span class="bt-req-val">Low frequency (15&ndash;40/year/symbol) &mdash; use 12+ month window</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2023-01 &rarr; 2024-12 + breakout stress: Oct&ndash;Dec 2024</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy bos --from-date 2023-01-01 --to-date 2024-12-31</code>
+      </div>
+    </div>
+
+    <!-- ── VWAP BAND REVERSION ───────────────────── -->
+    <div class="strat-card range">
+      <div class="strat-head">
+        <div class="strat-name">&#8776; VWAP Band Reversion</div>
+        <div class="strat-badges">
+          <span class="sb sb-range">RANGE / TREND</span>
+          <span class="sb sb-tf">15M · 4H</span>
+        </div>
+      </div>
+      <div class="strat-desc">
+        Mean-reversion from the ±2σ rolling VWAP bands on 15m. When price touches the outer band and closes
+        back inside (rejection, not breakdown), it typically reverts to the VWAP midline. Blocked in strong trends
+        (4H ADX ≥ 30) where bands keep expanding and reversion fails.
+      </div>
+      <div class="strat-section">How it works</div>
+      <div class="why-box">
+        Rolling 20-bar VWAP (5H window). Variance = <code>Σ(vol × (tp − vwap)²) / Σvol</code>. ±2σ bands.
+        Entry on the bar that <em>closes back inside</em> the band after a touch — rejection, not breakout.
+        TP is the <strong>dynamic VWAP midline</strong> (recalculated each bar), not a fixed target. Inline RR check
+        requires |vwap − entry| / |entry − SL| ≥ 1.5 to block entries where the midline is too close.
+      </div>
+      <div class="strat-section">Scored signals (0.33 each — threshold 0.67)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">band_touch</span><span class="sig-desc">Previous bar touched ±2σ band, current bar closed back inside. Hard gate.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">rsi_confirm</span><span class="sig-desc">RSI ≤ 35 for LONG (oversold), ≥ 65 for SHORT (overbought).</span></div>
+        <div class="sig-row"><span class="sig-name">regime_aligned</span><span class="sig-desc">RANGE or TREND regime — mean reversion valid. PUMP/CRASH blocked.</span></div>
+      </div>
+      <div class="strat-section">Hard gates (block fire regardless of score)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">not_trending</span><span class="sig-desc">4H ADX &lt; 30. Strong trends cause bands to expand continuously — reversion fails.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">rr_inline</span><span class="sig-desc">|VWAP − entry| / |entry − SL| ≥ 1.5. VWAP midline must be far enough away to be worth it.</span><span class="sig-hard">HARD</span></div>
+      </div>
+      <div class="strat-section">SL / TP</div>
+      <div class="sltp-box">
+        <code>SL = band_level ± 0.2%</code> &nbsp; (just beyond the 2σ band edge)<br>
+        <code>TP = VWAP midline (dynamic)</code> &nbsp; — recalculated each bar, not fixed at entry
+      </div>
+      <div class="param-grid">
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.67 (band + one confirm)</div></div>
+        <div class="param-row"><div class="param-label">VWAP window</div><div class="param-val">20 × 15m (5H rolling)</div></div>
+        <div class="param-row"><div class="param-label">Band mult</div><div class="param-val">±2σ standard deviations</div></div>
+        <div class="param-row"><div class="param-label">ADX block</div><div class="param-val">≥ 30 on 4H</div></div>
+        <div class="param-row"><div class="param-label">Min RR</div><div class="param-val yellow">1.5× (dynamic target)</div></div>
+        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">30 min / symbol</div></div>
+        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">30 s</div></div>
+        <div class="param-row"><div class="param-label">Max positions</div><div class="param-val">3</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">15m OHLCV &mdash; min 400 bars (26 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val">4H OHLCV &mdash; ADX gate (blocks when 4H ADX &ge; 30)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">26 &times; 15m (VWAP window 20 + RSI 14 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:15m"] &nbsp; ohlcv["SYM:4h"]</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Backtest engine</span><span class="bt-req-val ok">backtest/vwap_band_engine.py</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2024-04 &rarr; 2024-09 (ranging) + stress: 2021 H1</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy vwap_band --from-date 2024-04-01 --to-date 2024-09-30</code>
+      </div>
+    </div>
+
+    <!-- ── OI SPIKE FADE ──────────────────────────── -->
+    <div class="strat-card indep">
+      <div class="strat-head">
+        <div class="strat-name">&#9651; OI Spike Fade</div>
+        <div class="strat-badges">
+          <span class="sb sb-any">ANY REGIME</span>
+          <span class="sb sb-tf">15M</span>
+        </div>
+      </div>
+      <div class="strat-desc">
+        Fades liquidation cascades triggered by sudden OI surges. When open interest spikes ≥ 15% in 2 hours,
+        retail FOMO has piled in. A simultaneous wick rejection on the 15m candle confirms those positions are
+        being immediately liquidated — creating a high-probability reversal entry.
+      </div>
+      <div class="strat-section">How it works</div>
+      <div class="why-box">
+        Aggregates Binance + Bybit OI for spike detection (cross-exchange confirmation reduces false signals).
+        OI spike alone is not enough — the 15m candle must show a <strong>wick rejection</strong> (wick ≥ 0.5%
+        of price AND wick &gt; body size × 0.5). Volume must also spike ≥ 1.5× average (confirms cascade, not drift).
+        EMA21 gates direction: bounces above EMA = LONG; fades below EMA = SHORT.
+        When OI history is unavailable in backtests, a volume proxy (≥ 2.5× avg) is used instead.
+      </div>
+      <div class="strat-section">Scored signals (threshold 0.75)</div>
+      <div class="sig-list">
+        <div class="sig-row"><span class="sig-name">oi_spike</span><span class="sig-desc">OI increased ≥ 15% in 2H (Binance + Bybit aggregated). Weight 0.40. Hard gate.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">price_rejection</span><span class="sig-desc">15m wick ≥ 0.5% and wick &gt; body × 0.5 — candle rejected at extremes. Weight 0.35. Hard gate.</span><span class="sig-hard">HARD</span></div>
+        <div class="sig-row"><span class="sig-name">ema_aligned</span><span class="sig-desc">Price above EMA21 for LONG bounce, below for SHORT fade. Weight 0.15.</span></div>
+        <div class="sig-row"><span class="sig-name">rsi_zone</span><span class="sig-desc">RSI 35–55 for LONG (not overbought), 45–65 for SHORT (not oversold). Weight 0.10.</span></div>
+      </div>
+      <div class="strat-section">SL / TP</div>
+      <div class="sltp-box">
+        <code>LONG:  SL = candle.low  × (1 − 0.2%)</code> &nbsp; (just below the wick extreme)<br>
+        <code>SHORT: SL = candle.high × (1 + 0.2%)</code><br>
+        <code>TP = entry ± ATR(14, 15m) × 2.0</code>
+      </div>
+      <div class="param-grid">
+        <div class="param-row"><div class="param-label">Threshold</div><div class="param-val green">0.75 (oi_spike 0.40 + rejection 0.35)</div></div>
+        <div class="param-row"><div class="param-label">OI spike min</div><div class="param-val">≥ 15% in 2H</div></div>
+        <div class="param-row"><div class="param-label">Wick min</div><div class="param-val">0.5% of price</div></div>
+        <div class="param-row"><div class="param-label">RR ratio</div><div class="param-val yellow">2.0× (ATR-based)</div></div>
+        <div class="param-row"><div class="param-label">Volume</div><div class="param-val">≥ 1.5× avg</div></div>
+        <div class="param-row"><div class="param-label">Cooldown</div><div class="param-val purple">60 min / symbol</div></div>
+        <div class="param-row"><div class="param-label">Check interval</div><div class="param-val">60 s</div></div>
+        <div class="param-row"><div class="param-label">Max positions</div><div class="param-val">2</div></div>
+      </div>
+      <div class="strat-section">Backtest Data Requirements</div>
+      <div class="bt-req">
+        <div class="bt-req-row"><span class="bt-req-lbl">Primary bars</span><span class="bt-req-val">15m OHLCV &mdash; min 300 bars (20 warmup + eval period)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Secondary bars</span><span class="bt-req-val opt">None required</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">External data</span><span class="bt-req-val opt">OI history optional &mdash; oi["SYM:binance"] &nbsp; (volume proxy used when absent)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Warmup bars</span><span class="bt-req-val">20 &times; 15m (ATR-14 + EMA-21 + buffer)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Fetcher keys</span><span class="bt-req-val">ohlcv["SYM:15m"] &nbsp; oi["SYM"] (optional)</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Backtest engine</span><span class="bt-req-val ok">backtest/oi_spike_engine.py</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">OI proxy note</span><span class="bt-req-val warn">Without OI history, volume &ge; 2.5&times; avg is used — results will over-signal vs live</span></div>
+        <div class="bt-req-row"><span class="bt-req-lbl">Recommended period</span><span class="bt-req-val">2022-05 &rarr; 2022-11 (LUNA + FTX liq cascades)</span></div>
+        <code class="bt-cmd">python -m backtest.run --strategy oi_spike --from-date 2022-05-01 --to-date 2022-11-30</code>
       </div>
     </div>
 
@@ -1212,6 +1595,85 @@ async def dashboard() -> HTMLResponse:
 
   </div><!-- /strat-grid -->
 
+  <!-- ── BACKTEST TIMEFRAMES REFERENCE ─────────────────────────────────────── -->
+  <div style="margin-top:32px; padding:20px 24px; background:#0d1117; border:1px solid #1e2535; border-radius:10px;">
+    <div style="font-size:0.82rem; font-weight:600; color:#94a3b8; letter-spacing:.08em; text-transform:uppercase; margin-bottom:14px;">
+      Backtest Data Requirements — per Strategy Engine
+    </div>
+    <table style="width:100%; border-collapse:collapse; font-size:0.78rem; color:#c9d1d9;">
+      <thead>
+        <tr style="border-bottom:1px solid #1e2535; color:#64748b; font-size:0.70rem; text-transform:uppercase; letter-spacing:.06em;">
+          <th style="text-align:left; padding:6px 10px; font-weight:500;">Strategy</th>
+          <th style="text-align:left; padding:6px 10px; font-weight:500;">Engine file</th>
+          <th style="text-align:left; padding:6px 10px; font-weight:500;">OHLCV timeframes</th>
+          <th style="text-align:left; padding:6px 10px; font-weight:500;">Other data</th>
+          <th style="text-align:left; padding:6px 10px; font-weight:500;">Eval bar</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid #161b22;">
+          <td style="padding:7px 10px; color:#e2e8f0;">MicroRange</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/run.py</td>
+          <td style="padding:7px 10px;">5m</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">5m</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22; background:#0a0f1a;">
+          <td style="padding:7px 10px; color:#e2e8f0;">EMA Pullback</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/ema_pullback_engine.py</td>
+          <td style="padding:7px 10px;">15m <span style="color:#64748b;">+</span> 4h</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">15m</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22;">
+          <td style="padding:7px 10px; color:#e2e8f0;">Lead-Lag</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">tests/backtest_signals.py</td>
+          <td style="padding:7px 10px;">BTC 5m <span style="color:#64748b;">+</span> Alt 5m</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">5m</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22; background:#0a0f1a;">
+          <td style="padding:7px 10px; color:#e2e8f0;">Session Trap</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/run.py (session)</td>
+          <td style="padding:7px 10px;">5m</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">5m (session windows)</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22;">
+          <td style="padding:7px 10px; color:#e2e8f0;">Inside Bar Flip</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/insidebar_engine.py</td>
+          <td style="padding:7px 10px;">1h</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">1h</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22; background:#0a0f1a;">
+          <td style="padding:7px 10px; color:#e2e8f0;">Funding Harvest</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/funding_harvest_engine.py</td>
+          <td style="padding:7px 10px;">5m <span style="color:#64748b;">+</span> 4h</td>
+          <td style="padding:7px 10px;">Funding rate (8h)</td>
+          <td style="padding:7px 10px;">Settlement windows</td>
+        </tr>
+        <tr style="border-bottom:1px solid #161b22;">
+          <td style="padding:7px 10px; color:#e2e8f0;">Sweep Reversal</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/sweep_engine.py</td>
+          <td style="padding:7px 10px;">15m <span style="color:#64748b;">+</span> 4h</td>
+          <td style="padding:7px 10px; color:#64748b;">—</td>
+          <td style="padding:7px 10px;">15m</td>
+        </tr>
+        <tr style="background:#0a0f1a;">
+          <td style="padding:7px 10px; color:#e2e8f0;">HTF Zone Retest</td>
+          <td style="padding:7px 10px; font-family:monospace; color:#7dd3fc;">backtest/zone_engine.py</td>
+          <td style="padding:7px 10px;">4h <span style="color:#64748b;">+</span> 1h</td>
+          <td style="padding:7px 10px;">OI snapshots</td>
+          <td style="padding:7px 10px;">1h (at zone touch)</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px; font-size:0.70rem; color:#374151;">
+      All engines replay bar-by-bar with no look-ahead. Entry is taken at bar close. OI/funding data is time-sliced to the current bar cursor.
+    </div>
+  </div>
+
   <div style="padding: 24px 0 8px; font-size: 0.72rem; color: #374151; text-align: center;">
     All strategies share a common executor — duplicate entries blocked via in-memory <code style="background:#12141e;padding:1px 4px;border-radius:3px;color:#34d399">_pending_deals</code>
     + DB cross-process guard. Trade monitor polls every 30 s to detect TP/SL hits on the exchange.
@@ -1275,11 +1737,25 @@ async function refreshTradelog() {
 
   // Regime → fire threshold map (mirrors config.yaml thresholds)
   const THRESHOLDS = {
+    // Main regime strategies (direction-specific)
     TREND_LONG: 0.65, TREND_SHORT: 0.82,
     RANGE_LONG: 0.60, RANGE_SHORT: 0.65,
     CRASH_SHORT: 0.75,
     PUMP_LONG: 0.50,
     BREAKOUT_LONG: 0.60, BREAKOUT_SHORT: 0.75,
+    // Independent strategy loops (same threshold for both directions)
+    LEADLAG_LONG: 0.65,    LEADLAG_SHORT: 0.65,
+    MICRORANGE_LONG: 0.67, MICRORANGE_SHORT: 0.67,
+    SESSION_LONG: 0.60,    SESSION_SHORT: 0.60,
+    INSIDEBAR_LONG: 0.67,  INSIDEBAR_SHORT: 0.67,
+    FUNDING_LONG: 0.70,    FUNDING_SHORT: 0.70,
+    SWEEP_LONG: 0.75,      SWEEP_SHORT: 0.75,
+    EMA_PULLBACK_LONG: 0.67, EMA_PULLBACK_SHORT: 0.67,
+    ZONE_LONG: 0.75,       ZONE_SHORT: 0.75,
+    FVG_LONG: 0.67,        FVG_SHORT: 0.67,
+    BOS_LONG: 0.75,        BOS_SHORT: 0.75,
+    VWAPBAND_LONG: 0.67,   VWAPBAND_SHORT: 0.67,
+    OISPIKE_LONG: 0.75,    OISPIKE_SHORT: 0.75,
   };
   function scoreThr(regime, dir) {
     const key = regime + '_' + dir;
@@ -1360,13 +1836,14 @@ async function refreshTradelog() {
   document.getElementById('trades-body').innerHTML = trades.length
     ? trades.map(t => `<tr>
         <td>${toISTTime(t.ts)}</td><td>${t.symbol}</td>
+        <td>${badge('regime', t.regime || '')}</td>
         <td>${badge('dir', t.direction)}</td>
         <td>${(+t.entry).toFixed(2)}</td><td>${(+t.stop_loss).toFixed(2)}</td>
         <td>${(+t.take_profit).toFixed(2)}</td><td>${(+t.size).toFixed(4)}</td>
         <td style="color:${t.pnl_usdt>0?'#22c55e':t.pnl_usdt<0?'#ef4444':'#6b7280'}">${t.pnl_usdt!=null?(+t.pnl_usdt).toFixed(2):'open'}</td>
         <td>${t.status}</td>
       </tr>`).join('')
-    : '<tr><td colspan="9" style="color:#4b5563">no trades yet</td></tr>';
+    : '<tr><td colspan="10" style="color:#4b5563">no trades yet</td></tr>';
 
   document.getElementById('hdr-right').textContent = 'updated ' + new Date().toLocaleTimeString();
 
@@ -2002,6 +2479,18 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         elif strategy == "zone":
             from backtest.zone_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "fvg":
+            from backtest.fvg_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "bos":
+            from backtest.bos_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "vwap_band":
+            from backtest.vwap_band_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy == "oi_spike":
+            from backtest.oi_spike_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, oi=oi, starting_capital=capital, risk_pct=risk_pct)
         else:
             trades = []
 
@@ -2077,6 +2566,25 @@ async def _backtest_legacy() -> HTMLResponse:
   .badge-WIN     { background:#14532d; color:#bbf7d0; }
   .badge-LOSS    { background:#7f1d1d; color:#fecaca; }
   .badge-TIMEOUT { background:#713f12; color:#fef3c7; }
+  .badge-LONG    { background:#14532d; color:#bbf7d0; }
+  .badge-SHORT   { background:#7f1d1d; color:#fecaca; }
+  .badge-TREND   { background:#1d4ed8; color:#bfdbfe; }
+  .badge-RANGE   { background:#713f12; color:#fef3c7; }
+  .badge-CRASH   { background:#7f1d1d; color:#fecaca; }
+  .badge-PUMP    { background:#14532d; color:#bbf7d0; }
+  .badge-BREAKOUT{ background:#1d4ed8; color:#bfdbfe; }
+  .badge-LEADLAG    { background:#0f3460; color:#93c5fd; }
+  .badge-MICRORANGE { background:#3b0764; color:#e9d5ff; }
+  .badge-SESSION    { background:#164e63; color:#a5f3fc; }
+  .badge-INSIDEBAR  { background:#1c1917; color:#d6d3d1; }
+  .badge-FUNDING    { background:#0c4a6e; color:#7dd3fc; }
+  .badge-SWEEP      { background:#422006; color:#fed7aa; }
+  .badge-EMA_PULLBACK { background:#052e16; color:#86efac; }
+  .badge-ZONE       { background:#1e1b4b; color:#c7d2fe; }
+  .badge-FVG        { background:#14532d; color:#6ee7b7; }
+  .badge-BOS        { background:#7c2d12; color:#fdba74; }
+  .badge-VWAPBAND   { background:#134e4a; color:#5eead4; }
+  .badge-OISPIKE    { background:#4a044e; color:#f5d0fe; }
 </style>
 </head>
 <body>

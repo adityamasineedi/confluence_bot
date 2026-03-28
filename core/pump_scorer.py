@@ -36,7 +36,7 @@ async def score(symbol: str, cache) -> dict:
     """Score a symbol for a PUMP LONG setup.
 
     Returns {symbol, regime, direction, score, signals, fire}.
-    At minimum htf_structure must fire (the largest weight: 0.55).
+    htf_structure is mandatory AND at least one of order_block/oi_funding must fire.
     """
     signals: dict[str, bool] = {
         "htf_structure": check_htf_structure(symbol, cache),
@@ -47,8 +47,12 @@ async def score(symbol: str, cache) -> dict:
     avail     = _available_signals(symbol, cache)
     score_val = _normalised_score(signals, avail)
 
-    # Require at least htf_structure to fire (without it PUMP edge disappears)
-    min_ok = signals["htf_structure"]
+    # htf_structure is mandatory AND at least one of order_block / oi_funding must confirm.
+    # htf_structure alone (score 0.40) can no longer clear the 0.65 threshold, but
+    # htf + ob (0.70) or htf + oi (0.70) both pass — requiring real confluence.
+    min_ok = signals["htf_structure"] and (
+        signals["order_block"] or signals["oi_funding"]
+    )
     fire   = score_val >= _THRESHOLD and min_ok and passes_pump_filters(symbol, cache)
 
     return {

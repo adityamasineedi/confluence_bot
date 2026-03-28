@@ -1,112 +1,192 @@
 """Fair Value Gap (FVG) — unfilled price imbalance zones.
 
-An FVG forms when a candle moves so fast that it leaves a gap between the previous
-candle's high and the next candle's low (bullish) or vice versa (bearish).  These
-gaps act as magnets — price returns to fill them ~65 % of the time when trend-aligned.
+An FVG forms when a candle moves so fast that it leaves a gap between bar[-2]'s
+high and bar[0]'s low (bullish) or vice versa (bearish).  These gaps act as
+price magnets — price returns to fill them roughly 65% of the time.
 
-Bullish FVG:  candle[i-2].high  < candle[i].low    → unfilled gap above
-Bearish FVG:  candle[i-2].low   > candle[i].high   → unfilled gap below
+Bullish FVG (3-bar pattern, k = index of last bar):
+    candles[k].low > candles[k-2].high
+    gap_low  = candles[k-2].high
+    gap_high = candles[k].low
+    Signal True when price is inside the gap (gap_low ≤ price ≤ gap_high).
 
-Signal fires when:
-  - An unfilled FVG exists within the last MAX_AGE_BARS bars
-  - Current price is inside the gap zone (retesting it)
-  - For bullish FVG: current close is bullish (close > open) — demand holding
-  - For bearish FVG: current close is bearish (close < open) — supply holding
+Bearish FVG:
+    candles[k].high < candles[k-2].low
+    gap_high = candles[k-2].low
+    gap_low  = candles[k].high
+    Signal True when price returns into the gap from above.
 
-Timeframe: 1H for trend confluence; scans last LOOKBACK bars.
-Minimum gap size: 0.1 % of mid-price to filter micro-wicks from genuine imbalances.
+Gap is "filled" when a subsequent candle closes fully through it:
+    bullish filled → close < gap_low
+    bearish filled → close > gap_high
+
+Virgin FVG: signal fires only on the FIRST entry into a given gap.
+After price enters, the gap is recorded in _touched (module-level set).
+Subsequent calls with price still inside that gap return False.
+
+Config (from fvg: section in config.yaml):
+    lookback_bars : how many 1H bars to scan         (default 50)
+    min_gap_pct   : minimum gap width as fraction    (default 0.003 = 0.3%)
 """
+import os
+import yaml
 
-_LOOKBACK       = 50    # 1H candles to scan for gaps
-_MAX_AGE_BARS   = 30    # FVG older than this is stale (price likely won't retest)
-_MIN_GAP_PCT    = 0.001 # minimum gap size: 0.1 % of price (filters noise)
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+with open(_CONFIG_PATH) as _f:
+    _cfg = yaml.safe_load(_f)
+
+_FVG_CFG     = _cfg.get("fvg", {})
+_LOOKBACK    = int(_FVG_CFG.get("lookback_bars", 50))
+_MIN_GAP_PCT = float(_FVG_CFG.get("min_gap_pct", 0.003))
+
+# Module-level set of touched FVG keys: (symbol, direction, gap_low, gap_high).
+# Records the first time price enters a gap — prevents re-signalling the same zone.
+_touched: set[tuple] = set()
 
 
-def check_fvg_bullish(symbol: str, cache) -> bool:
-    """True when price is currently inside an unfilled bullish FVG on 1H.
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
-    Bullish FVG:  gap_low  = candle[i-2].high
-                  gap_high = candle[i].low
-                  gap_low < gap_high  (genuine imbalance)
+def _find_fvg_bullish(
+    candles: list[dict],
+    min_gap_pct: float,
+) -> tuple[float, float] | None:
+    """Return (gap_low, gap_high) for the most recent unfilled bullish FVG, or None.
 
-    Retest condition: current price is between gap_low and gap_high
-    with a bullish close (close > open) confirming demand holding.
+    Scans completed formations only (k ≤ len-2) so the in-progress bar is never
+    the last bar of the pattern.  Returns on the first (most recent) match.
     """
-    candles = cache.get_ohlcv(symbol, window=_LOOKBACK, tf="1h")
-    if len(candles) < 5:
-        return False
+    if len(candles) < 4:
+        return None
 
-    current      = candles[-1]
-    price        = current["c"]
-    is_bullish_c = current["c"] > current["o"]
-
-    # Scan bars excluding the last 2 (need candle[i+1] to exist)
-    for i in range(len(candles) - 3, max(len(candles) - _MAX_AGE_BARS - 3, 1), -1):
-        gap_low  = candles[i - 1]["h"]   # high of bar before the impulse
-        gap_high = candles[i + 1]["l"]   # low of bar after the impulse
+    for k in range(len(candles) - 2, 1, -1):
+        gap_low  = candles[k - 2]["h"]
+        gap_high = candles[k]["l"]
 
         if gap_high <= gap_low:
-            continue  # not a gap
+            continue  # no gap — bars overlap
 
         mid = (gap_high + gap_low) / 2.0
-        if mid == 0.0 or (gap_high - gap_low) / mid < _MIN_GAP_PCT:
-            continue  # too small to be meaningful
+        if mid == 0.0:
+            continue
+        if (gap_high - gap_low) / mid < min_gap_pct:
+            continue  # gap too small to be meaningful
 
-        # Check gap not already filled: no candle after formation closed below gap_low
-        filled = False
-        for j in range(i + 2, len(candles) - 1):
-            if candles[j]["l"] < gap_low:
-                filled = True
-                break
+        # Filled check: any subsequent close below gap_low erases the gap
+        filled = any(candles[j]["c"] < gap_low for j in range(k + 1, len(candles)))
         if filled:
             continue
 
-        # Price is retesting the gap zone
-        if gap_low <= price <= gap_high and is_bullish_c:
-            return True
+        return gap_low, gap_high
 
-    return False
+    return None
+
+
+def _find_fvg_bearish(
+    candles: list[dict],
+    min_gap_pct: float,
+) -> tuple[float, float] | None:
+    """Return (gap_low, gap_high) for the most recent unfilled bearish FVG, or None."""
+    if len(candles) < 4:
+        return None
+
+    for k in range(len(candles) - 2, 1, -1):
+        gap_high = candles[k - 2]["l"]
+        gap_low  = candles[k]["h"]
+
+        if gap_high <= gap_low:
+            continue
+
+        mid = (gap_high + gap_low) / 2.0
+        if mid == 0.0:
+            continue
+        if (gap_high - gap_low) / mid < min_gap_pct:
+            continue
+
+        # Filled check: any subsequent close above gap_high erases the gap
+        filled = any(candles[j]["c"] > gap_high for j in range(k + 1, len(candles)))
+        if filled:
+            continue
+
+        return gap_low, gap_high
+
+    return None
+
+
+# ── Public signal functions ───────────────────────────────────────────────────
+
+def check_fvg_bullish(symbol: str, cache) -> bool:
+    """True when price is currently inside a virgin unfilled bullish FVG on 1H.
+
+    Returns True exactly once per gap — the first time price enters.  Subsequent
+    ticks with price still inside the same gap return False (gap is now touched).
+    Returns False (never raises) on missing/insufficient cache data.
+    """
+    candles = cache.get_ohlcv(symbol, window=_LOOKBACK, tf="1h")
+    if not candles or len(candles) < 5:
+        return False
+
+    result = _find_fvg_bullish(candles, _MIN_GAP_PCT)
+    if result is None:
+        return False
+
+    gap_low, gap_high = result
+    price = candles[-1]["c"]
+
+    if not (gap_low <= price <= gap_high):
+        return False  # price not yet inside the gap
+
+    key = (symbol, "LONG", round(gap_low, 8), round(gap_high, 8))
+    if key in _touched:
+        return False  # already fired on this gap — only one entry per virgin gap
+
+    _touched.add(key)
+    return True
 
 
 def check_fvg_bearish(symbol: str, cache) -> bool:
-    """True when price is currently inside an unfilled bearish FVG on 1H.
+    """True when price is currently inside a virgin unfilled bearish FVG on 1H.
 
-    Bearish FVG:  gap_high = candle[i-2].low
-                  gap_low  = candle[i].high
-                  gap_high > gap_low  (genuine imbalance)
-
-    Retest condition: current price is between gap_low and gap_high
-    with a bearish close (close < open) confirming supply holding.
+    Returns True exactly once per gap.  See check_fvg_bullish for details.
     """
     candles = cache.get_ohlcv(symbol, window=_LOOKBACK, tf="1h")
-    if len(candles) < 5:
+    if not candles or len(candles) < 5:
         return False
 
-    current       = candles[-1]
-    price         = current["c"]
-    is_bearish_c  = current["c"] < current["o"]
+    result = _find_fvg_bearish(candles, _MIN_GAP_PCT)
+    if result is None:
+        return False
 
-    for i in range(len(candles) - 3, max(len(candles) - _MAX_AGE_BARS - 3, 1), -1):
-        gap_high = candles[i - 1]["l"]   # low of bar before the impulse
-        gap_low  = candles[i + 1]["h"]   # high of bar after the impulse
+    gap_low, gap_high = result
+    price = candles[-1]["c"]
 
-        if gap_high <= gap_low:
-            continue
+    if not (gap_low <= price <= gap_high):
+        return False
 
-        mid = (gap_high + gap_low) / 2.0
-        if mid == 0.0 or (gap_high - gap_low) / mid < _MIN_GAP_PCT:
-            continue
+    key = (symbol, "SHORT", round(gap_low, 8), round(gap_high, 8))
+    if key in _touched:
+        return False
 
-        # Check not already filled: no candle after formation closed above gap_high
-        filled = False
-        for j in range(i + 2, len(candles) - 1):
-            if candles[j]["h"] > gap_high:
-                filled = True
-                break
-        if filled:
-            continue
+    _touched.add(key)
+    return True
 
-        if gap_low <= price <= gap_high and is_bearish_c:
-            return True
 
-    return False
+def get_fvg_levels(
+    symbol: str,
+    cache,
+    direction: str,
+) -> tuple[float, float] | None:
+    """Return (gap_low, gap_high) for the active FVG in the given direction.
+
+    Finds the most recent unfilled FVG regardless of touched status.
+    Used by fvg_scorer to compute strategy-specific SL and TP levels.
+    Returns None when no qualifying FVG is present.
+    """
+    candles = cache.get_ohlcv(symbol, window=_LOOKBACK, tf="1h")
+    if not candles or len(candles) < 5:
+        return None
+
+    if direction == "LONG":
+        return _find_fvg_bullish(candles, _MIN_GAP_PCT)
+    if direction == "SHORT":
+        return _find_fvg_bearish(candles, _MIN_GAP_PCT)
+    return None

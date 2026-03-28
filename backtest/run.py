@@ -138,18 +138,34 @@ def _run_strategy(
         from backtest.zone_engine import run
         return run(symbols=symbols, ohlcv=ohlcv,
                    starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "fvg":
+        from backtest.fvg_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "bos":
+        from backtest.bos_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "vwap_band":
+        from backtest.vwap_band_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv,
+                   starting_capital=capital, risk_pct=risk_pct)
+    elif strat == "oi_spike":
+        from backtest.oi_spike_engine import run
+        return run(symbols=symbols, ohlcv=ohlcv, oi=oi,
+                   starting_capital=capital, risk_pct=risk_pct)
     return []
 
 
 def _run_crash_periods(args) -> None:
     """Run all 6 crash periods and print a summary table."""
-    strategies = ["main", "microrange", "ema_pullback"]
+    strategies = ["main", "microrange", "ema_pullback", "fvg", "bos", "vwap_band", "oi_spike"]
     capital    = args.capital
     risk_pct   = args.risk_pct
 
     print("\n" + "="*68)
     print("  CONFLUENCE BOT — HISTORICAL CRASH PERIOD BACKTESTS")
-    print("  Strategies tested: MAIN, MICRORANGE, EMA PULLBACK")
+    print("  Strategies tested: MAIN, MICRORANGE, EMA PULLBACK, FVG, BOS, VWAP BAND, OI SPIKE")
     print("  Capital: ${:.0f}  |  Risk: {:.1f}% per trade".format(capital, risk_pct * 100))
     print("="*68)
 
@@ -251,9 +267,10 @@ def main() -> None:
     parser.add_argument(
         "--strategy",
         choices=["main", "leadlag", "both", "microrange", "session", "insidebar", "funding",
-                 "sweep", "ema_pullback", "zone", "new", "all"],
+                 "sweep", "ema_pullback", "zone", "fvg", "bos", "vwap_band", "oi_spike",
+                 "new", "all"],
         default="main",
-        help="Which strategy to backtest (default: main). 'new' = sweep+ema_pullback+zone only",
+        help="Which strategy to backtest (default: main). 'new' = sweep+ema_pullback+zone+fvg+bos+vwap_band+oi_spike",
     )
     args = parser.parse_args()
 
@@ -532,6 +549,103 @@ def main() -> None:
                            "capital": args.capital, "risk_pct": args.risk_pct,
                            "strategy": "zone"}, f, default=str)
             print(f"Results saved to {zn_path}")
+
+
+    # ── Step 2j: FVG Fill backtest ────────────────────────────────────────────
+    if args.strategy in ("fvg", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running FVG FILL backtest (1H fair value gap retests)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : 3-bar imbalance gap + 4H EMA21 + RSI ≤45/≥55")
+        print(f"RR               : 2.0×  |  SL = gap edge  |  max hold 24H\n")
+
+        from backtest.fvg_engine import run as run_fvg
+        fvg_trades = run_fvg(symbols=symbols, ohlcv=ohlcv,
+                             starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not fvg_trades:
+            print("No FVG Fill trades generated.")
+        else:
+            fvg_stats = compute_stats(fvg_trades, starting_capital=args.capital)
+            print_report(fvg_stats, trades=fvg_trades, starting_capital=args.capital)
+            fvg_path = _os.path.join(_os.path.dirname(__file__), "results_fvg.json")
+            with open(fvg_path, "w") as f:
+                json.dump({"stats": fvg_stats, "trades": fvg_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "fvg"}, f, default=str)
+            print(f"Results saved to {fvg_path}")
+
+    # ── Step 2k: BOS/CHoCH backtest ───────────────────────────────────────────
+    if args.strategy in ("bos", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running BOS/CHoCH backtest (1H structure break entries)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : pivot_n=3 swing break + volume spike + 4H HTF")
+        print(f"RR               : 2.5×  |  SL = prior swing  |  max hold 48H\n")
+
+        from backtest.bos_engine import run as run_bos
+        bos_trades = run_bos(symbols=symbols, ohlcv=ohlcv,
+                             starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not bos_trades:
+            print("No BOS/CHoCH trades generated.")
+        else:
+            bos_stats = compute_stats(bos_trades, starting_capital=args.capital)
+            print_report(bos_stats, trades=bos_trades, starting_capital=args.capital)
+            bos_path = _os.path.join(_os.path.dirname(__file__), "results_bos.json")
+            with open(bos_path, "w") as f:
+                json.dump({"stats": bos_stats, "trades": bos_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "bos"}, f, default=str)
+            print(f"Results saved to {bos_path}")
+
+    # ── Step 2l: VWAP Band Reversion backtest ─────────────────────────────────
+    if args.strategy in ("vwap_band", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running VWAP BAND REVERSION backtest (15m ±2σ band touch rejections)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : rolling VWAP ±2σ + ADX<30 + RSI ≤35/≥65")
+        print(f"TP               : VWAP midline (dynamic)  |  max hold 2H\n")
+
+        from backtest.vwap_band_engine import run as run_vb
+        vb_trades = run_vb(symbols=symbols, ohlcv=ohlcv,
+                           starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not vb_trades:
+            print("No VWAP Band trades generated.")
+        else:
+            vb_stats = compute_stats(vb_trades, starting_capital=args.capital)
+            print_report(vb_stats, trades=vb_trades, starting_capital=args.capital)
+            vb_path = _os.path.join(_os.path.dirname(__file__), "results_vwap_band.json")
+            with open(vb_path, "w") as f:
+                json.dump({"stats": vb_stats, "trades": vb_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "vwap_band"}, f, default=str)
+            print(f"Results saved to {vb_path}")
+
+    # ── Step 2m: OI Spike Fade backtest ───────────────────────────────────────
+    if args.strategy in ("oi_spike", "new", "all"):
+        print(f"\n{'='*68}")
+        print("Running OI SPIKE FADE backtest (liquidation cascade reversals)...\n")
+        print(f"Starting capital : ${args.capital:,.2f}")
+        print(f"Risk per trade   : {args.risk_pct*100:.1f}% of equity")
+        print(f"Detection        : OI spike ≥15% (or vol proxy) + wick + EMA + RSI")
+        print(f"RR               : 2.0×  |  SL = wick extreme  |  max hold 2H\n")
+
+        from backtest.oi_spike_engine import run as run_os
+        os_trades = run_os(symbols=symbols, ohlcv=ohlcv, oi=oi,
+                           starting_capital=args.capital, risk_pct=args.risk_pct)
+        if not os_trades:
+            print("No OI Spike trades generated.")
+        else:
+            os_stats = compute_stats(os_trades, starting_capital=args.capital)
+            print_report(os_stats, trades=os_trades, starting_capital=args.capital)
+            os_path = _os.path.join(_os.path.dirname(__file__), "results_oi_spike.json")
+            with open(os_path, "w") as f:
+                json.dump({"stats": os_stats, "trades": os_trades, "symbols": symbols,
+                           "capital": args.capital, "risk_pct": args.risk_pct,
+                           "strategy": "oi_spike"}, f, default=str)
+            print(f"Results saved to {os_path}")
 
 
 if __name__ == "__main__":

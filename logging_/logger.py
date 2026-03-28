@@ -1,12 +1,16 @@
 """SQLite trade logger — persists every signal evaluation and trade execution."""
 import asyncio
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 
+_log = logging.getLogger(__name__)
+
 _DB_PATH     = os.environ.get("DB_PATH", "confluence_bot.db")
 _SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
+_PRUNE_DAYS  = int(os.environ.get("LOG_PRUNE_DAYS", "7"))
 
 
 def _utcnow() -> str:
@@ -14,97 +18,87 @@ def _utcnow() -> str:
 
 
 class TradeLogger:
-    """Async-safe SQLite logger for signals, trades, and regime events.
-
-    All blocking sqlite3 calls are offloaded to a thread via asyncio.to_thread
-    so the event loop is never blocked.
-    """
+    """Async-safe SQLite logger for signals, trades, and regime events."""
 
     def __init__(self, db_path: str = _DB_PATH) -> None:
         self.db_path = db_path
         self._init_db()
-
-    # ── Initialisation ────────────────────────────────────────────────────────
+        self._prune(days=_PRUNE_DAYS)
 
     def _init_db(self) -> None:
-        """Create tables from schema.sql if they do not exist."""
         with open(_SCHEMA_PATH) as f:
             ddl = f.read()
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(ddl)
 
-    # ── Public async API ──────────────────────────────────────────────────────
+    def _prune(self, days: int = 7) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                sig_del = conn.execute(
+                    "DELETE FROM signals WHERE ts < datetime('now', ?)",
+                    (f"-{days} days",),
+                ).rowcount
+                reg_del = conn.execute(
+                    "DELETE FROM regimes WHERE ts < datetime('now', ?)",
+                    (f"-{days} days",),
+                ).rowcount
+                conn.commit()
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("VACUUM")
+            _log.info("DB pruned: %d signals, %d regimes older than %d days removed",
+                      sig_del, reg_del, days)
+        except sqlite3.OperationalError as exc:
+            _log.warning("DB prune failed: %s", exc)
 
     async def log_signal(self, score_dict: dict) -> None:
-        """Persist a scorer result to the signals table."""
         await asyncio.to_thread(self._insert_signal, score_dict)
 
     async def log_trade(self, score_dict: dict, order: dict) -> None:
-        """Persist an executed trade to the trades table."""
         await asyncio.to_thread(self._insert_trade, score_dict, order)
 
     async def log_regime(self, symbol: str, regime: str) -> None:
-        """Persist a regime classification event."""
         await asyncio.to_thread(self._insert_regime, symbol, regime)
 
     async def load_active_deals(self) -> list[tuple[str, str]]:
-        """Return [(symbol, direction)] for all trades with status='OPEN'."""
         return await asyncio.to_thread(self._query_open_deals)
 
-    async def close_deal(
-        self, symbol: str, direction: str, exit_price: float, pnl_usdt: float
-    ) -> None:
-        """Mark all OPEN trades for (symbol, direction) as FILLED."""
+    async def close_deal(self, symbol: str, direction: str, exit_price: float, pnl_usdt: float) -> None:
         await asyncio.to_thread(self._update_closed, symbol, direction, exit_price, pnl_usdt)
 
-    # ── Blocking helpers (run in thread) ──────────────────────────────────────
-
     def _insert_signal(self, d: dict) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO signals (ts, symbol, regime, direction, score, signals, fire)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    _utcnow(),
-                    d.get("symbol", ""),
-                    d.get("regime", ""),
-                    d.get("direction", ""),
-                    d.get("score", 0.0),
-                    json.dumps(d.get("signals", {})),
-                    1 if d.get("fire") else 0,
-                ),
-            )
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT INTO signals (ts, symbol, regime, direction, score, signals, fire) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (_utcnow(), d.get("symbol",""), d.get("regime",""), d.get("direction",""),
+                     d.get("score", 0.0), json.dumps(d.get("signals", {})), 1 if d.get("fire") else 0),
+                )
+        except sqlite3.OperationalError as exc:
+            _log.warning("log_signal skipped (%s): %s", d.get("symbol","?"), exc)
 
     def _insert_trade(self, score_dict: dict, order: dict) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO trades
-                    (ts, symbol, direction, regime, entry, stop_loss, take_profit,
-                     size, order_id, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
-                """,
-                (
-                    _utcnow(),
-                    score_dict.get("symbol", ""),
-                    score_dict.get("direction", ""),
-                    score_dict.get("regime", ""),
-                    order.get("entry", 0.0),
-                    order.get("stop", 0.0),
-                    order.get("take_profit", 0.0),
-                    order.get("qty", 0.0),
-                    str(order.get("orderId", "")),
-                ),
-            )
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """INSERT INTO trades
+                        (ts, symbol, direction, regime, entry, stop_loss, take_profit, size, order_id, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')""",
+                    (_utcnow(), score_dict.get("symbol",""), score_dict.get("direction",""),
+                     score_dict.get("regime",""), order.get("entry", 0.0), order.get("stop", 0.0),
+                     order.get("take_profit", 0.0), order.get("qty", 0.0), str(order.get("orderId",""))),
+                )
+        except sqlite3.OperationalError as exc:
+            _log.error("log_trade FAILED (%s): %s", score_dict.get("symbol","?"), exc)
 
     def _insert_regime(self, symbol: str, regime: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO regimes (ts, symbol, regime) VALUES (?, ?, ?)",
-                (_utcnow(), symbol, regime),
-            )
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    "INSERT INTO regimes (ts, symbol, regime) VALUES (?, ?, ?)",
+                    (_utcnow(), symbol, regime),
+                )
+        except sqlite3.OperationalError as exc:
+            _log.warning("log_regime skipped (%s): %s", symbol, exc)
 
     def _query_open_deals(self) -> list[tuple[str, str]]:
         with sqlite3.connect(self.db_path) as conn:
@@ -113,9 +107,7 @@ class TradeLogger:
             ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
-    def _update_closed(
-        self, symbol: str, direction: str, exit_price: float, pnl_usdt: float
-    ) -> None:
+    def _update_closed(self, symbol: str, direction: str, exit_price: float, pnl_usdt: float) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """UPDATE trades SET status='FILLED', exit_price=?, pnl_usdt=?, closed_ts=?
