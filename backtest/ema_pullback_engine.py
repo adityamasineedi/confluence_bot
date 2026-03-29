@@ -196,19 +196,19 @@ def run(
             # Volume gate: bounce bar must have more volume than pullback bar
             vol_confirm = bar["v"] > prev_bar["v"]
 
-            # 4H macro gate — only LONG when 4H is bullish
+            # 4H macro bias — compute once for both directions
             closes_4h = [b["c"] for b in bars_4h]
             if len(closes_4h) >= 50:
                 ema21_4h = sum(closes_4h[-21:]) / 21
                 ema50_4h = sum(closes_4h[-50:]) / 50
                 htf_bull = closes_4h[-1] > ema50_4h or ema21_4h > ema50_4h
+                htf_bear = closes_4h[-1] < ema50_4h and ema21_4h < ema50_4h
             else:
                 htf_bull = True  # insufficient data — allow
-            if not htf_bull:
-                continue  # skip this bar entirely for LONG
+                htf_bear = True
 
             # ── LONG: 4H bullish, 15m EMA21 > EMA50, price bounced off EMA21 ──
-            if htf_long and ema21_15m > ema50_15m:
+            if htf_bull and htf_long and ema21_15m > ema50_15m:
                 touch = (abs(prev_low  - ema21_15m) / ema21_15m <= _PULLBACK_PCT or
                          abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _PULLBACK_PCT)
                 # Close must be ≥ 0.2% above EMA21 (not a marginal cross)
@@ -222,16 +222,8 @@ def run(
                         if dist > 0:
                             tp = price + dist * _RR
 
-            # 4H macro gate — only SHORT when 4H is bearish
-            if len(closes_4h) >= 50:
-                htf_bear = closes_4h[-1] < ema50_4h and ema21_4h < ema50_4h
-            else:
-                htf_bear = True
-            if not htf_bear:
-                continue
-
             # ── SHORT: 4H bearish, 15m EMA21 < EMA50, price rejected at EMA21 ─
-            if direction is None and htf_short and ema21_15m < ema50_15m:
+            if htf_bear and direction is None and htf_short and ema21_15m < ema50_15m:
                 touch = (abs(prev_high - ema21_15m) / ema21_15m <= _PULLBACK_PCT or
                          abs(closes_15m[-2] - ema21_15m) / ema21_15m <= _PULLBACK_PCT)
                 # Close must be ≥ 0.2% below EMA21 (not a marginal cross)
