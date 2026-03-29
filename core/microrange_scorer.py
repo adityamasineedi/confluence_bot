@@ -91,11 +91,7 @@ async def score(symbol: str, cache) -> list[dict]:
         compute_levels,
     )
 
-    from signals.volume_momentum import (
-        volume_divergence_bearish,
-        volume_divergence_bullish,
-        increasing_volume,
-    )
+    from signals.volume_momentum import VolumeContext, get_volume_params
 
     bars = cache.get_ohlcv(symbol, window=_WINDOW_BARS + 22, tf="5m")
     if len(bars) < _WINDOW_BARS + 2:
@@ -114,25 +110,36 @@ async def score(symbol: str, cache) -> list[dict]:
     vol_ok  = low_volume(bars, _MAX_VOL_RATIO)
     cool_ok = not is_on_cooldown(symbol)
 
-    results = []
+    # Dynamic volume params — 5m microrange, regime-aware thresholds
+    from core.regime_detector import _detector
+    regime = str(_detector.detect(symbol, cache))
 
-    vol_div_bearish = volume_divergence_bearish(bars, lookback=5)
-    vol_div_bullish = volume_divergence_bullish(bars, lookback=5)
-    vol_increasing  = increasing_volume(bars, lookback=5)
+    vol_ctx    = VolumeContext(symbol=symbol, regime=regime, timeframe="5m", cache=cache)
+    vol_params = get_volume_params(vol_ctx)
+
+    # Hard block: increasing volume means range is breaking out, not reverting
+    if vol_params.increasing(bars):
+        log.debug("MicroRange blocked — increasing volume (breakout risk) %s", symbol)
+        return []
+
+    long_blocked  = vol_params.bearish_divergence(bars)   # distribution: block LONG
+    short_blocked = vol_params.bullish_divergence(bars)   # accumulation: block SHORT
+
+    results = []
 
     # ── LONG: price near range_low ─────────────────────────────────────────────
     if near_range_low(price, box["range_low"], _ENTRY_ZONE_PCT):
-        # Hard block: bearish divergence (distribution) or accelerating volume into low
-        if vol_div_bearish or vol_increasing:
+        # Hard block: bearish divergence (distribution) into range low
+        if long_blocked:
             pass   # skip — fall through without appending
         else:
             rsi_ok = rsi_supports_long(closes, _RSI_LONG_MAX)
             signals = {
-                "box_detected":    True,
-                "entry_zone":      True,
-                "volume_ok":       vol_ok,
-                "rsi_aligned":     rsi_ok,
-                "vol_divergence_ok": True,
+                "box_detected":      True,
+                "entry_zone":        True,
+                "volume_ok":         vol_ok,
+                "rsi_aligned":       rsi_ok,
+                "vol_divergence_ok": not long_blocked,   # True since not blocked
             }
             score_val = sum(0.25 for v in (
                 signals["box_detected"],
@@ -165,17 +172,17 @@ async def score(symbol: str, cache) -> list[dict]:
 
     # ── SHORT: price near range_high ───────────────────────────────────────────
     if near_range_high(price, box["range_high"], _ENTRY_ZONE_PCT):
-        # Hard block: bullish divergence (accumulation) or accelerating volume into high
-        if vol_div_bullish or vol_increasing:
+        # Hard block: bullish divergence (accumulation) into range high
+        if short_blocked:
             pass   # skip — fall through without appending
         else:
             rsi_ok = rsi_supports_short(closes, _RSI_SHORT_MIN)
             signals = {
-                "box_detected":    True,
-                "entry_zone":      True,
-                "volume_ok":       vol_ok,
-                "rsi_aligned":     rsi_ok,
-                "vol_divergence_ok": True,
+                "box_detected":      True,
+                "entry_zone":        True,
+                "volume_ok":         vol_ok,
+                "rsi_aligned":       rsi_ok,
+                "vol_divergence_ok": not short_blocked,   # True since not blocked
             }
             score_val = sum(0.25 for v in (
                 signals["box_detected"],

@@ -16,6 +16,9 @@ import logging
 import os
 import yaml
 
+from backtest.regime_classifier import classify_regime
+from signals.volume_momentum import get_volume_params_static
+
 log = logging.getLogger(__name__)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -139,6 +142,7 @@ def run(
     for sym in symbols:
         bars_15m = ohlcv.get(f"{sym}:15m", [])
         bars_4h  = ohlcv.get(f"{sym}:4h",  [])
+        bars_1d  = ohlcv.get(f"{sym}:1d",  [])
         if len(bars_15m) < warmup + 10:
             log.warning("VWAPBand: insufficient 15m data for %s (%d bars)", sym, len(bars_15m))
             continue
@@ -192,14 +196,28 @@ def run(
                 if adx_val >= _ADX_MAX:
                     continue   # trending — skip mean reversion
 
+            # ── Regime + dynamic volume params ────────────────────────────────
+            if len(b4h_now) >= 28:
+                _c4h = b4h_now[-30:]
+                _c1d = [b for b in bars_1d if b["ts"] <= bar_ts][-60:]
+                regime = classify_regime(
+                    closes_4h=[b["c"] for b in _c4h],
+                    highs_4h =[b["h"] for b in _c4h],
+                    lows_4h  =[b["l"] for b in _c4h],
+                    closes_1d=[b["c"] for b in _c1d],
+                )
+            else:
+                regime = "TREND"
+            vol_params = get_volume_params_static(sym, regime, "15m")
+
             # ── RSI ───────────────────────────────────────────────────────────
             closes   = [b["c"] for b in bars_15m[max(0, global_idx - 20): global_idx + 1]]
             rsi      = _rsi(closes)
 
-            # ── Volume filter ─────────────────────────────────────────────────
+            # ── Volume filter (dynamic quiet_mult from vol_params) ────────────
             vol_slice = bars_15m[max(0, global_idx - 21): global_idx]
             avg_vol   = sum(b["v"] for b in vol_slice) / len(vol_slice) if vol_slice else 0
-            vol_ok    = avg_vol <= 0 or bar["v"] <= avg_vol * _VOL_MAX_MULT
+            vol_ok    = avg_vol <= 0 or bar["v"] <= avg_vol * vol_params.quiet_mult
 
             prev_bar  = bars_15m[global_idx - 1]
             direction = None

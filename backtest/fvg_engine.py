@@ -15,6 +15,9 @@ import logging
 import os
 import yaml
 
+from backtest.regime_classifier import classify_regime
+from signals.volume_momentum import get_volume_params_static
+
 log = logging.getLogger(__name__)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -143,6 +146,7 @@ def run(
     for sym in symbols:
         bars_1h = ohlcv.get(f"{sym}:1h", [])
         bars_4h = ohlcv.get(f"{sym}:4h", [])
+        bars_1d = ohlcv.get(f"{sym}:1d", [])
         if len(bars_1h) < warmup + 10:
             log.warning("FVG: insufficient 1h data for %s (%d bars)", sym, len(bars_1h))
             continue
@@ -190,6 +194,20 @@ def run(
                 ema4h  = _ema(c4h, _EMA_PERIOD)
                 htf_long  = c4h[-1] > ema4h
                 htf_short = c4h[-1] < ema4h
+
+            # ── Regime + dynamic volume params ────────────────────────────────
+            if len(b4h_now) >= 28:
+                _c4h = b4h_now[-30:]
+                _c1d = [b for b in bars_1d if b["ts"] <= bar_ts][-60:]
+                regime = classify_regime(
+                    closes_4h=[b["c"] for b in _c4h],
+                    highs_4h =[b["h"] for b in _c4h],
+                    lows_4h  =[b["l"] for b in _c4h],
+                    closes_1d=[b["c"] for b in _c1d],
+                )
+            else:
+                regime = "TREND"
+            vol_params = get_volume_params_static(sym, regime, "1h")
 
             # ── Close data for RSI / EMA ───────────────────────────────────────
             lookback_slice = bars_1h[max(0, global_idx - _LOOKBACK): global_idx]

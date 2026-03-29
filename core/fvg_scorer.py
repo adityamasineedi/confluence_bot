@@ -139,13 +139,15 @@ async def score(symbol: str, cache) -> list[dict]:
 
     results: list[dict] = []
 
-    bars_5m = cache.get_ohlcv(symbol, window=25, tf="5m") or []
+    from signals.volume_momentum import VolumeContext, get_volume_params
 
-    from signals.volume_momentum import (
-        volume_spike,
-        volume_divergence_bearish,
-        volume_divergence_bullish,
-    )
+    # Dynamic volume params — FVG fills are 1H signals; use 1H bars for volume checks
+    vol_ctx    = VolumeContext(symbol=symbol, regime="FVG", timeframe="1h", cache=cache)
+    vol_params = get_volume_params(vol_ctx)
+
+    # Hard gate: large recent liquidation cascade → spike threshold raised;
+    # liq_spike_mult > spike_mult means a liq event was detected.
+    liq_vol_ok = vol_params.liq_spike_mult == vol_params.spike_mult
 
     # ── LONG: bullish FVG ─────────────────────────────────────────────────────
     fvg_bull = check_fvg_bullish(symbol, cache)
@@ -154,25 +156,25 @@ async def score(symbol: str, cache) -> list[dict]:
         if levels is not None:
             gap_low, gap_high = levels
 
-            htf_aligned = ema21_4h > 0.0 and price > ema21_4h
-            rsi_ok      = rsi_val <= _RSI_LONG_MAX
-            regime_gate = _regime_ok(symbol, "LONG", cache)
+            htf_aligned  = ema21_4h > 0.0 and price > ema21_4h
+            rsi_ok       = rsi_val <= _RSI_LONG_MAX
+            regime_gate  = _regime_ok(symbol, "LONG", cache)
 
-            vol_confirms    = volume_spike(bars_5m, lookback=20, mult=1.3)
-            vol_not_dist    = not volume_divergence_bearish(bars_5m, lookback=5)
+            # Dynamic volume signals on 1H bars (gap fills should show real volume)
+            vol_confirms = vol_params.spike(bars_1h)
+            vol_not_dist = not vol_params.bearish_divergence(bars_1h)
+            rvol_ok      = vol_params.rvol_ok(bars_1h)
 
             signals = {
-                "fvg_detected":  True,           # always True here (hard gate confirmed above)
-                "htf_aligned":   htf_aligned,
-                "rsi_confirm":   rsi_ok,
-                "vol_confirm":   vol_confirms,
-                "vol_not_dist":  vol_not_dist,
+                "fvg_detected": True,          # always True here (hard gate confirmed)
+                "htf_aligned":  htf_aligned,
+                "rsi_confirm":  rsi_ok,
+                "vol_confirm":  vol_confirms,
+                "vol_not_dist": vol_not_dist,
+                "rvol_ok":      rvol_ok,
             }
-            score_val = round(sum(1.0 / 3.0 for v in (
-                signals["fvg_detected"],
-                signals["htf_aligned"],
-                signals["rsi_confirm"],
-            ) if v), 4)
+            # 5 original scored signals + rvol_ok = 0.2 each
+            score_val = round(sum(0.2 for v in signals.values() if v), 4)
 
             sl   = gap_low * (1.0 - _SL_BUFFER_PCT)
             dist = abs(price - sl)
@@ -180,8 +182,7 @@ async def score(symbol: str, cache) -> list[dict]:
 
             fire = (score_val >= _THRESHOLD
                     and regime_gate
-                    and vol_confirms
-                    and vol_not_dist
+                    and liq_vol_ok
                     and cool_ok)
 
             results.append({
@@ -202,25 +203,23 @@ async def score(symbol: str, cache) -> list[dict]:
         if levels is not None:
             gap_low, gap_high = levels
 
-            htf_aligned = ema21_4h > 0.0 and price < ema21_4h
-            rsi_ok      = rsi_val >= _RSI_SHORT_MIN
-            regime_gate = _regime_ok(symbol, "SHORT", cache)
+            htf_aligned  = ema21_4h > 0.0 and price < ema21_4h
+            rsi_ok       = rsi_val >= _RSI_SHORT_MIN
+            regime_gate  = _regime_ok(symbol, "SHORT", cache)
 
-            vol_confirms    = volume_spike(bars_5m, lookback=20, mult=1.3)
-            vol_not_accum   = not volume_divergence_bullish(bars_5m, lookback=5)
+            vol_confirms  = vol_params.spike(bars_1h)
+            vol_not_accum = not vol_params.bullish_divergence(bars_1h)
+            rvol_ok       = vol_params.rvol_ok(bars_1h)
 
             signals = {
-                "fvg_detected":   True,
-                "htf_aligned":    htf_aligned,
-                "rsi_confirm":    rsi_ok,
-                "vol_confirm":    vol_confirms,
-                "vol_not_accum":  vol_not_accum,
+                "fvg_detected":  True,
+                "htf_aligned":   htf_aligned,
+                "rsi_confirm":   rsi_ok,
+                "vol_confirm":   vol_confirms,
+                "vol_not_accum": vol_not_accum,
+                "rvol_ok":       rvol_ok,
             }
-            score_val = round(sum(1.0 / 3.0 for v in (
-                signals["fvg_detected"],
-                signals["htf_aligned"],
-                signals["rsi_confirm"],
-            ) if v), 4)
+            score_val = round(sum(0.2 for v in signals.values() if v), 4)
 
             sl   = gap_high * (1.0 + _SL_BUFFER_PCT)
             dist = abs(sl - price)
@@ -228,8 +227,7 @@ async def score(symbol: str, cache) -> list[dict]:
 
             fire = (score_val >= _THRESHOLD
                     and regime_gate
-                    and vol_confirms
-                    and vol_not_accum
+                    and liq_vol_ok
                     and cool_ok)
 
             results.append({

@@ -23,6 +23,7 @@ import os
 import yaml
 
 from backtest.regime_classifier import classify_regime
+from signals.volume_momentum import get_volume_params_static
 
 log = logging.getLogger(__name__)
 
@@ -222,6 +223,9 @@ def run(
             else:
                 regime = "TREND"
 
+            # Dynamic volume params for this bar's context (5m, regime-aware)
+            vol_params = get_volume_params_static(sym, regime, "5m")
+
             # ── 3. Detect box on completed bars (no look-ahead) ───────────────
             window_slice = bars[max(0, global_idx - _WINDOW_BARS - 2) : global_idx]
             box = detect_micro_range(window_slice, _WINDOW_BARS, _RANGE_MAX_PCT)
@@ -231,9 +235,9 @@ def run(
             price  = bar["c"]
             closes = [b["c"] for b in bars[max(0, global_idx - 20) : global_idx + 1]]
 
-            # ── 4. Volume filter ──────────────────────────────────────────────
+            # ── 4. Volume filter (dynamic quiet_mult from vol_params) ─────────
             vol_slice = bars[max(0, global_idx - 21) : global_idx + 1]
-            if not low_volume(vol_slice, _MAX_VOL_RATIO):
+            if not low_volume(vol_slice, vol_params.quiet_mult):
                 continue
 
             # ── 5. Entry zone check — prefer LONG (range_low) over SHORT ──────

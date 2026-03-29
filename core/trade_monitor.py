@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 
 import aiohttp
 
+from data.binance_rest import _round_price
+
 log = logging.getLogger(__name__)
 
 _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
@@ -303,78 +305,92 @@ def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:
 # ── Breakeven move ────────────────────────────────────────────────────────────
 
 async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -> bool:
-    """Move SL to entry when price reaches entry + 1× stop_distance.
+    """Move SL to entry when price reaches entry + 1× stop distance.
 
-    Returns True if SL was moved. Does nothing if already at breakeven.
-    Already-breakeven trades have stop_loss == entry in DB.
+    Cancels only the SL order (not TP). Skips if already at breakeven.
     """
     symbol    = trade["symbol"]
     direction = trade["direction"]
     entry     = float(trade["entry"])
     sl        = float(trade["stop_loss"])
 
-    # Already at breakeven or better
-    if direction == "LONG"  and sl >= entry:
-        return False
-    if direction == "SHORT" and sl <= entry:
-        return False
+    if direction == "LONG"  and sl >= entry: return False
+    if direction == "SHORT" and sl <= entry: return False
 
     stop_dist    = abs(entry - sl)
-    one_r_target = (entry + stop_dist) if direction == "LONG" else (entry - stop_dist)
+    one_r_target = entry + stop_dist if direction == "LONG" else entry - stop_dist
+    price        = cache.get_last_price(symbol)
+    if not price: return False
 
-    price = cache.get_last_price(symbol)
-    if not price:
-        return False
-
-    reached_one_r = (
-        (direction == "LONG"  and price >= one_r_target) or
-        (direction == "SHORT" and price <= one_r_target)
-    )
-    if not reached_one_r:
-        return False
+    reached = (direction == "LONG"  and price >= one_r_target) or \
+              (direction == "SHORT" and price <= one_r_target)
+    if not reached: return False
 
     headers    = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if direction == "LONG" else "BUY"
 
-    # Cancel existing SL/TP bracket (best effort)
+    # Step 1: find the existing SL order ID — cancel only that, leave TP intact
+    sl_order_id = None
     try:
-        cancel_params = _sign({"symbol": symbol})
-        async with session.delete(
-            f"{_BINANCE_BASE}/fapi/v1/allOpenOrders",
-            params=cancel_params, headers=headers,
-        ) as resp:
-            pass
-    except Exception:
-        pass
+        async with session.get(
+            f"{_BINANCE_BASE}/fapi/v1/openOrders",
+            params=_sign({"symbol": symbol}), headers=headers,
+        ) as r:
+            open_orders = await r.json()
+        for o in open_orders:
+            if (o.get("type") == "STOP_MARKET" and
+                    o.get("reduceOnly") and
+                    o.get("side") == close_side):
+                sl_order_id = o.get("orderId")
+                break
+    except Exception as exc:
+        log.warning("Breakeven: failed to fetch open orders %s: %s", symbol, exc)
+        return False
 
-    # Place new SL at entry price
+    # Step 2: cancel only the SL order
+    if sl_order_id:
+        try:
+            async with session.delete(
+                f"{_BINANCE_BASE}/fapi/v1/order",
+                params=_sign({"symbol": symbol, "orderId": sl_order_id}),
+                headers=headers,
+            ) as r:
+                cancel_resp = await r.json()
+            if isinstance(cancel_resp.get("code"), int) and cancel_resp["code"] < 0:
+                log.warning("Breakeven: cancel SL failed %s: %s", symbol, cancel_resp)
+                return False
+        except Exception as exc:
+            log.warning("Breakeven: cancel SL error %s: %s", symbol, exc)
+            return False
+
+    # Step 3: place new SL at entry (breakeven)
     new_sl_params = _sign({
-        "symbol":     symbol,
-        "side":       close_side,
-        "type":       "STOP_MARKET",
-        "quantity":   float(trade["size"]),
-        "stopPrice":  round(entry, 8),
-        "reduceOnly": "true",
+        "symbol":      symbol,
+        "side":        close_side,
+        "type":        "STOP_MARKET",
+        "quantity":    float(trade["size"]),
+        "stopPrice":   _round_price(symbol, entry),
+        "reduceOnly":  "true",
+        "workingType": "MARK_PRICE",
     })
     try:
         async with session.post(
             f"{_BINANCE_BASE}/fapi/v1/order",
             params=new_sl_params, headers=headers,
-        ) as resp:
-            result = await resp.json()
-        if isinstance(result.get("code"), int) and result["code"] < 0:
-            log.warning("Breakeven SL failed for %s: %s", symbol, result)
+        ) as r:
+            res = await r.json()
+        if isinstance(res.get("code"), int) and res["code"] < 0:
+            log.warning("Breakeven: new SL rejected %s: %s", symbol, res)
             return False
-
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute(
                 "UPDATE trades SET stop_loss=? WHERE id=?",
-                (entry, trade["id"]),
+                (_round_price(symbol, entry), trade["id"]),
             )
-        log.info("Breakeven: SL moved to entry %.4f for %s %s", entry, direction, symbol)
+        log.info("Breakeven: SL moved to entry %.6f for %s %s", entry, direction, symbol)
         return True
     except Exception as exc:
-        log.warning("Breakeven move failed %s: %s", symbol, exc)
+        log.warning("Breakeven: new SL error %s: %s", symbol, exc)
         return False
 
 

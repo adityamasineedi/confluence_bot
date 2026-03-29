@@ -464,7 +464,8 @@ def _print_recommended_routing(all_results: dict, symbols: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Regime-aware strategy scanner")
-    parser.add_argument("--symbol",     default="",        help="Comma-separated symbols")
+    parser.add_argument("--symbol", "--symbols", dest="symbol",
+                        default="",        help="Comma-separated symbols to scan (default: all)")
     parser.add_argument("--strategies", default="",        help="Comma-separated strategies")
     parser.add_argument("--from",       dest="from_date",  default=FROM_DATE)
     parser.add_argument("--to",         dest="to_date",    default=TO_DATE)

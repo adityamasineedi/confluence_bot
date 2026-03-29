@@ -486,6 +486,41 @@ symbol_tiers:
       rr_ratio: 2.0
       max_hold_bars: 10
 
+# ── Dynamic volume momentum thresholds ───────────────────────────────────────
+# All values are base multipliers before tier/TF adjustments are applied.
+# signals/volume_momentum.py reads these at runtime; hardcoded fallbacks exist
+# for every key so removing a key here is safe.
+volume_momentum:
+  # Regime-based spike multipliers (base values before tier/TF adjustment)
+  spike_mult:
+    TREND:    1.5
+    RANGE:    1.3
+    CRASH:    2.5
+    PUMP:     2.5
+    BREAKOUT: 2.0
+  # Tier adjustments (added to regime base spike)
+  tier_spike_adj:
+    tier1: -0.2    # BTC — tightest, cleanest volume
+    tier2:  0.0    # no change
+    tier3:  0.4    # high volatility alts — raise noise floor
+  # Timeframe adjustments (added to spike before tier adj)
+  tf_spike_adj:
+    5m:   0.3
+    15m:  0.1
+    1h:   0.0
+    4h:  -0.2
+  # Liquidation thresholds (5-min window)
+  liq_adjust:
+    small_usd:  100000   # $100k liquidated → multiply spike_mult by 1.2
+    large_usd:  500000   # $500k liquidated → multiply spike_mult by 1.5
+  # Minimum relative volume (RVOL) to allow entry
+  rvol_min:
+    TREND:    0.7
+    RANGE:    0.6
+    CRASH:    0.9
+    PUMP:     0.9
+    BREAKOUT: 0.8
+
 # ── Strategy routing table ────────────────────────────────────────────────────
 # Defines which strategies are active per symbol per regime.
 # Falls back to _default if symbol not listed.

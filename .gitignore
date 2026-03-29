@@ -7,17 +7,20 @@
 *.db-journal
 
 # Python
-__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
+*.pyd
 venv/
 .venv/
+.pytest_cache/
 
 # Logs
 logs/
 *.log
 
-# Backtest data (large JSON files)
+# Backtest output
+backtest_output.txt
 backtest/data/
 
 # IDE

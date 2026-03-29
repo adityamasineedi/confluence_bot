@@ -116,15 +116,19 @@ async def score(symbol: str, cache) -> list[dict]:
         get_vwap_levels,
     )
 
-    from signals.volume_momentum import relative_volume
+    from signals.volume_momentum import VolumeContext, get_volume_params
 
-    cool_ok    = not is_on_cooldown(symbol)
-    regime     = _regime_str(symbol, cache)
-    adx_ok     = _adx_below_max(symbol, cache)
+    cool_ok = not is_on_cooldown(symbol)
+    regime  = _regime_str(symbol, cache)
+    adx_ok  = _adx_below_max(symbol, cache)
 
-    bars_15m_vol = cache.get_ohlcv(symbol, window=22, tf="15m") or []
-    rvol         = relative_volume(bars_15m_vol, lookback=20)
-    rvol_ok      = rvol >= 0.5
+    # Dynamic volume params — VWAP Band uses 15m bars; regime-aware thresholds
+    vol_ctx    = VolumeContext(symbol=symbol, regime=regime or "RANGE", timeframe="15m", cache=cache)
+    vol_params = get_volume_params(vol_ctx)
+    bars_15m_dyn = cache.get_ohlcv(symbol, window=25, tf="15m") or []
+    vol_spike_ok = vol_params.spike(bars_15m_dyn)
+    rvol_ok      = vol_params.rvol_ok(bars_15m_dyn)
+    momentum_ok  = not vol_params.increasing(bars_15m_dyn)
 
     # Current price for RR calculation
     closes_1m = cache.get_closes(symbol, window=1, tf="1m")
@@ -158,8 +162,9 @@ async def score(symbol: str, cache) -> list[dict]:
                 "band_touch":     True,         # always True here (hard gate confirmed)
                 "rsi_confirm":    rsi_ok,
                 "regime_aligned": regime_align,
-                "vol_spike_ok":   rvol >= 0.8,
+                "vol_spike_ok":   vol_spike_ok,
                 "rvol_ok":        rvol_ok,
+                "no_momentum":    momentum_ok,
             }
             score_val = round(sum(1.0 / 3.0 for v in (
                 signals["band_touch"],
@@ -172,12 +177,15 @@ async def score(symbol: str, cache) -> list[dict]:
             dist = abs(price - sl)
             rr   = abs(tp - price) / dist if dist > 0 else 0.0
 
+            # Hard gate: RVOL below minimum = time-of-day noise
+            # Hard gate: increasing volume at band = breakout, not reversion
             fire = (
                 score_val >= _THRESHOLD
                 and regime_gate
                 and adx_ok
                 and rr >= _MIN_RR
                 and rvol_ok
+                and momentum_ok
                 and cool_ok
             )
 
@@ -194,7 +202,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 "vb_tp":     round(tp, 8),
             })
 
-    # ── SHORT: upper_2 band touch + rejection ─────────────────────────────────
+    # ── SHORT: upper_2 band touch + rejection ────────────────────────────────
     band_short = check_vwap_short(symbol, cache)
     if band_short:
         levels = get_vwap_levels(symbol, cache, "SHORT")
@@ -213,8 +221,9 @@ async def score(symbol: str, cache) -> list[dict]:
                 "band_touch":     True,
                 "rsi_confirm":    rsi_ok,
                 "regime_aligned": regime_align,
-                "vol_spike_ok":   rvol >= 0.8,
+                "vol_spike_ok":   vol_spike_ok,
                 "rvol_ok":        rvol_ok,
+                "no_momentum":    momentum_ok,
             }
             score_val = round(sum(1.0 / 3.0 for v in (
                 signals["band_touch"],
@@ -233,6 +242,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 and adx_ok
                 and rr >= _MIN_RR
                 and rvol_ok
+                and momentum_ok
                 and cool_ok
             )
 
