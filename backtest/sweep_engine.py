@@ -7,9 +7,12 @@ Entry  : close of the sweep candle
 SL     : lowest (LONG) / highest (SHORT) wick of the sweep candle - 0.05% buffer
 TP     : entry ± (entry - SL) × 2.5
 """
+import bisect
 import logging
 import os
 import yaml
+
+from backtest.regime_classifier import classify_regime
 
 log = logging.getLogger(__name__)
 
@@ -114,7 +117,10 @@ def run(
     warmup = _SWING_LOOKBACK + _SWING_PIVOT_N + 22   # need vol MA + pivot lookback
 
     for sym in symbols:
-        bars = ohlcv.get(f"{sym}:15m", [])
+        bars    = ohlcv.get(f"{sym}:15m", [])
+        bars_1d = ohlcv.get(f"{sym}:1d",  [])
+        _ts_1d  = [b["ts"] for b in bars_1d]
+
         if len(bars) < warmup + 10:
             log.warning("Sweep: insufficient 15m data for %s (%d bars)", sym, len(bars))
             continue
@@ -188,6 +194,17 @@ def run(
                 # Block SHORT if 4H is in strong uptrend (close > 1.0% above EMA21)
                 htf_short_ok = c4h[-1] <= e4 * (1 + _HTF_BLOCK_PCT)
 
+            # ── Regime classification (label only — sweep fires in all regimes) ─
+            _c4h   = b4h_now[-30:] if len(b4h_now) >= 30 else b4h_now
+            _b1d_i = bisect.bisect_right(_ts_1d, bar_ts) - 1
+            _c1d   = bars_1d[max(0, _b1d_i - 59): _b1d_i + 1] if _b1d_i >= 0 else []
+            regime = classify_regime(
+                closes_4h=[b["c"] for b in _c4h],
+                highs_4h=[b["h"] for b in _c4h],
+                lows_4h=[b["l"] for b in _c4h],
+                closes_1d=[b["c"] for b in _c1d],
+            )
+
             # Body strength check: close in top 40% for long, bottom 40% for short
             candle_range = high - low
             body_long  = (close - low)  / candle_range >= _BODY_STRENGTH if candle_range > 0 else False
@@ -243,7 +260,7 @@ def run(
             risk_amount = round(equity * risk_pct, 4)
             open_trade = {
                 "symbol":      sym,
-                "regime":      "SWEEP",
+                "regime":      regime,
                 "direction":   direction,
                 "entry":       close,
                 "sl":          sl,

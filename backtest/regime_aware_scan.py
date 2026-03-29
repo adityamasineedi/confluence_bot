@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,7 +30,7 @@ log = logging.getLogger("regime_scan")
 
 SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
-    "AVAXUSDT", "ADAUSDT", "DOTUSDT", "DOGEUSDT", "SUIUSDT",
+    "XRPUSDT", "LINKUSDT", "DOGEUSDT", "SUIUSDT",
 ]
 
 STRATEGIES = [
@@ -337,42 +338,125 @@ def _print_breakdown(
     strategy:  str,
     by_regime: dict[str, list[dict]],
     capital:   float,
+    routing:   dict,
 ) -> None:
     print(f"\n{sym} × {strategy}")
+    sym_routing = routing.get(sym, routing.get("_default", {}))
     for regime in REGIMES:
-        trades = by_regime.get(regime, [])
+        is_routed = strategy in sym_routing.get(regime, [])
+        trades    = by_regime.get(regime, [])
         if not trades:
-            print(f"  {regime:<10}   0 trades  (no data)")
+            note = "(regime gate: not routed)" if not is_routed else "(no signals fired)"
+            print(f"  {regime:<10}   0 trades  {note}")
             continue
         s = _bucket_stats(trades, capital)
         if s["status"] != "ok":
-            n = s["trade_count"]
-            print(f"  {regime:<10}  {n:3d} trades  — (insufficient data)")
+            n    = s["trade_count"]
+            note = "" if is_routed else "  [not in routing]"
+            print(f"  {regime:<10}  {n:3d} trades  — (insufficient data){note}")
             continue
+        route_note = "" if is_routed else "  [not in routing]"
         print(
             f"  {regime:<10}  {s['trade_count']:3d} trades"
             f"  WR {s['win_rate']*100:.0f}%"
             f"  PF {s['profit_factor']:.2f}"
             f"  return {s['return_abs']:+.1f}$"
-            f"  {_label(s)}"
+            f"  {_label(s)}{route_note}"
         )
+
+
+def _best_strategy(sym_data: dict, regime: str) -> tuple[str, dict] | tuple[None, None]:
+    """Return (strategy, stats) for the best-performing strategy in this regime."""
+    best_strat = None
+    best_stats = None
+    for strategy in STRATEGIES:
+        stats = sym_data.get(strategy, {}).get(regime)
+        if not stats or stats["status"] != "ok":
+            continue
+        if best_stats is None or stats["profit_factor"] > best_stats["profit_factor"]:
+            best_strat = strategy
+            best_stats = stats
+    return best_strat, best_stats
+
+
+def _regime_badge(stats: dict | None) -> str:
+    if stats is None:
+        return "?"
+    if stats["status"] != "ok":
+        return "?"
+    if _keep(stats):
+        return f"{stats.get('_strategy', '')}✅"
+    if stats["return_abs"] > 0:
+        return f"{stats.get('_strategy', '')}⚠️"
+    return f"{stats.get('_strategy', '')}❌"
+
+
+def _print_best_strategy_matrix(all_results: dict, symbols: list[str]) -> None:
+    print("\n" + "=" * 78)
+    print("TABLE 2: Best strategy per symbol × regime")
+    header = f"{'Symbol':<10}" + "".join(f"  {r:<14}" for r in REGIMES)
+    print(header)
+    print("-" * len(header))
+    for sym in symbols:
+        sym_data = all_results.get(sym, {})
+        row = f"{sym:<10}"
+        for regime in REGIMES:
+            best_strat, best_stats = _best_strategy(sym_data, regime)
+            if best_strat is None:
+                cell = "?"
+            elif best_stats["status"] != "ok":
+                cell = "?"
+            elif _keep(best_stats):
+                cell = f"{best_strat}✅"
+            elif best_stats["return_abs"] > 0:
+                cell = f"{best_strat}⚠️"
+            else:
+                cell = f"{best_strat}❌"
+            row += f"  {cell:<14}"
+        print(row)
+    print()
+    print("Legend: ✅ PF≥1.15 WR≥25%  ⚠️ profitable but weak  ❌ losing  ? untested/insufficient")
 
 
 def _print_recommended_routing(all_results: dict, symbols: list[str]) -> None:
     print("\n" + "=" * 68)
-    print("RECOMMENDED strategy_routing (paste into config.yaml):")
+    print("TABLE 3: RECOMMENDED strategy_routing — paste into config.yaml:")
+    print()
     print("strategy_routing:")
     for sym in symbols:
         print(f"  {sym}:")
         sym_data = all_results.get(sym, {})
         for regime in REGIMES:
-            keepers = []
+            keepers      = []
+            comments     = []
+            untested     = []
             for strategy in STRATEGIES:
+                if strategy == "leadlag":
+                    continue   # always added as fallback at end
                 stats = sym_data.get(strategy, {}).get(regime)
-                if stats and _keep(stats):
+                if stats is None or stats["status"] != "ok":
+                    untested.append(strategy)
+                    continue
+                if _keep(stats):
                     keepers.append(strategy)
-            line = f"[{', '.join(keepers)}]" if keepers else "[]"
-            print(f"    {regime:<10}: {line}")
+                    comments.append(
+                        f"{strategy} PF{stats['profit_factor']:.2f}"
+                        f" WR{stats['win_rate']*100:.0f}%"
+                    )
+            # Always include leadlag as fallback
+            keepers.append("leadlag")
+
+            line = f"[{', '.join(keepers)}]"
+
+            comment_parts = []
+            if comments:
+                comment_parts.append(", ".join(comments))
+            if untested:
+                comment_parts.append(f"{untested[0]} needs test" if len(untested) == 1
+                                     else f"{len(untested)} strategies need test")
+            comment = f"  # {'; '.join(comment_parts)}" if comment_parts else ""
+
+            print(f"    {regime:<10}: {line}{comment}")
     print()
 
 
@@ -392,6 +476,13 @@ def main() -> None:
     strategies = [s.strip()         for s in args.strategies.split(",") if s.strip()] or STRATEGIES
     from_ms    = _date_to_ms(args.from_date)
     to_ms      = _date_to_ms(args.to_date) + 86_400_000
+
+    # Load strategy_routing from config for routing-gate display
+    import yaml as _yaml
+    _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(_cfg_path) as _f:
+        _cfg = _yaml.safe_load(_f)
+    routing: dict = _cfg.get("strategy_routing", {})
 
     total_combos = len(symbols) * len(strategies)
     combo_idx    = 0
@@ -417,10 +508,18 @@ def main() -> None:
     all_results: dict = {}
     json_out:    dict = {}
 
-    for sym in symbols:
+    for sym_idx, sym in enumerate(symbols):
+        if sym_idx > 0:
+            time.sleep(2)   # rate-limit gap between symbol fetches
+
         print(f"\nFetching {sym}...")
-        sym_data  = fetch_period_sync([sym], from_ms, to_ms, warmup_days=60)
-        ohlcv     = sym_data["ohlcv"]
+        try:
+            sym_data = fetch_period_sync([sym], from_ms, to_ms, warmup_days=60)
+        except Exception as exc:
+            log.warning("Fetch failed for %s: %s — skipping", sym, exc)
+            print(f"  FETCH ERROR: {exc} — skipping")
+            continue
+        ohlcv = sym_data["ohlcv"]
         if btc_ohlcv and sym != "BTCUSDT":
             ohlcv = {**ohlcv, **btc_ohlcv}
 
@@ -444,12 +543,12 @@ def main() -> None:
                 trades = _run_engine(strategy, sym, ohlcv, args.capital, args.risk_pct)
             except Exception as exc:
                 log.warning("Engine error %s × %s: %s", sym, strategy, exc)
-                print(f" ERROR: {exc}")
+                print(f" ERROR: {exc} — skipping")
                 all_results[sym][strategy] = {}
                 json_out[sym][strategy]    = {}
                 continue
 
-            # Bucket trades by regime at entry timestamp
+            # Bucket trades by regime at entry timestamp using the 4H timeline
             by_regime: dict[str, list[dict]] = {r: [] for r in REGIMES}
             for trade in trades:
                 regime = lookup_regime(trade.get("entry_ts", 0), sorted_ts, timeline)
@@ -466,8 +565,9 @@ def main() -> None:
                 all_results[sym][strategy][regime] = stats
                 json_out[sym][strategy][regime]    = stats   # stats only — no per-trade records
 
-            _print_breakdown(sym, strategy, by_regime, args.capital)
+            _print_breakdown(sym, strategy, by_regime, args.capital, routing)
 
+    _print_best_strategy_matrix(all_results, symbols)
     _print_recommended_routing(all_results, symbols)
 
     out_path = os.path.join(os.path.dirname(__file__), "regime_scan_results.json")

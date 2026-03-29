@@ -5,9 +5,12 @@ SL     : EMA21 × (1 - 0.002) for LONG, × (1 + 0.002) for SHORT
 TP     : entry ± (entry - SL) × 1.5
 Macro  : 4H EMA21 vs EMA50 determines LONG / SHORT bias
 """
+import bisect
 import logging
 import os
 import yaml
+
+from backtest.regime_classifier import classify_regime
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +112,8 @@ def run(
     for sym in symbols:
         bars_15m = ohlcv.get(f"{sym}:15m", [])
         bars_4h  = ohlcv.get(f"{sym}:4h",  [])
+        bars_1d  = ohlcv.get(f"{sym}:1d",  [])
+        _ts_1d   = [b["ts"] for b in bars_1d]
 
         if len(bars_15m) < warmup_15m + 10:
             log.warning("EMA Pullback: insufficient 15m data for %s (%d bars)", sym, len(bars_15m))
@@ -165,6 +170,20 @@ def run(
 
             if not (htf_long or htf_short):
                 continue   # choppy 4H — no clear bias
+
+            # ── Regime classification ─────────────────────────────────────────
+            _c4h = bars_4h_current[-30:]
+            _b1d_i = bisect.bisect_right(_ts_1d, bar_ts) - 1
+            _c1d = bars_1d[max(0, _b1d_i - 59): _b1d_i + 1] if _b1d_i >= 0 else []
+            regime = classify_regime(
+                closes_4h=[b["c"] for b in _c4h],
+                highs_4h=[b["h"] for b in _c4h],
+                lows_4h=[b["l"] for b in _c4h],
+                closes_1d=[b["c"] for b in _c1d],
+            )
+            # EMA Pullback only fires in trend conditions
+            if regime not in ("TREND", "BREAKOUT"):
+                continue
 
             # ── 15m indicators ─────────────────────────────────────────────────
             bars_slice = bars_15m[max(0, global_idx - _EMA_SLOW - 2): global_idx + 1]
@@ -243,7 +262,7 @@ def run(
             risk_amount = round(equity * risk_pct, 4)
             open_trade = {
                 "symbol":      sym,
-                "regime":      "EMA_PULLBACK",
+                "regime":      regime,
                 "direction":   direction,
                 "entry":       price,
                 "sl":          sl,

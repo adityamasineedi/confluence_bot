@@ -17,9 +17,12 @@ Position sizing
     pnl_loss    = -risk_amount
     pnl_timeout = risk_amount × (pct_move / sl_pct)   — scaled to stop distance
 """
+import bisect
 import logging
 import os
 import yaml
+
+from backtest.regime_classifier import classify_regime
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +145,12 @@ def run(
     all_closed: list[dict] = []
 
     for sym in symbols:
-        bars = ohlcv.get(f"{sym}:5m", [])
+        bars    = ohlcv.get(f"{sym}:5m", [])
+        bars_4h = ohlcv.get(f"{sym}:4h", [])
+        bars_1d = ohlcv.get(f"{sym}:1d", [])
+        _ts_4h  = [b["ts"] for b in bars_4h]
+        _ts_1d  = [b["ts"] for b in bars_1d]
+
         if len(bars) < _WARMUP_BARS + 10:
             log.warning("MicroRange: insufficient 5m data for %s (%d bars)", sym, len(bars))
             continue
@@ -199,6 +207,21 @@ def run(
             if bar_idx < cooldown_until:
                 continue
 
+            # ── Regime classification ─────────────────────────────────────────
+            _b4h_i = bisect.bisect_right(_ts_4h, bar["ts"]) - 1
+            _b1d_i = bisect.bisect_right(_ts_1d, bar["ts"]) - 1
+            if _b4h_i >= 28:
+                _c4h = bars_4h[max(0, _b4h_i - 29): _b4h_i + 1]
+                _c1d = bars_1d[max(0, _b1d_i - 59): _b1d_i + 1] if _b1d_i >= 0 else []
+                regime = classify_regime(
+                    closes_4h=[b["c"] for b in _c4h],
+                    highs_4h=[b["h"] for b in _c4h],
+                    lows_4h=[b["l"] for b in _c4h],
+                    closes_1d=[b["c"] for b in _c1d],
+                )
+            else:
+                regime = "TREND"
+
             # ── 3. Detect box on completed bars (no look-ahead) ───────────────
             window_slice = bars[max(0, global_idx - _WINDOW_BARS - 2) : global_idx]
             box = detect_micro_range(window_slice, _WINDOW_BARS, _RANGE_MAX_PCT)
@@ -225,6 +248,12 @@ def run(
             if direction is None:
                 continue
 
+            # ── Regime gate ───────────────────────────────────────────────────
+            if regime == "CRASH" and direction == "LONG":
+                continue
+            if regime == "PUMP" and direction == "SHORT":
+                continue
+
             # ── 6. Compute boundary-anchored SL/TP ────────────────────────────
             sl, tp = compute_levels(
                 direction,
@@ -242,7 +271,7 @@ def run(
 
             open_trade = {
                 "symbol":          sym,
-                "regime":          "MICRORANGE",
+                "regime":          regime,
                 "direction":       direction,
                 "entry":           entry,
                 "sl":              sl,
