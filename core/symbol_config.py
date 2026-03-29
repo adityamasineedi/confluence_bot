@@ -78,24 +78,24 @@ def _microrange_dynamic(base: dict, tier: str, atr_pct: float) -> dict:
     # (box_mult, stop_mult, tp_ratio, rsi_long_max, rsi_short_min, max_hold)
     params_table = {
         "tier1": {
-            "calm":     (1.0, 0.6, 0.60, 33, 67, 3),
-            "normal":   (1.2, 0.8, 0.55, 35, 65, 3),
-            "volatile": (1.5, 1.0, 0.50, 38, 62, 4),
+            "calm":     (1.0, 0.6, 0.75, 33, 67, 3),
+            "normal":   (1.2, 0.8, 0.70, 35, 65, 3),
+            "volatile": (1.5, 1.0, 0.65, 38, 62, 4),
         },
         "tier2": {
-            "calm":     (1.2, 0.8, 0.65, 38, 62, 4),
-            "normal":   (1.5, 1.0, 0.60, 40, 60, 4),
-            "volatile": (1.8, 1.2, 0.55, 43, 57, 5),
+            "calm":     (1.2, 0.8, 0.80, 38, 62, 4),
+            "normal":   (1.5, 1.0, 0.75, 40, 60, 4),
+            "volatile": (1.8, 1.2, 0.70, 43, 57, 5),
         },
         "tier3": {
-            "calm":     (1.5, 0.9, 0.70, 42, 58, 4),
-            "normal":   (2.0, 1.2, 0.65, 45, 55, 5),
-            "volatile": (2.5, 1.5, 0.60, 48, 52, 6),
+            "calm":     (1.5, 0.9, 0.85, 42, 58, 4),
+            "normal":   (2.0, 1.2, 0.80, 45, 55, 5),
+            "volatile": (2.5, 1.5, 0.75, 48, 52, 6),
         },
         "base": {
-            "calm":     (1.2, 0.8, 0.60, 38, 62, 4),
-            "normal":   (1.5, 1.0, 0.55, 40, 60, 4),
-            "volatile": (1.8, 1.2, 0.50, 43, 57, 5),
+            "calm":     (1.2, 0.8, 0.75, 38, 62, 4),
+            "normal":   (1.5, 1.0, 0.70, 40, 60, 4),
+            "volatile": (1.8, 1.2, 0.65, 43, 57, 5),
         },
     }
     tier_params = params_table.get(tier, params_table["base"])
@@ -118,8 +118,8 @@ def _microrange_dynamic(base: dict, tier: str, atr_pct: float) -> dict:
 
     tp_distance = range_max_pct * tp_ratio
     actual_rr   = tp_distance / stop_pct if stop_pct > 0 else 0
-    if actual_rr < 1.3:
-        tp_ratio = round(min(0.90, (stop_pct * 1.3) / range_max_pct), 2)
+    if actual_rr < 1.5:
+        tp_ratio = round(min(0.95, (stop_pct * 1.5) / range_max_pct), 2)
 
     dynamic = base.copy()
     dynamic["range_max_pct"]  = range_max_pct

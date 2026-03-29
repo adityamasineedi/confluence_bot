@@ -320,6 +320,11 @@ async def _fetch_klines_range(
             for attempt in range(3):
                 try:
                     async with session.get(url, params=params) as resp:
+                        if resp.status in (429, 418):
+                            log.warning("rate-limited %s %s (status=%d) — sleeping 15s",
+                                        symbol, tf, resp.status)
+                            await asyncio.sleep(15)
+                            continue
                         resp.raise_for_status()
                         rows = await resp.json()
                     break
@@ -346,7 +351,7 @@ async def _fetch_klines_range(
             if last_ts >= end_ms or len(rows) < 1500:
                 break
             cursor = last_ts + _MS.get(tf, 60_000)
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.5)
 
         # only use spot for pre-futures data
         if url == futures_url and futures_launch <= start_ms:
@@ -495,7 +500,7 @@ async def fetch_period_async(
                 log.info("  %s %s...", symbol, tf)
                 bars = await _fetch_klines_range(session, symbol, tf, fetch_start, to_ms)
                 merged["ohlcv"][f"{symbol}:{tf}"] = bars
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
             log.info("  %s OI...", symbol)
             oi = await _fetch_oi_range(session, symbol, fetch_start, to_ms)
@@ -504,6 +509,8 @@ async def fetch_period_async(
             log.info("  %s funding...", symbol)
             fund = await _fetch_funding_range(session, symbol, fetch_start, to_ms)
             merged["funding"][symbol] = fund
+
+            await asyncio.sleep(3)
 
     return merged
 
