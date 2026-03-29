@@ -104,7 +104,9 @@ async def score(symbol: str, cache) -> list[dict]:
             "pullback_touch": True,   # True by definition (pullback_long passed)
         }
         score_val = sum(0.25 for v in signals.values() if v)
-        entry, stop, tp = get_ema15m_long_levels(symbol, cache)
+        from core.symbol_config import get_symbol_tier
+        tier = get_symbol_tier(symbol)
+        entry, stop, tp = get_ema15m_long_levels(symbol, cache, tier=tier)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
         fire = score_val >= _THRESHOLD and bounce_ok and vol_ok and cool_ok and entry > 0
 
@@ -143,7 +145,9 @@ async def score(symbol: str, cache) -> list[dict]:
             "pullback_touch": True,
         }
         score_val = sum(0.25 for v in signals.values() if v)
-        entry, stop, tp = get_ema15m_short_levels(symbol, cache)
+        from core.symbol_config import get_symbol_tier
+        tier = get_symbol_tier(symbol)
+        entry, stop, tp = get_ema15m_short_levels(symbol, cache, tier=tier)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
         fire = score_val >= _THRESHOLD and bounce_ok and vol_ok and cool_ok and entry > 0
 

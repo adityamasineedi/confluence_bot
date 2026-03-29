@@ -88,6 +88,32 @@ def detect_micro_range(
     }
 
 
+# ── Box quality filter ───────────────────────────────────────────────────────
+
+def count_boundary_touches(
+    bars: list[dict],
+    range_low: float,
+    range_high: float,
+    touch_zone_pct: float = 0.002,
+    min_touches: int = 2,
+) -> bool:
+    """Return True when BOTH boundaries have been tested at least min_touches times.
+
+    A properly established range has multiple touches on each side.
+    A brand-new box with only 1 touch per side is likely a one-time spike, not a range.
+    Requiring 2+ touches per boundary greatly reduces false microrange detections.
+    """
+    low_touches = sum(
+        1 for b in bars
+        if abs(b["l"] - range_low) / range_low <= touch_zone_pct
+    )
+    high_touches = sum(
+        1 for b in bars
+        if abs(b["h"] - range_high) / range_high <= touch_zone_pct
+    )
+    return low_touches >= min_touches and high_touches >= min_touches
+
+
 # ── Entry zone filters ────────────────────────────────────────────────────────
 
 def near_range_low(price: float, range_low: float, entry_zone_pct: float) -> bool:

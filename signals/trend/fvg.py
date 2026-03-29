@@ -38,10 +38,42 @@ with open(_CONFIG_PATH) as _f:
 _FVG_CFG     = _cfg.get("fvg", {})
 _LOOKBACK    = int(_FVG_CFG.get("lookback_bars", 50))
 _MIN_GAP_PCT = float(_FVG_CFG.get("min_gap_pct", 0.003))
+_MACRO_FILTER_ENABLED = bool(_FVG_CFG.get("macro_filter_enabled", True))
+_MACRO_EMA_PERIOD     = int(_FVG_CFG.get("macro_ema_period", 200))
 
 # Module-level set of touched FVG keys: (symbol, direction, gap_low, gap_high).
 # Records the first time price enters a gap — prevents re-signalling the same zone.
 _touched: set[tuple] = set()
+
+
+def _macro_allows_long(symbol: str, cache) -> bool:
+    """LONG FVG only when above 1D EMA200 — prevents going long in bear markets."""
+    if not _MACRO_FILTER_ENABLED:
+        return True
+    bars_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
+    if not bars_1d or len(bars_1d) < _MACRO_EMA_PERIOD:
+        return True   # insufficient data — don't block
+    closes = [b["c"] for b in bars_1d]
+    ema200 = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
+    k = 2.0 / (_MACRO_EMA_PERIOD + 1)
+    for c in closes[_MACRO_EMA_PERIOD:]:
+        ema200 = c * k + ema200 * (1 - k)
+    return closes[-1] > ema200
+
+
+def _macro_allows_short(symbol: str, cache) -> bool:
+    """SHORT FVG only when below 1D EMA200 — prevents shorting in bull markets."""
+    if not _MACRO_FILTER_ENABLED:
+        return True
+    bars_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
+    if not bars_1d or len(bars_1d) < _MACRO_EMA_PERIOD:
+        return True
+    closes = [b["c"] for b in bars_1d]
+    ema200 = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
+    k = 2.0 / (_MACRO_EMA_PERIOD + 1)
+    for c in closes[_MACRO_EMA_PERIOD:]:
+        ema200 = c * k + ema200 * (1 - k)
+    return closes[-1] < ema200
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -139,6 +171,9 @@ def check_fvg_bullish(symbol: str, cache) -> bool:
     if key in _touched:
         return False  # already fired on this gap — only one entry per virgin gap
 
+    if not _macro_allows_long(symbol, cache):
+        return False   # bear market — don't buy into old bullish gaps
+
     _touched.add(key)
     return True
 
@@ -165,6 +200,9 @@ def check_fvg_bearish(symbol: str, cache) -> bool:
     key = (symbol, "SHORT", round(gap_low, 8), round(gap_high, 8))
     if key in _touched:
         return False
+
+    if not _macro_allows_short(symbol, cache):
+        return False   # bull market — don't short into old bearish gaps
 
     _touched.add(key)
     return True

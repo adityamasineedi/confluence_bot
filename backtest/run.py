@@ -393,6 +393,14 @@ def main() -> None:
         help="Walk-forward validation: train 2023-2024, validate 2025, print overfitting score",
     )
     parser.add_argument(
+        "--analyze", action="store_true",
+        help="Run trade analyzer after backtest — diagnose why each trade won/lost",
+    )
+    parser.add_argument(
+        "--regime", default=None,
+        help="Limit analyzer output to one regime (e.g. TREND, RANGE, BREAKOUT)",
+    )
+    parser.add_argument(
         "--strategy",
         choices=["main", "leadlag", "both", "microrange", "session", "insidebar", "funding",
                  "sweep", "ema_pullback", "zone", "fvg", "bos", "vwap_band", "oi_spike",
@@ -537,6 +545,11 @@ def main() -> None:
             mr_stats = compute_stats(mr_trades, starting_capital=args.capital)
             print_report(mr_stats, trades=mr_trades, starting_capital=args.capital)
             _print_cost_analysis(mr_trades, args.capital)
+            if args.analyze:
+                from backtest.trade_analyzer import analyze as _analyze
+                for _sym in symbols:
+                    _analyze(symbol=_sym, strategy="microrange",
+                             trades=mr_trades, ohlcv=ohlcv, regime_filter=args.regime)
             mr_path = _os.path.join(_os.path.dirname(__file__), "results_microrange.json")
             with open(mr_path, "w") as f:
                 json.dump({"stats": mr_stats, "trades": mr_trades, "symbols": symbols,
@@ -633,6 +646,11 @@ def main() -> None:
             sw_stats = compute_stats(sw_trades, starting_capital=args.capital)
             print_report(sw_stats, trades=sw_trades, starting_capital=args.capital)
             _print_cost_analysis(sw_trades, args.capital)
+            if args.analyze:
+                from backtest.trade_analyzer import analyze as _analyze
+                for _sym in symbols:
+                    _analyze(symbol=_sym, strategy="sweep",
+                             trades=sw_trades, ohlcv=ohlcv, regime_filter=args.regime)
             sw_path = _os.path.join(_os.path.dirname(__file__), "results_sweep.json")
             with open(sw_path, "w") as f:
                 json.dump({"stats": sw_stats, "trades": sw_trades, "symbols": symbols,
@@ -658,6 +676,11 @@ def main() -> None:
             ep_stats = compute_stats(ep_trades, starting_capital=args.capital)
             print_report(ep_stats, trades=ep_trades, starting_capital=args.capital)
             _print_cost_analysis(ep_trades, args.capital)
+            if args.analyze:
+                from backtest.trade_analyzer import analyze as _analyze
+                for _sym in symbols:
+                    _analyze(symbol=_sym, strategy="ema_pullback",
+                             trades=ep_trades, ohlcv=ohlcv, regime_filter=args.regime)
             ep_path = _os.path.join(_os.path.dirname(__file__), "results_ema_pullback.json")
             with open(ep_path, "w") as f:
                 json.dump({"stats": ep_stats, "trades": ep_trades, "symbols": symbols,
@@ -708,6 +731,11 @@ def main() -> None:
             fvg_stats = compute_stats(fvg_trades, starting_capital=args.capital)
             print_report(fvg_stats, trades=fvg_trades, starting_capital=args.capital)
             _print_cost_analysis(fvg_trades, args.capital)
+            if args.analyze:
+                from backtest.trade_analyzer import analyze as _analyze
+                for _sym in symbols:
+                    _analyze(symbol=_sym, strategy="fvg",
+                             trades=fvg_trades, ohlcv=ohlcv, regime_filter=args.regime)
             fvg_path = _os.path.join(_os.path.dirname(__file__), "results_fvg.json")
             with open(fvg_path, "w") as f:
                 json.dump({"stats": fvg_stats, "trades": fvg_trades, "symbols": symbols,
@@ -757,6 +785,11 @@ def main() -> None:
             vb_stats = compute_stats(vb_trades, starting_capital=args.capital)
             print_report(vb_stats, trades=vb_trades, starting_capital=args.capital)
             _print_cost_analysis(vb_trades, args.capital)
+            if args.analyze:
+                from backtest.trade_analyzer import analyze as _analyze
+                for _sym in symbols:
+                    _analyze(symbol=_sym, strategy="vwap_band",
+                             trades=vb_trades, ohlcv=ohlcv, regime_filter=args.regime)
             vb_path = _os.path.join(_os.path.dirname(__file__), "results_vwap_band.json")
             with open(vb_path, "w") as f:
                 json.dump({"stats": vb_stats, "trades": vb_trades, "symbols": symbols,

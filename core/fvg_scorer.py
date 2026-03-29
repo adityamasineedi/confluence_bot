@@ -36,7 +36,16 @@ with open(_CONFIG_PATH) as _f:
 _FVG_CFG = _cfg.get("fvg", {})
 
 _COOLDOWN_SECS  = float(_FVG_CFG.get("cooldown_mins",   45))   * 60.0
-_THRESHOLD      = 0.67          # 2 of 3 scored signals required
+_THRESHOLD      = 0.67          # fvg(0.30) + htf(0.25) + rsi(0.20) = 0.75 >= 0.67 → fires
+
+_SIGNAL_WEIGHTS = {
+    "fvg_detected": 0.30,   # hard gate — primary signal
+    "htf_aligned":  0.25,   # HTF direction alignment
+    "rsi_confirm":  0.20,   # RSI zone
+    "vol_confirm":  0.10,   # volume spike at entry
+    "vol_not_dist": 0.10,   # no distribution/accumulation pattern
+    "rvol_ok":      0.05,   # relative volume acceptable
+}
 _SL_BUFFER_PCT  = float(_FVG_CFG.get("sl_buffer_pct",   0.002))
 _RR_RATIO       = float(_FVG_CFG.get("rr_ratio",        2.0))
 _LOOKBACK       = int(_FVG_CFG.get("lookback_bars",      50))
@@ -173,8 +182,9 @@ async def score(symbol: str, cache) -> list[dict]:
                 "vol_not_dist": vol_not_dist,
                 "rvol_ok":      rvol_ok,
             }
-            # 5 original scored signals + rvol_ok = 0.2 each
-            score_val = round(sum(0.2 for v in signals.values() if v), 4)
+            score_val = round(sum(
+                _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
+            ), 4)
 
             sl   = gap_low * (1.0 - _SL_BUFFER_PCT)
             dist = abs(price - sl)
@@ -216,10 +226,12 @@ async def score(symbol: str, cache) -> list[dict]:
                 "htf_aligned":   htf_aligned,
                 "rsi_confirm":   rsi_ok,
                 "vol_confirm":   vol_confirms,
-                "vol_not_accum": vol_not_accum,
+                "vol_not_dist":  vol_not_accum,   # reuse shared weight key
                 "rvol_ok":       rvol_ok,
             }
-            score_val = round(sum(0.2 for v in signals.values() if v), 4)
+            score_val = round(sum(
+                _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
+            ), 4)
 
             sl   = gap_high * (1.0 + _SL_BUFFER_PCT)
             dist = abs(sl - price)

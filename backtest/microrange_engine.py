@@ -36,8 +36,9 @@ with open(_CONFIG_PATH) as _f:
 
 _MR = _cfg.get("microrange", {})
 
-_WINDOW_BARS    = int(_MR.get("window_bars",    10))
-_COOLDOWN_BARS  = int(_MR.get("cooldown_mins",  20) // 5)   # 20 min → 4 × 5m bars
+_WINDOW_BARS    = int(_MR.get("window_bars",    12))
+_COOLDOWN_BARS  = int(_MR.get("cooldown_mins",  60) // 5)   # 60 min → 12 × 5m bars
+_MIN_BOX_TOUCHES = int(_MR.get("min_box_touches", 2))
 _USE_RSI_FILTER = bool(_MR.get("use_rsi_filter", True))
 _WARMUP_BARS    = _WINDOW_BARS + 22   # need vol MA(20) + window + 1
 
@@ -144,6 +145,7 @@ def run(
         rsi_supports_long,
         rsi_supports_short,
         compute_levels,
+        count_boundary_touches,
     )
 
     all_closed: list[dict] = []
@@ -245,6 +247,14 @@ def run(
             window_slice = bars[max(0, global_idx - _WINDOW_BARS - 2) : global_idx]
             box = detect_micro_range(window_slice, _WINDOW_BARS, _RANGE_MAX_PCT)
             if box is None:
+                continue
+
+            # Box establishment gate — both boundaries must be tested enough times
+            box_bars = window_slice[-(  _WINDOW_BARS + 1):-1]
+            if not count_boundary_touches(
+                box_bars, box["range_low"], box["range_high"],
+                min_touches=_MIN_BOX_TOUCHES,
+            ):
                 continue
 
             price  = bar["c"]

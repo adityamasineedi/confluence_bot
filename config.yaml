@@ -282,8 +282,16 @@ ema_pullback:
   min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
   min_ema_dist_pct: 0.002       # separate key for scorer _MIN_EMA_DIST (fixes duplicate key bug)
   rr_ratio: 1.5                 # revert BTC back to 1.5
+  sl_atr_mult:                  # ATR multiplier per tier — replaces fixed EMA-distance SL
+    tier1: 1.5                  # BTC: cleanest trend, tightest ok
+    tier2: 2.0                  # XRP, LINK, ETH, SOL: moderate noise
+    tier3: 2.5                  # SUI, DOGE: high volatility floor
+    base:  2.0
+  min_sl_pct: 0.003             # absolute floor — SL never < 0.3% regardless of ATR
   vol_quiet_mult: 0.8           # tightened from 1.2 — only enter on very quiet pullbacks
-  max_hold_bars: 8              # 8 × 15m = 2h max hold
+  adx_short_min: 30             # minimum 4H ADX for SHORT entries (weak bears are choppy)
+  adx_long_min: 22              # minimum 4H ADX for LONG entries (bull markets more forgiving)
+  max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — failed setups dragged to 2h)
   rsi_long_min: 30              # lower bound for LONG RSI (non-overlapping: 30–50)
   rsi_long_max: 50              # upper bound for LONG RSI
   rsi_short_min: 50             # lower bound for SHORT RSI (non-overlapping: 50–70)
@@ -342,7 +350,14 @@ vwap_band:
   check_interval_secs: 30     # 15m bars — poll every 30s to catch rejections early
   cooldown_mins: 30           # per-symbol cooldown after entry
   max_positions: 3
-  sl_buffer_pct: 0.002        # SL 0.2% beyond the ±2σ band edge
+  sl_buffer_pct: 0.002        # legacy — kept for fallback; ATR SL now takes precedence
+  sl_atr_mult:                # ATR multiplier per tier — replaces fixed band-distance SL
+    tier1: 1.2                # BTC: tightest (was 0.32% fixed — now ATR × 1.2)
+    tier2: 1.5                # XRP, LINK: proven too tight at 0.32% vs 0.57% ATR
+    tier3: 2.0                # SUI, DOGE: high volatility floor
+    base:  1.5
+  min_sl_pct: 0.003           # absolute floor — SL never < 0.3% regardless of ATR
+  max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — VWAP reversion should happen within 1h)
   exclude_symbols:
     - BTCUSDT    # TREND PF1.07 weak, not worth enabling
     - ETHUSDT    # TREND PF0.67 BAD
@@ -352,6 +367,24 @@ vwap_band:
     # XRPUSDT removed — TREND PF1.40 WR31%, RANGE PF1.48 WR30% ✅
     # LINKUSDT removed — TREND PF1.50 WR40%, RANGE PF2.25 WR36% ✅
     # SUIUSDT removed — TREND PF1.52 WR27% ✅
+
+# ── Session filter ────────────────────────────────────────────────────────────
+session_filter:
+  enabled: true
+  block_saturday: true
+  dead_zone_start_utc: 22    # was 21 — narrowed by 1 hour
+  dead_zone_end_utc: 24      # was 01 — narrowed from 4h block to 2h block
+  # Previously blocked 21:00–01:00 (4h). Now only 22:00–00:00 (2h) + Saturday
+
+# ── BTC direction gate ────────────────────────────────────────────────────────
+btc_direction_gate:
+  enabled: true
+  mode: veto          # was: confirm (required BTC same direction — too strict)
+  fall_threshold: -0.0003   # block alt LONG if BTC falling faster than this per hour
+  rise_threshold: +0.0003   # block alt SHORT if BTC rising faster than this per hour
+  # flat BTC = allowed (altcoin season conditions)
+  apply_to: [ema_pullback, vwap_band]
+  skip_for: [BTCUSDT]
 
 # ── Break of Structure / Change of Character strategy ────────────────────────
 # Trades confirmed 1H structure breaks (swing high/low closes) with volume.
@@ -381,6 +414,8 @@ fvg:
   rr_ratio: 2.0               # TP = entry ± dist × 2.0
   sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
   lookback_bars: 50           # scan last 50 1H candles for FVGs
+  macro_filter_enabled: true  # 1D EMA200 gate — LONG only above, SHORT only below
+  macro_ema_period: 200       # EMA period for macro direction gate
   exclude_symbols:
     - XRPUSDT    # TR:PF0.17 WR7% -$199 — worst result in entire scan
     - LINKUSDT   # TR:PF0.68 WR24% -$58
@@ -396,14 +431,15 @@ microrange:
     # LINKUSDT removed — RANGE PF1.26 WR33% confirmed ✅
     # DOGEUSDT confirmed CRASH PF1.97 WR38% — removed from exclude
     # SUIUSDT confirmed CRASH PF1.91 WR41% — removed from exclude
-  window_bars: 10
+  window_bars: 12             # was 10 — longer window = rarer but higher quality boxes
   range_max_pct: 0.005      # 0.5% max box width (tightened from 1.0%)
   entry_zone_pct: 0.001     # within 0.1% of boundary (tightened from 0.2%)
   stop_pct: 0.002           # 0.2% SL — MUST satisfy: stop_pct × 2 ≤ range_max_pct
                             # invariant check: 0.004 ≤ 0.005 ✓
   tp_ratio: 0.55
   max_hold_bars: 3
-  cooldown_mins: 20
+  cooldown_mins: 60             # was 20 — tripled to cut trades by ~3×
+  min_box_touches: 2            # NEW: both boundaries must be tested ≥2× (no one-time spikes)
   max_positions: 3
   max_vol_ratio: 1.3
   rsi_long_max: 35          # tightened from 40

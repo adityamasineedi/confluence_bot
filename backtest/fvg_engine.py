@@ -34,8 +34,20 @@ _SL_BUFFER    = float(_FVG_CFG.get("sl_buffer_pct",  0.002))
 _RR           = float(_FVG_CFG.get("rr_ratio",        2.0))
 _RSI_WINDOW   = 14
 _EMA_PERIOD   = 21
+_MACRO_EMA_PERIOD = int(_FVG_CFG.get("macro_ema_period", 200))
+_MACRO_FILTER     = bool(_FVG_CFG.get("macro_filter_enabled", True))
 _COOLDOWN_BARS = int(_FVG_CFG.get("cooldown_mins",   45))   # 1 bar = 1 hour
 _MAX_HOLD      = 24   # 24 × 1h = 1 day
+
+_FVG_SIGNAL_WEIGHTS = {
+    "fvg_detected": 0.30,
+    "htf_aligned":  0.25,
+    "rsi_confirm":  0.20,
+    "vol_confirm":  0.10,
+    "vol_not_dist": 0.10,
+    "rvol_ok":      0.05,
+}
+_FIRE_THRESHOLD = 0.67
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -51,6 +63,27 @@ def _ema(closes: list[float], period: int) -> float:
     for v in closes[1:]:
         e = v * k + e * (1 - k)
     return e
+
+
+def _ema200_direction(bars_1d: list[dict], bar_ts: int) -> tuple[bool, bool]:
+    """Return (macro_long_ok, macro_short_ok) using 1D EMA200 at bar_ts.
+
+    macro_long_ok  = price above 1D EMA200 (allow LONG FVGs)
+    macro_short_ok = price below 1D EMA200 (allow SHORT FVGs)
+    Both True when filter disabled or insufficient data.
+    """
+    if not _MACRO_FILTER:
+        return True, True
+    bars_now = [b for b in bars_1d if b["ts"] <= bar_ts]
+    if len(bars_now) < _MACRO_EMA_PERIOD:
+        return True, True
+    closes = [b["c"] for b in bars_now]
+    ema200 = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
+    k = 2.0 / (_MACRO_EMA_PERIOD + 1)
+    for c in closes[_MACRO_EMA_PERIOD:]:
+        ema200 = c * k + ema200 * (1 - k)
+    price = closes[-1]
+    return price > ema200, price < ema200
 
 
 def _rsi(closes: list[float], window: int = _RSI_WINDOW) -> float:
@@ -200,6 +233,9 @@ def run(
             if bar_idx < cooldown_until:
                 continue
 
+            # ── 1D EMA200 macro direction gate ────────────────────────────────
+            macro_long_ok, macro_short_ok = _ema200_direction(bars_1d, bar_ts)
+
             # ── 4H HTF EMA21 alignment ─────────────────────────────────────────
             b4h_now    = [b for b in bars_4h if b["ts"] <= bar_ts]
             htf_long   = False
@@ -225,18 +261,27 @@ def run(
             vol_params = get_volume_params_static(sym, regime, "1h")
 
             # ── Close data for RSI / EMA ───────────────────────────────────────
-            lookback_slice = bars_1h[max(0, global_idx - _LOOKBACK): global_idx]
+            lookback_slice = bars_1h[max(0, global_idx - _LOOKBACK): global_idx + 1]
+            bars_1h_window = lookback_slice  # alias for volume signal computation
             closes = [b["c"] for b in lookback_slice]
             if len(closes) < _RSI_WINDOW + 2:
                 continue
             rsi     = _rsi(closes)
             current = bar["c"]
 
+            # ── Volume signals (shared for both directions) ────────────────────
+            vol_avg      = sum(b["v"] for b in bars_1h_window[-21:-1]) / 20 if len(bars_1h_window) >= 21 else 0
+            vol_confirm  = bars_1h_window[-1]["v"] > vol_avg * 1.2 if vol_avg > 0 else True
+            vol_not_dist = not (bars_1h_window[-1]["c"] > bars_1h_window[-5]["c"] and
+                                bars_1h_window[-1]["v"] < bars_1h_window[-5]["v"] * 0.8) \
+                           if len(bars_1h_window) >= 5 else True
+            rvol_ok      = bars_1h_window[-1]["v"] / vol_avg > 0.7 if vol_avg > 0 else True
+
             direction = None
             sl = tp = 0.0
 
             # ── Try LONG: price enters a bullish FVG ───────────────────────────
-            if htf_long and rsi <= 45:
+            if macro_long_ok and htf_long and rsi <= 45:
                 fvgs = _find_virgin_fvgs(lookback_slice, "LONG")
                 for gap_low, gap_high in reversed(fvgs):   # most recent first
                     if current < gap_low or current > gap_high:
@@ -245,12 +290,23 @@ def run(
                     dist = abs(current - sl)
                     if dist <= 0:
                         continue
-                    tp         = current + dist * _RR
-                    direction  = "LONG"
+                    signals = {
+                        "fvg_detected": True,
+                        "htf_aligned":  htf_long,
+                        "rsi_confirm":  rsi <= 45,
+                        "vol_confirm":  vol_confirm,
+                        "vol_not_dist": vol_not_dist,
+                        "rvol_ok":      rvol_ok,
+                    }
+                    score = round(sum(_FVG_SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v), 4)
+                    if score < _FIRE_THRESHOLD:
+                        continue
+                    tp        = current + dist * _RR
+                    direction = "LONG"
                     break
 
             # ── Try SHORT: price enters a bearish FVG ──────────────────────────
-            if direction is None and htf_short and rsi >= 55:
+            if direction is None and macro_short_ok and htf_short and rsi >= 55:
                 fvgs = _find_virgin_fvgs(lookback_slice, "SHORT")
                 for gap_low, gap_high in reversed(fvgs):
                     if current < gap_low or current > gap_high:
@@ -258,6 +314,17 @@ def run(
                     sl   = gap_high * (1.0 + _SL_BUFFER)
                     dist = abs(sl - current)
                     if dist <= 0:
+                        continue
+                    signals = {
+                        "fvg_detected": True,
+                        "htf_aligned":  htf_short,
+                        "rsi_confirm":  rsi >= 55,
+                        "vol_confirm":  vol_confirm,
+                        "vol_not_dist": vol_not_dist,
+                        "rvol_ok":      rvol_ok,
+                    }
+                    score = round(sum(_FVG_SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v), 4)
+                    if score < _FIRE_THRESHOLD:
                         continue
                     tp        = current - dist * _RR
                     direction = "SHORT"

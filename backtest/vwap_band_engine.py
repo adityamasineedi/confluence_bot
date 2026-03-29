@@ -35,12 +35,13 @@ _RSI_LONG_MAX = float(_VB_CFG.get("rsi_long_max",  35))
 _RSI_SHORT_MIN= float(_VB_CFG.get("rsi_short_min", 65))
 _ADX_MAX      = float(_VB_CFG.get("adx_max",       30))
 _VOL_MAX_MULT = float(_VB_CFG.get("vol_max_mult",   1.5))
-_SL_BUFFER    = float(_VB_CFG.get("sl_buffer_pct",  0.002))
+_VB_ATR_MULT  = _VB_CFG.get("sl_atr_mult", {"tier1": 1.2, "tier2": 1.5, "tier3": 2.0, "base": 1.5})
+_VB_MIN_SL_PCT = float(_VB_CFG.get("min_sl_pct", 0.003))
 _MIN_RR       = 1.5   # inline RR gate: |vwap - entry| / |entry - SL| >= 1.5
 _RSI_WINDOW   = 14
 _ADX_WINDOW   = 14
 _COOLDOWN_BARS = int(_VB_CFG.get("cooldown_mins", 30) // 15)  # 30min → 2 × 15m bars
-_MAX_HOLD      = 8    # 8 × 15m = 2h
+_MAX_HOLD      = int(_VB_CFG.get("max_hold_bars", 4))  # default 4 bars = 1h on 15m chart
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -150,6 +151,10 @@ def run(
             log.warning("VWAPBand: insufficient 15m data for %s (%d bars)", sym, len(bars_15m))
             continue
 
+        from core.symbol_config import get_symbol_tier
+        _tier     = get_symbol_tier(sym)
+        _atr_mult = float(_VB_ATR_MULT.get(_tier, _VB_ATR_MULT.get("base", 1.5)))
+
         equity         = starting_capital
         eval_bars      = bars_15m[warmup:]
         open_trade: dict | None  = None
@@ -238,12 +243,29 @@ def run(
             direction = None
             sl = tp   = 0.0
 
+            # RVOL gate — skip low time-of-day volume entries
+            _rvol_params = get_volume_params_static(sym, regime, "15m")
+            _rvol_bars   = band_slice[-25:] if len(band_slice) >= 2 else []
+            if _rvol_bars and not _rvol_params.rvol_ok(_rvol_bars):
+                continue
+
+            # ── ATR for SL sizing ──────────────────────────────────────────────
+            if len(band_slice) >= 2:
+                _trs = []
+                for _j in range(1, len(band_slice)):
+                    _h, _l, _pc = band_slice[_j]["h"], band_slice[_j]["l"], band_slice[_j - 1]["c"]
+                    _trs.append(max(_h - _l, abs(_h - _pc), abs(_l - _pc)))
+                _atr_val = sum(_trs[-14:]) / min(14, len(_trs)) if _trs else bar["c"] * 0.005
+            else:
+                _atr_val = bar["c"] * 0.005
+            _stop_dist = max(_atr_val * _atr_mult, bar["c"] * _VB_MIN_SL_PCT)
+
             # ── LONG: price touched lower_2 then closed back inside ────────────
             if (rsi <= _RSI_LONG_MAX and vol_ok
                     and prev_bar["l"] <= bands["lower_2"]
                     and bar["c"] > bands["lower_2"]):
-                sl   = bands["lower_2"] * (1.0 - _SL_BUFFER)
-                dist = abs(bar["c"] - sl)
+                sl   = bar["c"] - _stop_dist
+                dist = _stop_dist
                 rr_avail = abs(vwap_mid - bar["c"]) / dist if dist > 0 else 0
                 if dist > 0 and rr_avail >= _MIN_RR:
                     tp        = vwap_mid
@@ -253,8 +275,8 @@ def run(
             elif (rsi >= _RSI_SHORT_MIN and vol_ok
                     and prev_bar["h"] >= bands["upper_2"]
                     and bar["c"] < bands["upper_2"]):
-                sl   = bands["upper_2"] * (1.0 + _SL_BUFFER)
-                dist = abs(sl - bar["c"])
+                sl   = bar["c"] + _stop_dist
+                dist = _stop_dist
                 rr_avail = abs(bar["c"] - vwap_mid) / dist if dist > 0 else 0
                 if dist > 0 and rr_avail >= _MIN_RR:
                     tp        = vwap_mid

@@ -89,6 +89,7 @@ async def score(symbol: str, cache) -> list[dict]:
         rsi_supports_long,
         rsi_supports_short,
         compute_levels,
+        count_boundary_touches,
     )
 
     from signals.volume_momentum import VolumeContext, get_volume_params
@@ -103,6 +104,15 @@ async def score(symbol: str, cache) -> list[dict]:
 
     # Reject boxes too narrow to achieve minimum RR — avoids marginal 1.5× trades
     if box["range_width_pct"] < _MIN_BOX_PCT:
+        return []
+
+    # Box establishment gate — both boundaries must be tested enough times
+    min_touches = int(cfg.get("min_box_touches", 2))
+    if not count_boundary_touches(
+        bars[-(  _WINDOW_BARS + 1):-1],
+        box["range_low"], box["range_high"],
+        min_touches=min_touches,
+    ):
         return []
 
     price   = bars[-1]["c"]

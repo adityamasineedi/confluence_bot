@@ -12,6 +12,7 @@ import yaml
 
 from backtest.cost_model import apply_costs
 from backtest.regime_classifier import classify_regime
+from signals.volume_momentum import get_volume_params_static
 
 _BAR_MINUTES = 15
 
@@ -28,7 +29,7 @@ _PULLBACK_PCT    = float(_EP.get("pullback_touch_pct", 0.002))
 _MIN_BOUNCE_PCT  = float(_EP.get("min_bounce_body_pct",0.002))
 _VOL_QUIET       = float(_EP.get("vol_quiet_mult",     1.2))
 _COOLDOWN_BARS   = int(_EP.get("cooldown_mins",        45) // 15)  # 45 min → 3 × 15m bars
-_MAX_HOLD        = int(_EP.get("max_hold_bars",         8))
+_MAX_HOLD        = int(_EP.get("max_hold_bars",         4))
 _FIRE_THRESHOLD  = float(_EP.get("fire_threshold",     0.75))
 
 _EMA_FAST        = 21
@@ -38,7 +39,8 @@ _RSI_LONG_MIN    = float(_EP.get("rsi_long_min",  30.0))
 _RSI_LONG_MAX    = float(_EP.get("rsi_long_max",  50.0))
 _RSI_SHORT_MIN   = float(_EP.get("rsi_short_min", 50.0))
 _RSI_SHORT_MAX   = float(_EP.get("rsi_short_max", 70.0))
-_SL_BUFFER       = 0.002   # 0.2% below/above EMA21
+_SL_ATR_MULT = _EP.get("sl_atr_mult", {"tier1": 1.5, "tier2": 2.0, "tier3": 2.5, "base": 2.0})
+_MIN_SL_PCT  = float(_EP.get("min_sl_pct", 0.003))
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -124,6 +126,10 @@ def run(
         if len(bars_4h) < warmup_4h:
             log.warning("EMA Pullback: insufficient 4h data for %s (%d bars)", sym, len(bars_4h))
             continue
+
+        from core.symbol_config import get_symbol_tier
+        _tier     = get_symbol_tier(sym)
+        _atr_mult = float(_SL_ATR_MULT.get(_tier, _SL_ATR_MULT.get("base", 2.0)))
 
         equity     = starting_capital
         eval_bars  = bars_15m[warmup_15m:]
@@ -230,6 +236,12 @@ def run(
             # Volume gate: bounce bar must have more volume than pullback bar
             vol_confirm = bar["v"] > prev_bar["v"]
 
+            # RVOL gate — skip low time-of-day volume entries
+            _vol_params = get_volume_params_static(sym, regime, "15m")
+            _rvol_bars  = bars_slice[-25:]
+            if not _vol_params.rvol_ok(_rvol_bars):
+                continue
+
             # 4H macro bias — compute once for both directions
             closes_4h = [b["c"] for b in bars_4h]
             if len(closes_4h) >= 50:
@@ -241,6 +253,18 @@ def run(
                 htf_bull = True  # insufficient data — allow
                 htf_bear = True
 
+            # ── ATR for SL sizing ──────────────────────────────────────────────
+            if len(bars_slice) >= 2:
+                _trs = []
+                for _j in range(1, len(bars_slice)):
+                    _h, _l, _pc = bars_slice[_j]["h"], bars_slice[_j]["l"], bars_slice[_j - 1]["c"]
+                    _trs.append(max(_h - _l, abs(_h - _pc), abs(_l - _pc)))
+                _atr_val = sum(_trs[-14:]) / min(14, len(_trs)) if _trs else price * 0.005
+            else:
+                _atr_val = price * 0.005
+            _ema_dist_raw = abs(price - ema21_15m)
+            _stop_dist = max(_atr_val * _atr_mult, _ema_dist_raw * 1.5, price * _MIN_SL_PCT)
+
             # ── LONG: 4H bullish, 15m EMA21 > EMA50, price bounced off EMA21 ──
             if htf_bull and htf_long and ema21_15m > ema50_15m:
                 touch = (abs(prev_low  - ema21_15m) / ema21_15m <= _PULLBACK_PCT or
@@ -251,10 +275,8 @@ def run(
                         and quiet_pull and vol_confirm):
                     if _RSI_LONG_MIN <= rsi <= _RSI_LONG_MAX:
                         direction = "LONG"
-                        sl = ema21_15m * (1 - _SL_BUFFER)
-                        dist = price - sl
-                        if dist > 0:
-                            tp = price + dist * _RR
+                        sl = price - _stop_dist
+                        tp = price + _stop_dist * _RR
 
             # ── SHORT: 4H bearish, 15m EMA21 < EMA50, price rejected at EMA21 ─
             if htf_bear and direction is None and htf_short and ema21_15m < ema50_15m:
@@ -266,10 +288,8 @@ def run(
                         and quiet_pull and vol_confirm):
                     if _RSI_SHORT_MIN <= rsi <= _RSI_SHORT_MAX:
                         direction = "SHORT"
-                        sl = ema21_15m * (1 + _SL_BUFFER)
-                        dist = sl - price
-                        if dist > 0:
-                            tp = price - dist * _RR
+                        sl = price + _stop_dist
+                        tp = price - _stop_dist * _RR
 
             if direction is None or sl == 0.0 or tp == 0.0:
                 continue

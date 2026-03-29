@@ -1,13 +1,86 @@
 {
   "BTCUSDT": {
-    "ema_pullback": {
+    "vwap_band": {
+      "TREND": {
+        "status": "insufficient",
+        "trade_count": 7
+      },
+      "RANGE": {
+        "status": "insufficient",
+        "trade_count": 4
+      },
+      "BREAKOUT": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "CRASH": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "PUMP": {
+        "status": "insufficient",
+        "trade_count": 0
+      }
+    },
+    "microrange": {
       "TREND": {
         "status": "ok",
-        "trade_count": 26,
-        "win_rate": 0.115,
-        "profit_factor": 0.808,
-        "return_pct": -1.9,
-        "return_abs": -19.31
+        "trade_count": 445,
+        "win_rate": 0.2,
+        "profit_factor": 0.006,
+        "return_pct": -66.1,
+        "return_abs": -660.62,
+        "gross_pnl": -17.35,
+        "cost_fee": 458.58,
+        "cost_slip": 183.43,
+        "cost_fund": 1.26,
+        "total_cost": 643.27,
+        "gross_pf": 0.898,
+        "break_even_pf": 4.776
+      },
+      "RANGE": {
+        "status": "ok",
+        "trade_count": 268,
+        "win_rate": 0.224,
+        "profit_factor": 0.001,
+        "return_pct": -33.9,
+        "return_abs": -339.0,
+        "gross_pnl": -15.07,
+        "cost_fee": 230.87,
+        "cost_slip": 92.35,
+        "cost_fund": 0.71,
+        "total_cost": 323.93,
+        "gross_pf": 0.82,
+        "break_even_pf": 4.864
+      },
+      "BREAKOUT": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "CRASH": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "PUMP": {
+        "status": "insufficient",
+        "trade_count": 0
+      }
+    },
+    "fvg": {
+      "TREND": {
+        "status": "ok",
+        "trade_count": 21,
+        "win_rate": 0.381,
+        "profit_factor": 1.081,
+        "return_pct": 1.1,
+        "return_abs": 10.91,
+        "gross_pnl": 66.42,
+        "cost_fee": 37.96,
+        "cost_slip": 15.19,
+        "cost_fund": 2.37,
+        "total_cost": 55.52,
+        "gross_pf": 1.659,
+        "break_even_pf": 1.551
       },
       "RANGE": {
         "status": "insufficient",
@@ -26,10 +99,21 @@
         "trade_count": 0
       }
     },
-    "sweep": {
+    "ema_pullback": {
       "TREND": {
-        "status": "insufficient",
-        "trade_count": 3
+        "status": "ok",
+        "trade_count": 21,
+        "win_rate": 0.19,
+        "profit_factor": 0.724,
+        "return_pct": -2.3,
+        "return_abs": -22.68,
+        "gross_pnl": 26.14,
+        "cost_fee": 34.6,
+        "cost_slip": 13.84,
+        "cost_fund": 0.37,
+        "total_cost": 48.81,
+        "gross_pf": 1.482,
+        "break_even_pf": 1.901
       },
       "RANGE": {
         "status": "insufficient",
@@ -50,22 +134,18 @@
     }
   },
   "ETHUSDT": {
-    "ema_pullback": {
+    "vwap_band": {
       "TREND": {
-        "status": "ok",
-        "trade_count": 43,
-        "win_rate": 0.372,
-        "profit_factor": 1.424,
-        "return_pct": 8.5,
-        "return_abs": 84.95
+        "status": "insufficient",
+        "trade_count": 2
       },
       "RANGE": {
         "status": "insufficient",
-        "trade_count": 9
+        "trade_count": 2
       },
       "BREAKOUT": {
         "status": "insufficient",
-        "trade_count": 1
+        "trade_count": 0
       },
       "CRASH": {
         "status": "insufficient",
@@ -76,18 +156,113 @@
         "trade_count": 0
       }
     },
-    "sweep": {
+    "microrange": {
       "TREND": {
         "status": "ok",
-        "trade_count": 22,
-        "win_rate": 0.045,
-        "profit_factor": 0.989,
-        "return_pct": -0.1,
-        "return_abs": -0.92
+        "trade_count": 943,
+        "win_rate": 0.231,
+        "profit_factor": 0.09,
+        "return_pct": -69.9,
+        "return_abs": -699.27,
+        "gross_pnl": 33.16,
+        "cost_fee": 521.82,
+        "cost_slip": 208.72,
+        "cost_fund": 1.89,
+        "total_cost": 732.43,
+        "gross_pf": 1.113,
+        "break_even_pf": 3.502
+      },
+      "RANGE": {
+        "status": "ok",
+        "trade_count": 607,
+        "win_rate": 0.231,
+        "profit_factor": 0.179,
+        "return_pct": -30.1,
+        "return_abs": -300.72,
+        "gross_pnl": 114.91,
+        "cost_fee": 296.14,
+        "cost_slip": 118.45,
+        "cost_fund": 1.05,
+        "total_cost": 415.64,
+        "gross_pf": 1.806,
+        "break_even_pf": 3.917
+      },
+      "BREAKOUT": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "CRASH": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "PUMP": {
+        "status": "insufficient",
+        "trade_count": 0
+      }
+    },
+    "fvg": {
+      "TREND": {
+        "status": "ok",
+        "trade_count": 30,
+        "win_rate": 0.267,
+        "profit_factor": 0.666,
+        "return_pct": -6.8,
+        "return_abs": -67.99,
+        "gross_pnl": 5.73,
+        "cost_fee": 49.91,
+        "cost_slip": 19.96,
+        "cost_fund": 3.85,
+        "total_cost": 73.72,
+        "gross_pf": 1.036,
+        "break_even_pf": 1.463
+      },
+      "RANGE": {
+        "status": "ok",
+        "trade_count": 10,
+        "win_rate": 0.3,
+        "profit_factor": 0.64,
+        "return_pct": -2.7,
+        "return_abs": -27.36,
+        "gross_pnl": -2.11,
+        "cost_fee": 17.25,
+        "cost_slip": 6.9,
+        "cost_fund": 1.09,
+        "total_cost": 25.24,
+        "gross_pf": 0.963,
+        "break_even_pf": 1.441
+      },
+      "BREAKOUT": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "CRASH": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "PUMP": {
+        "status": "insufficient",
+        "trade_count": 0
+      }
+    },
+    "ema_pullback": {
+      "TREND": {
+        "status": "ok",
+        "trade_count": 30,
+        "win_rate": 0.067,
+        "profit_factor": 0.394,
+        "return_pct": -6.2,
+        "return_abs": -61.8,
+        "gross_pnl": -7.68,
+        "cost_fee": 38.32,
+        "cost_slip": 15.33,
+        "cost_fund": 0.47,
+        "total_cost": 54.12,
+        "gross_pf": 0.877,
+        "break_even_pf": 1.864
       },
       "RANGE": {
         "status": "insufficient",
-        "trade_count": 3
+        "trade_count": 8
       },
       "BREAKOUT": {
         "status": "insufficient",
@@ -104,22 +279,18 @@
     }
   },
   "SOLUSDT": {
-    "ema_pullback": {
+    "vwap_band": {
       "TREND": {
-        "status": "ok",
-        "trade_count": 56,
-        "win_rate": 0.25,
-        "profit_factor": 1.001,
-        "return_pct": 0.0,
-        "return_abs": 0.28
+        "status": "insufficient",
+        "trade_count": 3
       },
       "RANGE": {
         "status": "insufficient",
-        "trade_count": 4
+        "trade_count": 2
       },
       "BREAKOUT": {
         "status": "insufficient",
-        "trade_count": 1
+        "trade_count": 0
       },
       "CRASH": {
         "status": "insufficient",
@@ -130,18 +301,36 @@
         "trade_count": 0
       }
     },
-    "sweep": {
+    "microrange": {
       "TREND": {
         "status": "ok",
-        "trade_count": 17,
-        "win_rate": 0.0,
-        "profit_factor": 1.031,
-        "return_pct": 0.2,
-        "return_abs": 2.37
+        "trade_count": 257,
+        "win_rate": 0.292,
+        "profit_factor": 0.211,
+        "return_pct": -54.0,
+        "return_abs": -539.5,
+        "gross_pnl": 1.0,
+        "cost_fee": 385.07,
+        "cost_slip": 154.03,
+        "cost_fund": 1.4,
+        "total_cost": 540.51,
+        "gross_pf": 1.003,
+        "break_even_pf": 2.49
       },
       "RANGE": {
-        "status": "insufficient",
-        "trade_count": 7
+        "status": "ok",
+        "trade_count": 109,
+        "win_rate": 0.284,
+        "profit_factor": 0.108,
+        "return_pct": -37.1,
+        "return_abs": -371.47,
+        "gross_pnl": -19.12,
+        "cost_fee": 250.99,
+        "cost_slip": 100.4,
+        "cost_fund": 0.96,
+        "total_cost": 352.35,
+        "gross_pf": 0.903,
+        "break_even_pf": 2.791
       },
       "BREAKOUT": {
         "status": "insufficient",
@@ -155,117 +344,22 @@
         "status": "insufficient",
         "trade_count": 0
       }
-    }
-  },
-  "BNBUSDT": {
-    "ema_pullback": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 37,
-        "win_rate": 0.189,
-        "profit_factor": 0.687,
-        "return_pct": -5.5,
-        "return_abs": -55.44
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 6
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
     },
-    "sweep": {
-      "TREND": {
-        "status": "insufficient",
-        "trade_count": 6
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 1
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    }
-  },
-  "XRPUSDT": {
-    "ema_pullback": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 38,
-        "win_rate": 0.342,
-        "profit_factor": 1.282,
-        "return_pct": 5.1,
-        "return_abs": 51.25
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 7
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    },
-    "sweep": {
-      "TREND": {
-        "status": "insufficient",
-        "trade_count": 8
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 5
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    }
-  },
-  "LINKUSDT": {
-    "ema_pullback": {
+    "fvg": {
       "TREND": {
         "status": "ok",
         "trade_count": 36,
         "win_rate": 0.361,
-        "profit_factor": 1.432,
-        "return_pct": 7.4,
-        "return_abs": 74.1
+        "profit_factor": 0.759,
+        "return_pct": -6.9,
+        "return_abs": -68.51,
+        "gross_pnl": 42.2,
+        "cost_fee": 77.82,
+        "cost_slip": 31.13,
+        "cost_fund": 1.77,
+        "total_cost": 110.72,
+        "gross_pf": 1.195,
+        "break_even_pf": 1.511
       },
       "RANGE": {
         "status": "insufficient",
@@ -277,141 +371,40 @@
       },
       "CRASH": {
         "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    },
-    "sweep": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 30,
-        "win_rate": 0.1,
-        "profit_factor": 1.398,
-        "return_pct": 4.6,
-        "return_abs": 46.08
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 7
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 3
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    }
-  },
-  "DOGEUSDT": {
-    "ema_pullback": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 40,
-        "win_rate": 0.275,
-        "profit_factor": 0.797,
-        "return_pct": -4.5,
-        "return_abs": -44.72
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 3
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 1
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    },
-    "sweep": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 19,
-        "win_rate": 0.0,
-        "profit_factor": 0.603,
-        "return_pct": -3.3,
-        "return_abs": -33.35
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 3
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 1
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    }
-  },
-  "SUIUSDT": {
-    "ema_pullback": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 47,
-        "win_rate": 0.489,
-        "profit_factor": 2.214,
-        "return_pct": 22.2,
-        "return_abs": 221.96
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 3
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "PUMP": {
-        "status": "insufficient",
-        "trade_count": 0
-      }
-    },
-    "sweep": {
-      "TREND": {
-        "status": "ok",
-        "trade_count": 25,
-        "win_rate": 0.08,
-        "profit_factor": 0.998,
-        "return_pct": -0.0,
-        "return_abs": -0.18
-      },
-      "RANGE": {
-        "status": "insufficient",
-        "trade_count": 6
-      },
-      "BREAKOUT": {
-        "status": "insufficient",
-        "trade_count": 0
-      },
-      "CRASH": {
-        "status": "insufficient",
         "trade_count": 2
+      },
+      "PUMP": {
+        "status": "insufficient",
+        "trade_count": 0
+      }
+    },
+    "ema_pullback": {
+      "TREND": {
+        "status": "ok",
+        "trade_count": 53,
+        "win_rate": 0.057,
+        "profit_factor": 0.394,
+        "return_pct": -11.3,
+        "return_abs": -113.05,
+        "gross_pnl": -51.56,
+        "cost_fee": 43.57,
+        "cost_slip": 17.43,
+        "cost_fund": 0.5,
+        "total_cost": 61.49,
+        "gross_pf": 0.644,
+        "break_even_pf": 1.424
+      },
+      "RANGE": {
+        "status": "insufficient",
+        "trade_count": 1
+      },
+      "BREAKOUT": {
+        "status": "insufficient",
+        "trade_count": 0
+      },
+      "CRASH": {
+        "status": "insufficient",
+        "trade_count": 1
       },
       "PUMP": {
         "status": "insufficient",

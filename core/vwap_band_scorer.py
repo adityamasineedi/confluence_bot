@@ -26,6 +26,7 @@ Output dict keys: symbol, regime, direction, score, signals, fire, vb_stop, vb_t
 import logging
 import os
 import yaml
+from datetime import datetime, timezone
 
 from core.cooldown_store import CooldownStore
 
@@ -42,6 +43,17 @@ _THRESHOLD     = 0.67   # 2 of 3 scored signals required
 _SL_BUFFER_PCT = float(_VB_CFG.get("sl_buffer_pct",  0.002))
 _MIN_RR        = 1.5    # VWAP must be at least 1.5× SL distance away
 _ADX_MAX       = float(_VB_CFG.get("adx_max",        30.0))
+_VB_ATR_MULT   = _VB_CFG.get("sl_atr_mult", {"tier1": 1.2, "tier2": 1.5, "tier3": 2.0, "base": 1.5})
+_VB_MIN_SL_PCT = float(_VB_CFG.get("min_sl_pct", 0.003))
+
+_SF_CFG          = _cfg.get("session_filter", {})
+_SESSION_ENABLED = bool(_SF_CFG.get("enabled", True))
+_BLOCK_SATURDAY  = bool(_SF_CFG.get("block_saturday", True))
+
+_BTC_GATE_CFG      = _cfg.get("btc_direction_gate", {})
+_BTC_GATE_ENABLED  = bool(_BTC_GATE_CFG.get("enabled", True))
+_BTC_FALL_THRESHOLD = float(_BTC_GATE_CFG.get("fall_threshold", -0.0003))
+_BTC_RISE_THRESHOLD = float(_BTC_GATE_CFG.get("rise_threshold",  0.0003))
 
 _cd = CooldownStore("VWAPBAND")
 
@@ -99,6 +111,75 @@ def _adx_below_max(symbol: str, cache) -> bool:
         return adx < _ADX_MAX
     except Exception:
         return True
+
+
+# ── Session / BTC gate helpers ────────────────────────────────────────────────
+
+def _session_ok(ts_ms: int) -> bool:
+    """Block only truly dead trading windows: Saturday + 22:00–00:00 UTC."""
+    if not _SESSION_ENABLED:
+        return True
+    dt      = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    hour    = dt.hour
+    weekday = dt.weekday()
+    if _BLOCK_SATURDAY and weekday == 5:
+        return False
+    if 22 <= hour < 24:
+        return False
+    return True
+
+
+def _vwap_btc_direction_ok(direction: str, cache) -> bool:
+    """Veto gate: False only when BTC is actively moving against the trade direction."""
+    if not _BTC_GATE_ENABLED:
+        return True
+    try:
+        from signals.trend.ema_pullback_15m import _ema
+        bars_1h = cache.get_ohlcv("BTCUSDT", window=25, tf="1h")
+        if len(bars_1h) < 22:
+            return True
+        closes     = [b["c"] for b in bars_1h]
+        ema20_now  = _ema(closes, 20)
+        ema20_prev = _ema(closes[:-3], 20)
+        slope = (ema20_now - ema20_prev) / ema20_prev if ema20_prev > 0 else 0
+        if direction == "LONG"  and slope < _BTC_FALL_THRESHOLD:
+            return False
+        if direction == "SHORT" and slope > _BTC_RISE_THRESHOLD:
+            return False
+        return True
+    except Exception:
+        return True
+
+
+# ── ATR-based SL helper ───────────────────────────────────────────────────────
+
+def _vwap_band_sl(entry: float, direction: str, bars_15m: list[dict],
+                  tier: str = "tier2") -> float:
+    """ATR-based SL for VWAP band entries.
+
+    VWAP Band SL must be outside ATR noise.  The old band-distance SL
+    was 0.32% on XRP when ATR was 0.57% — guaranteed noise stop.
+
+    New formula:
+      SL = entry ± max(ATR × mult, entry × min_sl_pct)
+    """
+    atr_mult = float(_VB_ATR_MULT.get(tier, _VB_ATR_MULT.get("base", 1.5)))
+
+    if len(bars_15m) >= 15:
+        trs = []
+        for i in range(1, len(bars_15m)):
+            h, l, pc = bars_15m[i]["h"], bars_15m[i]["l"], bars_15m[i - 1]["c"]
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        atr = sum(trs[-14:]) / 14 if len(trs) >= 14 else sum(trs) / len(trs) if trs else 0.0
+    else:
+        atr = 0.0
+
+    stop_dist = max(atr * atr_mult, entry * _VB_MIN_SL_PCT)
+
+    if direction == "LONG":
+        return round(entry - stop_dist, 8)
+    else:
+        return round(entry + stop_dist, 8)
 
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
@@ -172,13 +253,19 @@ async def score(symbol: str, cache) -> list[dict]:
                 signals["regime_aligned"],
             ) if v), 4)
 
-            sl   = lower_2 * (1.0 - _SL_BUFFER_PCT)
+            from core.symbol_config import get_symbol_tier
+            bars_15m_sl = cache.get_ohlcv(symbol, window=20, tf="15m") or []
+            sl   = _vwap_band_sl(price, "LONG", bars_15m_sl, tier=get_symbol_tier(symbol))
             tp   = vwap_mid
             dist = abs(price - sl)
             rr   = abs(tp - price) / dist if dist > 0 else 0.0
 
             # Hard gate: RVOL below minimum = time-of-day noise
             # Hard gate: increasing volume at band = breakout, not reversion
+            bars_15m_ts = cache.get_ohlcv(symbol, window=1, tf="15m") or []
+            current_ts  = bars_15m_ts[-1]["ts"] if bars_15m_ts else 0
+            session_gate = _session_ok(current_ts) if current_ts > 0 else True
+            btc_gate     = _vwap_btc_direction_ok("LONG", cache) if symbol != "BTCUSDT" else True
             fire = (
                 score_val >= _THRESHOLD
                 and regime_gate
@@ -187,6 +274,8 @@ async def score(symbol: str, cache) -> list[dict]:
                 and rvol_ok
                 and momentum_ok
                 and cool_ok
+                and session_gate
+                and btc_gate
             )
 
             results.append({
@@ -231,11 +320,17 @@ async def score(symbol: str, cache) -> list[dict]:
                 signals["regime_aligned"],
             ) if v), 4)
 
-            sl   = upper_2 * (1.0 + _SL_BUFFER_PCT)
+            from core.symbol_config import get_symbol_tier
+            bars_15m_sl = cache.get_ohlcv(symbol, window=20, tf="15m") or []
+            sl   = _vwap_band_sl(price, "SHORT", bars_15m_sl, tier=get_symbol_tier(symbol))
             tp   = vwap_mid
             dist = abs(sl - price)
             rr   = abs(price - tp) / dist if dist > 0 else 0.0
 
+            bars_15m_ts2 = cache.get_ohlcv(symbol, window=1, tf="15m") or []
+            current_ts2  = bars_15m_ts2[-1]["ts"] if bars_15m_ts2 else 0
+            session_gate2 = _session_ok(current_ts2) if current_ts2 > 0 else True
+            btc_gate2     = _vwap_btc_direction_ok("SHORT", cache) if symbol != "BTCUSDT" else True
             fire = (
                 score_val >= _THRESHOLD
                 and regime_gate
@@ -244,6 +339,8 @@ async def score(symbol: str, cache) -> list[dict]:
                 and rvol_ok
                 and momentum_ok
                 and cool_ok
+                and session_gate2
+                and btc_gate2
             )
 
             results.append({
