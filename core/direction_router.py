@@ -139,6 +139,22 @@ class DirectionRouter:
         else:
             return "NONE"
 
+        # ── Weekly trend gate — catches regime transitions 2-3 weeks before 4H ADX ──
+        with open(_CONFIG_PATH) as _f:
+            _wtg_cfg = yaml.safe_load(_f).get("weekly_trend_gate", {})
+        if _wtg_cfg.get("enabled", True):
+            weekly_bars = cache.get_ohlcv(_BTC, window=55, tf="1w")
+            if len(weekly_bars) >= 10:
+                weekly_closes = [b["c"] for b in weekly_bars]
+                ema_period = int(_wtg_cfg.get("ema_period", 10))
+                ema10w = self._ema(weekly_closes, ema_period)
+                if direction == "LONG" and weekly_closes[-1] < ema10w:
+                    log.debug("LONG blocked — BTC weekly close below %dW EMA (macro bear)", ema_period)
+                    return "NONE"
+                if direction == "SHORT" and weekly_closes[-1] > ema10w:
+                    log.debug("SHORT blocked — BTC weekly close above %dW EMA (macro bull)", ema_period)
+                    return "NONE"
+
         # ── Factor 5: BTC Dominance filter (alt coins only) ──────────────────
         # Rising dominance = capital rotating into BTC out of alts → block alt longs.
         # Falling dominance = alt season → confirms alt longs (no block).

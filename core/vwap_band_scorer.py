@@ -76,6 +76,11 @@ def cooldown_remaining(symbol: str) -> float:
     return _cd.remaining(symbol)
 
 
+def clear_cooldown(symbol: str) -> None:
+    """Clear scorer cooldown for symbol — used by backtest engines."""
+    _cd.clear(symbol)
+
+
 # ── Gate helpers ───────────────────────────────────────────────────────────────
 
 def _regime_str(symbol: str, cache) -> str:
@@ -196,8 +201,17 @@ async def score(symbol: str, cache) -> list[dict]:
         check_vwap_short,
         get_vwap_levels,
     )
+    from signals.volume_momentum import VolumeContext, get_volume_params, extreme_volatility
 
-    from signals.volume_momentum import VolumeContext, get_volume_params
+    # Extreme volatility gate — flat during flash crashes
+    _ev_cfg = _cfg.get("risk", {}).get("extreme_vol_gate", {})
+    if _ev_cfg.get("enabled", True):
+        bars_4h_ev = cache.get_ohlcv(symbol, window=55, tf="4h")
+        if extreme_volatility(bars_4h_ev,
+                              lookback=int(_ev_cfg.get("lookback_bars", 50)),
+                              spike_mult=float(_ev_cfg.get("spike_multiplier", 3.0))):
+            log.info("VWAP Band blocked — extreme volatility on %s", symbol)
+            return []
 
     cool_ok = not is_on_cooldown(symbol)
     regime  = _regime_str(symbol, cache)

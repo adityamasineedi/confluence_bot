@@ -45,6 +45,8 @@ async def run_fvg_loop(symbols: list[str], cache) -> None:
 async def _tick(symbols: list[str], cache, max_positions: int) -> None:
     from core.fvg_scorer import score as fvg_score, set_cooldown
     from core.executor import execute_signal
+    from core.strategy_router import get_active_strategies
+    from core.regime_detector import detect_regime
     from logging_.logger import TradeLogger
 
     logger     = TradeLogger()
@@ -53,6 +55,12 @@ async def _tick(symbols: list[str], cache, max_positions: int) -> None:
     for symbol in symbols:
         if open_count >= max_positions:
             break
+
+        current_regime = str(detect_regime(symbol, cache))
+        active = get_active_strategies(symbol, current_regime)
+        if "fvg" not in active:
+            log.debug("fvg skipped for %s in %s regime — not in routing", symbol, current_regime)
+            continue
 
         score_dicts = await fvg_score(symbol, cache)
 

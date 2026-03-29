@@ -72,6 +72,11 @@ def cooldown_remaining(symbol: str) -> float:
     return _cd.remaining(symbol)
 
 
+def clear_cooldown(symbol: str) -> None:
+    """Clear scorer cooldown for symbol — used by backtest engines."""
+    _cd.clear(symbol)
+
+
 # ── Math helpers ───────────────────────────────────────────────────────────────
 
 def _ema(closes: list[float], period: int) -> float:
@@ -130,6 +135,17 @@ async def score(symbol: str, cache) -> list[dict]:
         fvg_stop, fvg_tp  — gap-anchored SL/TP for executor
     """
     from signals.trend.fvg import check_fvg_bullish, check_fvg_bearish, get_fvg_levels
+    from signals.volume_momentum import extreme_volatility
+
+    # Extreme volatility gate — flat during flash crashes (gaps past SL, huge slippage)
+    _ev_cfg = _cfg.get("risk", {}).get("extreme_vol_gate", {})
+    if _ev_cfg.get("enabled", True):
+        bars_4h_ev = cache.get_ohlcv(symbol, window=55, tf="4h")
+        if extreme_volatility(bars_4h_ev,
+                              lookback=int(_ev_cfg.get("lookback_bars", 50)),
+                              spike_mult=float(_ev_cfg.get("spike_multiplier", 3.0))):
+            log.info("FVG blocked — extreme volatility on %s (flash crash protection)", symbol)
+            return []
 
     cool_ok   = not is_on_cooldown(symbol)
 

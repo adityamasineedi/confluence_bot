@@ -52,6 +52,11 @@ def cooldown_remaining(symbol: str) -> float:
     return _cd.remaining(symbol)
 
 
+def clear_cooldown(symbol: str) -> None:
+    """Clear scorer cooldown for symbol — used by backtest engines."""
+    _cd.clear(symbol)
+
+
 # ── Scorer ─────────────────────────────────────────────────────────────────────
 
 async def score(symbol: str, cache) -> list[dict]:
@@ -67,6 +72,18 @@ async def score(symbol: str, cache) -> list[dict]:
         mr_stop, mr_tp   — boundary-anchored levels (executor reads these)
         range_low, range_high, range_width_pct
     """
+    from signals.volume_momentum import extreme_volatility
+
+    # Extreme volatility gate — flat during flash crashes
+    _ev_cfg = _cfg.get("risk", {}).get("extreme_vol_gate", {})
+    if _ev_cfg.get("enabled", True):
+        bars_4h_ev = cache.get_ohlcv(symbol, window=55, tf="4h")
+        if extreme_volatility(bars_4h_ev,
+                              lookback=int(_ev_cfg.get("lookback_bars", 50)),
+                              spike_mult=float(_ev_cfg.get("spike_multiplier", 3.0))):
+            log.info("MicroRange blocked — extreme volatility on %s", symbol)
+            return []
+
     from core.symbol_config import get_dynamic_config
     cfg = get_dynamic_config(symbol, "microrange", cache)
     _WINDOW_BARS    = int(cfg.get("window_bars",      10))

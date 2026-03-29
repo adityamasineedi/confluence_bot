@@ -1,24 +1,20 @@
 """VWAP Band Reversion backtest engine — bar-by-bar replay on 15m OHLCV.
 
-Strategy
---------
-- Rolling VWAP ± 2σ bands over window_bars (20 × 15m = 5h).
-- Entry when price touches and closes back inside the ±2σ band.
-- ADX gate: block if 4H ADX ≥ 30 (trending market kills mean reversion).
-- RSI gate: ≤ 35 for LONG, ≥ 65 for SHORT.
-- TP = VWAP midline (dynamic, computed at entry). SL = band edge ± buffer.
+Uses the live vwap_band_scorer directly via BacktestCache so the backtest
+always tests the same logic as production.  VWAP is still re-computed each
+bar so the dynamic TP (vwap_mid) tracks correctly during the trade.
 
-Entry  : close of the bar that re-enters inside the band
-SL     : band_level ± sl_buffer_pct
-TP     : vwap midline at entry time
+Entry  : close of the bar where the scorer fires
+SL/TP  : from scorer at entry; TP dynamically updated to current VWAP each bar
 """
+import asyncio
+import concurrent.futures
 import logging
 import os
 import yaml
 
+from backtest.cache import BacktestCache
 from backtest.cost_model import apply_costs
-from backtest.regime_classifier import classify_regime
-from signals.volume_momentum import get_volume_params_static
 
 _BAR_MINUTES = 15
 
@@ -28,20 +24,25 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
-_VB_CFG       = _cfg.get("vwap_band", {})
-_WINDOW       = int(_VB_CFG.get("window_bars",    20))
-_BAND_MULT    = float(_VB_CFG.get("band_mult",     2.0))
-_RSI_LONG_MAX = float(_VB_CFG.get("rsi_long_max",  35))
-_RSI_SHORT_MIN= float(_VB_CFG.get("rsi_short_min", 65))
-_ADX_MAX      = float(_VB_CFG.get("adx_max",       30))
-_VOL_MAX_MULT = float(_VB_CFG.get("vol_max_mult",   1.5))
-_VB_ATR_MULT  = _VB_CFG.get("sl_atr_mult", {"tier1": 1.2, "tier2": 1.5, "tier3": 2.0, "base": 1.5})
-_VB_MIN_SL_PCT = float(_VB_CFG.get("min_sl_pct", 0.003))
-_MIN_RR       = 1.5   # inline RR gate: |vwap - entry| / |entry - SL| >= 1.5
-_RSI_WINDOW   = 14
-_ADX_WINDOW   = 14
-_COOLDOWN_BARS = int(_VB_CFG.get("cooldown_mins", 30) // 15)  # 30min → 2 × 15m bars
-_MAX_HOLD      = int(_VB_CFG.get("max_hold_bars", 4))  # default 4 bars = 1h on 15m chart
+_VB_CFG = _cfg.get("vwap_band", {})
+
+_WINDOW        = int(_VB_CFG.get("window_bars",    20))
+_BAND_MULT     = float(_VB_CFG.get("band_mult",     2.0))
+_COOLDOWN_BARS = int(_VB_CFG.get("cooldown_mins",   30) // 15)   # 30min → 2 × 15m bars
+_MAX_HOLD      = int(_VB_CFG.get("max_hold_bars",    4))
+
+
+def _run_scorer(coro):
+    """Run an async scorer synchronously in the backtest."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result()
+        return loop.run_until_complete(coro)
+    except Exception:
+        return []
 
 
 def _ts_str(ts_ms: int) -> str:
@@ -67,39 +68,8 @@ def _compute_vwap_bands(bars: list[dict]) -> dict | None:
     }
 
 
-def _rsi(closes: list[float], window: int = _RSI_WINDOW) -> float:
-    if len(closes) < window + 1:
-        return 50.0
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0.0)); losses.append(max(-d, 0.0))
-    ag = sum(gains[-window:]) / window
-    al = sum(losses[-window:]) / window or 1e-9
-    return 100.0 - 100.0 / (1.0 + ag / al)
-
-
-def _adx(bars: list[dict], window: int = _ADX_WINDOW) -> float:
-    """Simplified ADX from 4H bars slice."""
-    if len(bars) < window + 2:
-        return 0.0
-    trs, pdms, ndms = [], [], []
-    for i in range(1, len(bars)):
-        h, l, ph, pl, pc = bars[i]["h"], bars[i]["l"], bars[i-1]["h"], bars[i-1]["l"], bars[i-1]["c"]
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-        pdms.append(max(h - ph, 0) if (h - ph) > (pl - l) else 0)
-        ndms.append(max(pl - l, 0) if (pl - l) > (h - ph) else 0)
-    atr  = sum(trs[-window:]) / window or 1e-9
-    pdi  = sum(pdms[-window:]) / window / atr * 100
-    ndi  = sum(ndms[-window:]) / window / atr * 100
-    if pdi + ndi == 0:
-        return 0.0
-    dx   = abs(pdi - ndi) / (pdi + ndi) * 100
-    return dx   # simplified single-period DX used as ADX proxy
-
-
 def _check_exit(trade: dict, bar: dict, vwap_mid: float) -> dict | None:
-    """Check SL/TP; for VWAP Band, TP is the dynamic VWAP midline."""
+    """Check SL/TP; TP is the dynamic VWAP midline."""
     risk = trade["risk_amount"]
     sl   = trade["sl"]
     tp   = vwap_mid   # chase VWAP dynamically
@@ -140,20 +110,19 @@ def run(
     risk_pct:         float = 0.01,
 ) -> list[dict]:
     """Run VWAP Band Reversion backtest on 15m bars. Returns list of closed trades."""
+    from core.vwap_band_scorer import score as vb_score, clear_cooldown as vb_clear_cooldown
+
     all_closed: list[dict] = []
-    warmup = _WINDOW + _RSI_WINDOW + 5
+    warmup = _WINDOW + 20   # VWAP window + RSI buffer
 
     for sym in symbols:
         bars_15m = ohlcv.get(f"{sym}:15m", [])
-        bars_4h  = ohlcv.get(f"{sym}:4h",  [])
-        bars_1d  = ohlcv.get(f"{sym}:1d",  [])
         if len(bars_15m) < warmup + 10:
             log.warning("VWAPBand: insufficient 15m data for %s (%d bars)", sym, len(bars_15m))
             continue
 
-        from core.symbol_config import get_symbol_tier
-        _tier     = get_symbol_tier(sym)
-        _atr_mult = float(_VB_ATR_MULT.get(_tier, _VB_ATR_MULT.get("base", 1.5)))
+        bt_cache = BacktestCache(ohlcv=ohlcv, oi={}, funding={})
+        vb_clear_cooldown(sym)   # prevent stale DB cooldown from blocking backtest
 
         equity         = starting_capital
         eval_bars      = bars_15m[warmup:]
@@ -168,7 +137,7 @@ def run(
             global_idx = warmup + bar_idx
             bar_ts     = bar["ts"]
 
-            # ── Compute current VWAP bands (for exit TP tracking) ──────────────
+            # ── Compute current VWAP (for dynamic TP tracking during exit) ─────
             band_slice = bars_15m[max(0, global_idx - _WINDOW): global_idx + 1]
             bands      = _compute_vwap_bands(band_slice)
             vwap_mid   = bands["vwap"] if bands else (open_trade["entry"] if open_trade else bar["c"])
@@ -179,7 +148,7 @@ def run(
                 if result is not None:
                     hold_bars = bar_idx - open_trade["bar_idx"]
                     gross_pnl = result["pnl"]
-                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES)
+                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES, bars=eval_bars[max(0, bar_idx - 15): bar_idx + 1])
                     result["gross_pnl"] = gross_pnl; result["cost"] = cost_d["total"]
                     result["cost_fee"]  = cost_d["fee"]; result["cost_slip"] = cost_d["slip"]
                     result["cost_fund"] = cost_d["funding"]; result["pnl"] = net_pnl
@@ -192,7 +161,7 @@ def run(
                     result = _force_close(open_trade, bar)
                     hold_bars = bar_idx - open_trade["bar_idx"]
                     gross_pnl = result["pnl"]
-                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES)
+                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES, bars=eval_bars[max(0, bar_idx - 15): bar_idx + 1])
                     result["gross_pnl"] = gross_pnl; result["cost"] = cost_d["total"]
                     result["cost_fee"]  = cost_d["fee"]; result["cost_slip"] = cost_d["slip"]
                     result["cost_fund"] = cost_d["funding"]; result["pnl"] = net_pnl
@@ -209,98 +178,37 @@ def run(
             if bands is None:
                 continue
 
-            # ── ADX gate (4H) ─────────────────────────────────────────────────
-            b4h_now = [b for b in bars_4h if b["ts"] <= bar_ts]
-            if len(b4h_now) >= _ADX_WINDOW + 2:
-                adx_val = _adx(b4h_now[-(  _ADX_WINDOW + 5):])
-                if adx_val >= _ADX_MAX:
-                    continue   # trending — skip mean reversion
+            # ── Score via live scorer ──────────────────────────────────────────
+            bt_cache.advance(bar_ts)
+            score_dicts = _run_scorer(vb_score(sym, bt_cache))
 
-            # ── Regime + dynamic volume params ────────────────────────────────
-            if len(b4h_now) >= 28:
-                _c4h = b4h_now[-30:]
-                _c1d = [b for b in bars_1d if b["ts"] <= bar_ts][-60:]
-                regime = classify_regime(
-                    closes_4h=[b["c"] for b in _c4h],
-                    highs_4h =[b["h"] for b in _c4h],
-                    lows_4h  =[b["l"] for b in _c4h],
-                    closes_1d=[b["c"] for b in _c1d],
-                )
-            else:
-                regime = "TREND"
-            vol_params = get_volume_params_static(sym, regime, "15m")
-
-            # ── RSI ───────────────────────────────────────────────────────────
-            closes   = [b["c"] for b in bars_15m[max(0, global_idx - 20): global_idx + 1]]
-            rsi      = _rsi(closes)
-
-            # ── Volume filter (dynamic quiet_mult from vol_params) ────────────
-            vol_slice = bars_15m[max(0, global_idx - 21): global_idx]
-            avg_vol   = sum(b["v"] for b in vol_slice) / len(vol_slice) if vol_slice else 0
-            vol_ok    = avg_vol <= 0 or bar["v"] <= avg_vol * vol_params.quiet_mult
-
-            prev_bar  = bars_15m[global_idx - 1]
-            direction = None
-            sl = tp   = 0.0
-
-            # RVOL gate — skip low time-of-day volume entries
-            _rvol_params = get_volume_params_static(sym, regime, "15m")
-            _rvol_bars   = band_slice[-25:] if len(band_slice) >= 2 else []
-            if _rvol_bars and not _rvol_params.rvol_ok(_rvol_bars):
-                continue
-
-            # ── ATR for SL sizing ──────────────────────────────────────────────
-            if len(band_slice) >= 2:
-                _trs = []
-                for _j in range(1, len(band_slice)):
-                    _h, _l, _pc = band_slice[_j]["h"], band_slice[_j]["l"], band_slice[_j - 1]["c"]
-                    _trs.append(max(_h - _l, abs(_h - _pc), abs(_l - _pc)))
-                _atr_val = sum(_trs[-14:]) / min(14, len(_trs)) if _trs else bar["c"] * 0.005
-            else:
-                _atr_val = bar["c"] * 0.005
-            _stop_dist = max(_atr_val * _atr_mult, bar["c"] * _VB_MIN_SL_PCT)
-
-            # ── LONG: price touched lower_2 then closed back inside ────────────
-            if (rsi <= _RSI_LONG_MAX and vol_ok
-                    and prev_bar["l"] <= bands["lower_2"]
-                    and bar["c"] > bands["lower_2"]):
-                sl   = bar["c"] - _stop_dist
-                dist = _stop_dist
-                rr_avail = abs(vwap_mid - bar["c"]) / dist if dist > 0 else 0
-                if dist > 0 and rr_avail >= _MIN_RR:
-                    tp        = vwap_mid
-                    direction = "LONG"
-
-            # ── SHORT: price touched upper_2 then closed back inside ───────────
-            elif (rsi >= _RSI_SHORT_MIN and vol_ok
-                    and prev_bar["h"] >= bands["upper_2"]
-                    and bar["c"] < bands["upper_2"]):
-                sl   = bar["c"] + _stop_dist
-                dist = _stop_dist
-                rr_avail = abs(bar["c"] - vwap_mid) / dist if dist > 0 else 0
-                if dist > 0 and rr_avail >= _MIN_RR:
-                    tp        = vwap_mid
-                    direction = "SHORT"
-
-            if direction is None:
-                continue
-
-            risk_amount = round(equity * risk_pct, 4)
-            sl_dist     = abs(bar["c"] - sl)
-            qty         = round(risk_amount / sl_dist, 8) if sl_dist > 0.0 else 0.0
-            open_trade = {
-                "symbol":      sym,
-                "regime":      "VWAPBAND",
-                "direction":   direction,
-                "entry":       bar["c"],
-                "sl":          sl,
-                "tp":          tp,
-                "entry_ts":    bar_ts,
-                "bar_idx":     bar_idx,
-                "risk_amount": risk_amount,
-                "qty":         qty,
-                "score":       0.67,
-            }
+            for sd in score_dicts:
+                if not sd.get("fire"):
+                    continue
+                entry = bar["c"]
+                sl    = sd.get("vb_stop", 0.0)
+                tp    = sd.get("vb_tp",   0.0)
+                if sl == 0.0 or tp == 0.0:
+                    continue
+                sl_dist = abs(entry - sl)
+                if sl_dist <= 0.0:
+                    continue
+                risk_amount = round(equity * risk_pct, 4)
+                qty         = round(risk_amount / sl_dist, 8)
+                open_trade = {
+                    "symbol":      sym,
+                    "regime":      sd.get("regime", "VWAPBAND"),
+                    "direction":   sd["direction"],
+                    "entry":       entry,
+                    "sl":          sl,
+                    "tp":          tp,
+                    "entry_ts":    bar_ts,
+                    "bar_idx":     bar_idx,
+                    "risk_amount": risk_amount,
+                    "qty":         qty,
+                    "score":       sd["score"],
+                }
+                break   # one trade per bar
 
         # Force-close remaining
         if open_trade is not None:

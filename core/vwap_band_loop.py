@@ -51,6 +51,7 @@ async def run_vwap_band_loop(symbols: list[str], cache) -> None:
 async def _tick(symbols: list[str], cache, max_positions: int) -> None:
     from core.vwap_band_scorer import score as vb_score, set_cooldown
     from core.regime_detector import detect_regime
+    from core.strategy_router import get_active_strategies
     from core.executor import execute_signal
     from logging_.logger import TradeLogger
 
@@ -72,6 +73,11 @@ async def _tick(symbols: list[str], cache, max_positions: int) -> None:
                 "VWAP Band skip %s — regime %s unsuitable for mean reversion",
                 symbol, regime_str,
             )
+            continue
+
+        active = get_active_strategies(symbol, regime_str)
+        if "vwap_band" not in active:
+            log.debug("vwap_band skipped for %s in %s regime — not in routing", symbol, regime_str)
             continue
 
         score_dicts = await vb_score(symbol, cache)

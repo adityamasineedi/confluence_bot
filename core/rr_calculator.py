@@ -80,6 +80,28 @@ def compute(symbol: str, direction: str, cache) -> tuple[float, float, float]:
     return entry, round(stop, 8), round(take_profit, 8)
 
 
+def _committed_risk() -> float:
+    """Return total risk currently committed to open trades.
+
+    For each open trade: risk = abs(entry - stop_loss) × qty.
+    This is the max additional loss if ALL open trades hit SL simultaneously.
+    Returns 0.0 on any DB access failure.
+    """
+    try:
+        import sqlite3
+        db_path = os.environ.get("DB_PATH", "confluence_bot.db")
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT entry, stop_loss, size FROM trades WHERE status='OPEN'"
+            ).fetchall()
+        total_risk = 0.0
+        for entry_p, sl, qty in rows:
+            total_risk += abs(float(entry_p) - float(sl)) * float(qty)
+        return total_risk
+    except Exception:
+        return 0.0
+
+
 def position_size(
     entry: float,
     stop: float,
@@ -108,8 +130,13 @@ def position_size(
         else:
             return 0.0
 
+    # Subtract risk already committed to open trades — prevents over-leveraging
+    committed = _committed_risk()
+    available_equity = balance - committed
+    available_equity = max(available_equity, balance * 0.10)   # never below 10% of balance
+
     effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
-    risk_usdt = min(balance * effective_risk, _MAX_RISK_USDT)
+    risk_usdt = min(available_equity * effective_risk, _MAX_RISK_USDT)
     # Inflate stop distance by round-trip fees so risk_usdt is the true net loss
     # including commissions (entry + exit taker fees).
     fee_per_unit     = entry * _TAKER_FEE_RT

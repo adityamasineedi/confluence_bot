@@ -17,12 +17,34 @@ def _load_costs() -> dict:
     return cfg.get("backtest", {})
 
 
+def dynamic_slippage_pct(entry: float, bars: list[dict], base_slip: float = 0.0002) -> float:
+    """Estimate realistic slippage based on current volatility.
+
+    Normal conditions (ATR 0.3%): ~0.02-0.04% slippage
+    Elevated volatility (ATR 1.0%): ~0.08% slippage
+    Flash crash (ATR 3.0%+): ~0.3%+ slippage
+
+    Formula: slippage = max(base_slip, atr_pct × 0.12)
+    """
+    if not bars or len(bars) < 2:
+        return base_slip
+    trs = []
+    for i in range(1, min(len(bars), 15)):
+        b, p = bars[i], bars[i - 1]
+        tr = max(b["h"] - b["l"], abs(b["h"] - p["c"]), abs(b["l"] - p["c"]))
+        trs.append(tr)
+    avg_tr = sum(trs) / len(trs) if trs else 0
+    atr_pct = avg_tr / entry if entry > 0 else 0
+    return max(base_slip, atr_pct * 0.12)
+
+
 def apply_costs(
     raw_pnl:     float,
     entry:       float,
     qty:         float,
     hold_bars:   int,
     bar_minutes: int = 5,
+    bars:        list[dict] | None = None,
 ) -> tuple[float, dict]:
     """Return (net_pnl, cost_detail) after deducting fees, slippage, and funding.
 
@@ -39,14 +61,15 @@ def apply_costs(
     net_pnl     : raw_pnl minus all costs
     cost_detail : {"total", "fee", "slip", "funding"} — all in USD
     """
-    cfg     = _load_costs()
-    taker   = float(cfg.get("taker_fee_pct",       0.0005))
-    slip    = float(cfg.get("slippage_pct",         0.0002))
-    funding = float(cfg.get("funding_cost_per_8h",  0.0001))
+    cfg       = _load_costs()
+    taker     = float(cfg.get("taker_fee_pct",       0.0005))
+    base_slip = float(cfg.get("slippage_pct",         0.0002))
+    funding   = float(cfg.get("funding_cost_per_8h",  0.0001))
 
-    notional        = entry * qty
-    fee_cost        = round(notional * taker * 2,  6)
-    slip_cost       = round(notional * slip  * 2,  6)
+    notional  = entry * qty
+    fee_cost  = round(notional * taker * 2, 6)
+    slip      = dynamic_slippage_pct(entry, bars or [], base_slip)
+    slip_cost = round(notional * slip  * 2, 6)
     bars_per_8h     = 480.0 / max(bar_minutes, 1)
     funding_periods = max(hold_bars, 0) / bars_per_8h
     funding_cost    = round(notional * funding * funding_periods, 6)

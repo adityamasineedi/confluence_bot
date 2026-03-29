@@ -46,6 +46,11 @@ def set_cooldown(symbol: str) -> None:
     _cd.set(symbol, _COOLDOWN_SECS)
 
 
+def clear_cooldown(symbol: str) -> None:
+    """Clear scorer cooldown for symbol — used by backtest engines."""
+    _cd.clear(symbol)
+
+
 def _ema(closes: list[float], period: int) -> float:
     if len(closes) < period:
         return 0.0
@@ -66,6 +71,18 @@ async def score(symbol: str, cache) -> list[dict]:
         _htf_bullish,
         _htf_bearish,
     )
+
+    from signals.volume_momentum import extreme_volatility
+
+    # Extreme volatility gate — flat during flash crashes
+    _ev_cfg = _cfg.get("risk", {}).get("extreme_vol_gate", {})
+    if _ev_cfg.get("enabled", True):
+        bars_4h_ev = cache.get_ohlcv(symbol, window=55, tf="4h")
+        if extreme_volatility(bars_4h_ev,
+                              lookback=int(_ev_cfg.get("lookback_bars", 50)),
+                              spike_mult=float(_ev_cfg.get("spike_multiplier", 3.0))):
+            log.info("EMA Pullback blocked — extreme volatility on %s", symbol)
+            return []
 
     results  = []
     cool_ok  = not is_on_cooldown(symbol)

@@ -204,6 +204,47 @@ def get_volume_params(ctx: VolumeContext) -> VolumeParams:
     )
 
 
+def extreme_volatility(bars: list[dict], lookback: int = 50, spike_mult: float = 3.0) -> bool:
+    """True when current bar ATR is extreme — flash crash or shock event.
+
+    Compares current bar's true range to the median ATR over the last `lookback` bars.
+    If current bar TR > spike_mult × median ATR, this is an extreme event.
+
+    Events caught: March 2020 COVID, May 2022 LUNA, Nov 2022 FTX.
+    During these events SL placement is meaningless (price gaps past stops),
+    slippage is massive, and any edge disappears.
+    """
+    if len(bars) < lookback + 1:
+        return False
+
+    curr = bars[-1]
+    prev = bars[-2]
+    curr_tr = max(
+        curr["h"] - curr["l"],
+        abs(curr["h"] - prev["c"]),
+        abs(curr["l"] - prev["c"]),
+    )
+
+    trs = []
+    for i in range(len(bars) - lookback - 1, len(bars) - 1):
+        if i < 1:
+            continue
+        b, p = bars[i], bars[i - 1]
+        tr = max(b["h"] - b["l"], abs(b["h"] - p["c"]), abs(b["l"] - p["c"]))
+        trs.append(tr)
+
+    if not trs:
+        return False
+
+    trs.sort()
+    median_atr = trs[len(trs) // 2]
+
+    if median_atr <= 0:
+        return False
+
+    return curr_tr > median_atr * spike_mult
+
+
 def get_volume_params_static(symbol: str, regime: str, timeframe: str) -> VolumeParams:
     """Backtest-safe version — no cache, no liquidation adjustment."""
     ctx = VolumeContext(symbol=symbol, regime=regime, timeframe=timeframe, cache=None)

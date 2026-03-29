@@ -151,6 +151,14 @@ risk:
   max_daily_loss_usdt: 150        # or > $150 in one day (30 losing trades × $5)
   max_consecutive_losses: 6       # halt after 6 consecutive losses
   post_trade_cooldown_mins: 30    # 30 min cooldown per symbol after any close
+  # ── Extreme volatility gate ──────────────────────────────────────────────
+  # Halts all new entries when 4H ATR spikes 3× above median (flash crash events).
+  # Catches: COVID March 2020, LUNA May 2022, FTX November 2022.
+  extreme_vol_gate:
+    enabled: true
+    lookback_bars: 50       # bars to compute median ATR
+    spike_multiplier: 3.0   # current TR > 3× median = extreme event
+    timeframe: "4h"         # check on 4H bars
 
 # ── Hard filters ─────────────────────────────────────────────────────────────
 filters:
@@ -645,6 +653,15 @@ btc_dominance:
   high_dominance_pct: 55.0     # above this % + rising → block alt longs
   low_dominance_pct:  48.0     # below this % → alt season confirmed
   fetch_interval_mins: 30      # how often to refresh from CoinGecko
+
+# ── Weekly trend gate ────────────────────────────────────────────────────────
+# Blocks LONG entries when BTC weekly close is below 10W EMA (macro bear).
+# Blocks SHORT entries when BTC weekly close is above 10W EMA (macro bull).
+# Catches regime transitions 2-3 weeks before 4H ADX responds.
+weekly_trend_gate:
+  enabled: true
+  ema_period: 10      # 10-week EMA (~50-day)
+  apply_to: [ema_pullback, fvg, vwap_band]
 
 # ── Backtest cost simulation ──────────────────────────────────────────────────
 # Applied to every round-trip trade: fees (entry + exit), slippage (entry + exit),

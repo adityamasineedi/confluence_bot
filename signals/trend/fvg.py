@@ -46,34 +46,41 @@ _MACRO_EMA_PERIOD     = int(_FVG_CFG.get("macro_ema_period", 200))
 _touched: set[tuple] = set()
 
 
-def _macro_allows_long(symbol: str, cache) -> bool:
-    """LONG FVG only when above 1D EMA200 — prevents going long in bear markets."""
-    if not _MACRO_FILTER_ENABLED:
-        return True
-    bars_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
-    if not bars_1d or len(bars_1d) < _MACRO_EMA_PERIOD:
-        return True   # insufficient data — don't block
-    closes = [b["c"] for b in bars_1d]
-    ema200 = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
-    k = 2.0 / (_MACRO_EMA_PERIOD + 1)
-    for c in closes[_MACRO_EMA_PERIOD:]:
-        ema200 = c * k + ema200 * (1 - k)
-    return closes[-1] > ema200
+def clear_symbol_touched(symbol: str) -> None:
+    """Remove all touched FVG entries for this symbol.
+
+    Called by backtest engine before each bar to prevent cross-bar contamination.
+    """
+    global _touched
+    _touched = {k for k in _touched if k[0] != symbol}
 
 
-def _macro_allows_short(symbol: str, cache) -> bool:
-    """SHORT FVG only when below 1D EMA200 — prevents shorting in bull markets."""
+def _macro_allows_long(candles_1d: list[dict]) -> bool:
+    """LONG FVG only when price is above 1D EMA200 — prevents longs in bear markets."""
     if not _MACRO_FILTER_ENABLED:
         return True
-    bars_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
-    if not bars_1d or len(bars_1d) < _MACRO_EMA_PERIOD:
-        return True
-    closes = [b["c"] for b in bars_1d]
-    ema200 = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
+    if len(candles_1d) < _MACRO_EMA_PERIOD:
+        return True   # insufficient history — don't block
+    closes = [b["c"] for b in candles_1d]
     k = 2.0 / (_MACRO_EMA_PERIOD + 1)
+    ema = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
     for c in closes[_MACRO_EMA_PERIOD:]:
-        ema200 = c * k + ema200 * (1 - k)
-    return closes[-1] < ema200
+        ema = c * k + ema * (1.0 - k)
+    return closes[-1] > ema
+
+
+def _macro_allows_short(candles_1d: list[dict]) -> bool:
+    """SHORT FVG only when price is below 1D EMA200 — prevents shorts in bull markets."""
+    if not _MACRO_FILTER_ENABLED:
+        return True
+    if len(candles_1d) < _MACRO_EMA_PERIOD:
+        return True
+    closes = [b["c"] for b in candles_1d]
+    k = 2.0 / (_MACRO_EMA_PERIOD + 1)
+    ema = sum(closes[:_MACRO_EMA_PERIOD]) / _MACRO_EMA_PERIOD
+    for c in closes[_MACRO_EMA_PERIOD:]:
+        ema = c * k + ema * (1.0 - k)
+    return closes[-1] < ema
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -171,7 +178,8 @@ def check_fvg_bullish(symbol: str, cache) -> bool:
     if key in _touched:
         return False  # already fired on this gap — only one entry per virgin gap
 
-    if not _macro_allows_long(symbol, cache):
+    candles_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
+    if not _macro_allows_long(candles_1d):
         return False   # bear market — don't buy into old bullish gaps
 
     _touched.add(key)
@@ -201,7 +209,8 @@ def check_fvg_bearish(symbol: str, cache) -> bool:
     if key in _touched:
         return False
 
-    if not _macro_allows_short(symbol, cache):
+    candles_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
+    if not _macro_allows_short(candles_1d):
         return False   # bull market — don't short into old bearish gaps
 
     _touched.add(key)

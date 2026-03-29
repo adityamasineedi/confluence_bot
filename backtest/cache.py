@@ -180,6 +180,15 @@ class BacktestCache:
 
     # ── Unavailable data (return safe empty values) ───────────────────────────
 
+    def get_btc_dominance(self) -> float:
+        return 0.0
+
+    def get_btc_dominance_trend(self) -> str:
+        return "flat"
+
+    def get_liquidations(self, symbol: str, window_seconds: int = 300) -> list:
+        return []
+
     def get_liq_clusters(self, symbol: str) -> list[dict]:
         return []
 

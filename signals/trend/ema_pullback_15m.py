@@ -174,14 +174,28 @@ def _rsi(closes: list[float], period: int = _RSI_PERIOD) -> float:
 
 
 def _htf_bullish(symbol: str, cache) -> bool:
-    """4H macro bias is bullish: close above 4H EMA50 OR 4H EMA21 > EMA50."""
+    """4H macro bias is bullish: price above EMA50 AND EMA21 above EMA50.
+
+    Changed from OR to AND — OR was too permissive, firing LONG when EMA21
+    briefly crossed above EMA50 even with price below it (early bear bounce).
+    """
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_SLOW + 5, tf="4h")
     if len(bars_4h) < _EMA_SLOW:
         return False
     closes_4h = [b["c"] for b in bars_4h]
     ema50_4h  = _ema(closes_4h, _EMA_SLOW)
     ema21_4h  = _ema(closes_4h, _EMA_FAST)
-    return closes_4h[-1] > ema50_4h or ema21_4h > ema50_4h
+    # AND: both conditions must hold — prevents longs during early bear bounces
+    if not (closes_4h[-1] > ema50_4h and ema21_4h > ema50_4h):
+        return False
+    # Weekly confirmation — prevents longs when weekly trend has turned bear
+    weekly_bars = cache.get_ohlcv(symbol, window=12, tf="1w")
+    if len(weekly_bars) >= 10:
+        w_closes = [b["c"] for b in weekly_bars]
+        ema10w = _ema(w_closes, 10)
+        if w_closes[-1] < ema10w:   # weekly bear — block longs
+            return False
+    return True
 
 
 def _htf_bearish(symbol: str, cache) -> bool:

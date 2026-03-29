@@ -30,10 +30,13 @@ log = logging.getLogger(__name__)
 # Active deal tracking: set of (symbol, direction) tuples
 _active_deals: set[tuple[str, str]] = set()
 
-# Pending deals: claimed immediately (before any await) to prevent concurrent
-# duplicate entries from the main loop, leadlag loop, and microrange loop.
-# Asyncio is single-threaded so check+add before first await is atomic.
+# Pending deals: claimed inside _deal_lock before any I/O awaits.
 _pending_deals: set[tuple[str, str]] = set()
+
+# Lock protecting _active_deals and _pending_deals — held only during check+claim,
+# never during exchange I/O (keeps latency low).
+import asyncio as _asyncio
+_deal_lock = _asyncio.Lock()
 
 # Post-trade cooldown: symbol → monotonic timestamp when cooldown expires
 _post_trade_until: dict[str, float] = {}
@@ -73,19 +76,31 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
                   direction, symbol, remaining / 60)
         return None
 
-    # Gate: no duplicate open position for same symbol+direction
+    # Gate: no duplicate open position — hold lock during check+claim only,
+    # never during I/O so other signals can proceed concurrently.
     deal_key = (symbol, direction)
-    if deal_key in _active_deals or deal_key in _pending_deals:
-        log.debug("Skipping %s %s — already active or pending", direction, symbol)
-        return None
-
-    # Claim the slot NOW before any await — prevents concurrent callers (main loop,
-    # leadlag loop, microrange loop) from all passing this check simultaneously.
-    _pending_deals.add(deal_key)
+    async with _deal_lock:
+        if deal_key in _active_deals or deal_key in _pending_deals:
+            log.debug("Skipping %s %s — already active or pending", direction, symbol)
+            return None
+        if len(_active_deals) >= _MAX_OPEN:
+            log.debug("Skipping %s %s — max positions (%d) reached", direction, symbol, _MAX_OPEN)
+            return None
+        same_dir = sum(1 for _, d in _active_deals if d == direction)
+        if same_dir >= _MAX_SAME_DIRECTION:
+            log.debug("Skipping %s %s — directional cap %d/%d", direction, symbol,
+                      same_dir, _MAX_SAME_DIRECTION)
+            return None
+        _pending_deals.add(deal_key)   # claim slot before releasing lock
 
     try:
         return await _execute_signal_inner(score_dict, cache, deal_key)
+    except Exception:
+        async with _deal_lock:
+            _pending_deals.discard(deal_key)
+        raise
     finally:
+        # Discard from pending regardless of outcome (inner moves to active on success)
         _pending_deals.discard(deal_key)
 
 
@@ -94,26 +109,6 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     symbol    = score_dict["symbol"]
     direction = score_dict["direction"]
     regime    = score_dict["regime"]
-
-    # Re-check active deals (may have changed while we were pending)
-    if deal_key in _active_deals:
-        log.debug("Skipping %s %s — became active while pending", direction, symbol)
-        return None
-
-    # Gate: max open positions
-    if len(_active_deals) >= _MAX_OPEN:
-        log.debug("Skipping %s %s — max positions (%d) reached", direction, symbol, _MAX_OPEN)
-        return None
-
-    # Gate: directional exposure cap — prevents correlated blow-up
-    # (e.g. 5 longs on correlated alts all hitting SL simultaneously on one BTC dump)
-    same_dir_count = sum(1 for _, d in _active_deals if d == direction)
-    if same_dir_count >= _MAX_SAME_DIRECTION:
-        log.debug(
-            "Skipping %s %s — directional cap: %d/%d same-direction positions open",
-            direction, symbol, same_dir_count, _MAX_SAME_DIRECTION,
-        )
-        return None
 
     # Gate: DB-level open trade check — cross-process safe (catches duplicate instances)
     import sqlite3 as _sqlite3
@@ -286,7 +281,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     except Exception as exc:
         log.warning("Telegram alert failed: %s", exc)
 
-    _active_deals.add(deal_key)
+    async with _deal_lock:
+        _pending_deals.discard(deal_key)
+        _active_deals.add(deal_key)
     log.info("Position opened: %s %s — active deals: %d", direction, symbol, len(_active_deals))
 
     # Set per-symbol cooldown (each strategy manages its own cooldown state)

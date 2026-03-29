@@ -35,6 +35,7 @@ def get_active_strategies(symbol: str, regime: str) -> list[str]:
         get_active_strategies("SOLUSDT", "RANGE")
         → ["vwap_band", "sweep"]
     """
+    clear_cache()   # always read fresh config — enables hot updates without restart
     cfg = _load_cfg()
     routing = cfg.get("strategy_routing", {})
 

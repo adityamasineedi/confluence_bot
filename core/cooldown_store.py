@@ -55,6 +55,18 @@ class CooldownStore:
             log.debug("CooldownStore.set(%s, %s) DB write failed: %s",
                       symbol, self._strategy, exc)
 
+    def clear(self, symbol: str) -> None:
+        """Clear cooldown for symbol — used by backtest to prevent cross-run DB state."""
+        self._cache.pop(symbol, None)
+        try:
+            with sqlite3.connect(_DB_PATH) as conn:
+                conn.execute(
+                    "DELETE FROM cooldowns WHERE symbol=? AND strategy=?",
+                    (symbol.upper(), self._strategy),
+                )
+        except Exception:
+            pass
+
     def remaining(self, symbol: str) -> float:
         """Seconds remaining on cooldown (0.0 if not active)."""
         now = time.time()
