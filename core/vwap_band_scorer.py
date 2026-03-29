@@ -116,9 +116,15 @@ async def score(symbol: str, cache) -> list[dict]:
         get_vwap_levels,
     )
 
+    from signals.volume_momentum import relative_volume
+
     cool_ok    = not is_on_cooldown(symbol)
     regime     = _regime_str(symbol, cache)
     adx_ok     = _adx_below_max(symbol, cache)
+
+    bars_15m_vol = cache.get_ohlcv(symbol, window=22, tf="15m") or []
+    rvol         = relative_volume(bars_15m_vol, lookback=20)
+    rvol_ok      = rvol >= 0.5
 
     # Current price for RR calculation
     closes_1m = cache.get_closes(symbol, window=1, tf="1m")
@@ -152,8 +158,14 @@ async def score(symbol: str, cache) -> list[dict]:
                 "band_touch":     True,         # always True here (hard gate confirmed)
                 "rsi_confirm":    rsi_ok,
                 "regime_aligned": regime_align,
+                "vol_spike_ok":   rvol >= 0.8,
+                "rvol_ok":        rvol_ok,
             }
-            score_val = round(sum(1.0 / 3.0 for v in signals.values() if v), 4)
+            score_val = round(sum(1.0 / 3.0 for v in (
+                signals["band_touch"],
+                signals["rsi_confirm"],
+                signals["regime_aligned"],
+            ) if v), 4)
 
             sl   = lower_2 * (1.0 - _SL_BUFFER_PCT)
             tp   = vwap_mid
@@ -165,6 +177,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 and regime_gate
                 and adx_ok
                 and rr >= _MIN_RR
+                and rvol_ok
                 and cool_ok
             )
 
@@ -174,7 +187,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 "direction": "LONG",
                 "score":     score_val,
                 "signals":   {**signals,
-                              "regime_ok":   regime_gate,
+                              "regime_ok":    regime_gate,
                               "not_trending": adx_ok},
                 "fire":      fire,
                 "vb_stop":   round(sl, 8),
@@ -200,8 +213,14 @@ async def score(symbol: str, cache) -> list[dict]:
                 "band_touch":     True,
                 "rsi_confirm":    rsi_ok,
                 "regime_aligned": regime_align,
+                "vol_spike_ok":   rvol >= 0.8,
+                "rvol_ok":        rvol_ok,
             }
-            score_val = round(sum(1.0 / 3.0 for v in signals.values() if v), 4)
+            score_val = round(sum(1.0 / 3.0 for v in (
+                signals["band_touch"],
+                signals["rsi_confirm"],
+                signals["regime_aligned"],
+            ) if v), 4)
 
             sl   = upper_2 * (1.0 + _SL_BUFFER_PCT)
             tp   = vwap_mid
@@ -213,6 +232,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 and regime_gate
                 and adx_ok
                 and rr >= _MIN_RR
+                and rvol_ok
                 and cool_ok
             )
 

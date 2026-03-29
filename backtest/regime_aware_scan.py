@@ -497,9 +497,12 @@ def main() -> None:
 
     from backtest.fetcher import fetch_period_sync
 
-    # Pre-fetch BTC data once if leadlag is in strategies (needed as anchor for all non-BTC)
+    need_btc_anchor = "leadlag" in strategies
+
+    # Pre-fetch BTC once when it's not in the symbols list but leadlag needs it.
+    # When BTCUSDT IS in symbols it will be captured during the normal loop below.
     btc_ohlcv: dict = {}
-    if "leadlag" in strategies and "BTCUSDT" not in symbols:
+    if need_btc_anchor and "BTCUSDT" not in symbols:
         print("Pre-fetching BTCUSDT for leadlag anchor...")
         btc_data  = fetch_period_sync(["BTCUSDT"], from_ms, to_ms, warmup_days=60)
         btc_ohlcv = btc_data["ohlcv"]
@@ -520,6 +523,12 @@ def main() -> None:
             print(f"  FETCH ERROR: {exc} — skipping")
             continue
         ohlcv = sym_data["ohlcv"]
+
+        # When BTCUSDT is fetched as part of the normal loop, save it for later alts
+        if sym == "BTCUSDT" and need_btc_anchor:
+            btc_ohlcv = ohlcv
+
+        # Merge BTC data into every alt's ohlcv so leadlag engine has its anchor
         if btc_ohlcv and sym != "BTCUSDT":
             ohlcv = {**ohlcv, **btc_ohlcv}
 

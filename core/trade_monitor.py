@@ -300,6 +300,149 @@ def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:
     return None
 
 
+# ── Breakeven move ────────────────────────────────────────────────────────────
+
+async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -> bool:
+    """Move SL to entry when price reaches entry + 1× stop_distance.
+
+    Returns True if SL was moved. Does nothing if already at breakeven.
+    Already-breakeven trades have stop_loss == entry in DB.
+    """
+    symbol    = trade["symbol"]
+    direction = trade["direction"]
+    entry     = float(trade["entry"])
+    sl        = float(trade["stop_loss"])
+
+    # Already at breakeven or better
+    if direction == "LONG"  and sl >= entry:
+        return False
+    if direction == "SHORT" and sl <= entry:
+        return False
+
+    stop_dist    = abs(entry - sl)
+    one_r_target = (entry + stop_dist) if direction == "LONG" else (entry - stop_dist)
+
+    price = cache.get_last_price(symbol)
+    if not price:
+        return False
+
+    reached_one_r = (
+        (direction == "LONG"  and price >= one_r_target) or
+        (direction == "SHORT" and price <= one_r_target)
+    )
+    if not reached_one_r:
+        return False
+
+    headers    = {"X-MBX-APIKEY": _API_KEY}
+    close_side = "SELL" if direction == "LONG" else "BUY"
+
+    # Cancel existing SL/TP bracket (best effort)
+    try:
+        cancel_params = _sign({"symbol": symbol})
+        async with session.delete(
+            f"{_BINANCE_BASE}/fapi/v1/allOpenOrders",
+            params=cancel_params, headers=headers,
+        ) as resp:
+            pass
+    except Exception:
+        pass
+
+    # Place new SL at entry price
+    new_sl_params = _sign({
+        "symbol":     symbol,
+        "side":       close_side,
+        "type":       "STOP_MARKET",
+        "quantity":   float(trade["size"]),
+        "stopPrice":  round(entry, 8),
+        "reduceOnly": "true",
+    })
+    try:
+        async with session.post(
+            f"{_BINANCE_BASE}/fapi/v1/order",
+            params=new_sl_params, headers=headers,
+        ) as resp:
+            result = await resp.json()
+        if isinstance(result.get("code"), int) and result["code"] < 0:
+            log.warning("Breakeven SL failed for %s: %s", symbol, result)
+            return False
+
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute(
+                "UPDATE trades SET stop_loss=? WHERE id=?",
+                (entry, trade["id"]),
+            )
+        log.info("Breakeven: SL moved to entry %.4f for %s %s", entry, direction, symbol)
+        return True
+    except Exception as exc:
+        log.warning("Breakeven move failed %s: %s", symbol, exc)
+        return False
+
+
+# ── Regime-flip exit ───────────────────────────────────────────────────────────
+
+def _regime_conflicts(trade: dict, cache) -> bool:
+    """Return True if current regime conflicts with open trade direction.
+
+    LONG trades should be closed if regime flips to CRASH.
+    SHORT trades should be closed if regime flips to PUMP.
+    """
+    from core.regime_detector import _detector
+
+    symbol    = trade["symbol"]
+    direction = trade["direction"]
+
+    try:
+        regime = str(_detector.detect(symbol, cache))
+    except Exception:
+        return False   # can't detect — don't close
+
+    if direction == "LONG"  and regime == "CRASH":
+        return True
+    if direction == "SHORT" and regime == "PUMP":
+        return True
+    return False
+
+
+async def _force_regime_close(trade: dict, session: aiohttp.ClientSession, cache) -> bool:
+    """Place a market close order and update the DB for a regime-flip exit.
+
+    Returns True if the close was successfully recorded.
+    """
+    symbol    = trade["symbol"]
+    direction = trade["direction"]
+    headers   = {"X-MBX-APIKEY": _API_KEY}
+    close_side = "SELL" if direction == "LONG" else "BUY"
+
+    price = cache.get_last_price(symbol) or 0.0
+
+    try:
+        qty = float(trade["size"])
+        qty = int(qty) if qty == int(qty) else qty
+        close_params = _sign({
+            "symbol":     symbol,
+            "side":       close_side,
+            "type":       "MARKET",
+            "quantity":   qty,
+            "reduceOnly": "true",
+        })
+        async with session.post(
+            f"{_BINANCE_BASE}/fapi/v1/order",
+            params=close_params, headers=headers,
+        ) as resp:
+            close_resp = await resp.json()
+        if close_resp.get("orderId"):
+            fill_price = float(close_resp.get("avgPrice") or price or trade["entry"])
+        else:
+            log.warning("Regime flip market close rejected for %s: %s", symbol, close_resp)
+            fill_price = price or float(trade["entry"])
+    except Exception as exc:
+        log.warning("Regime flip market close error %s: %s", symbol, exc)
+        fill_price = price or float(trade["entry"])
+
+    pnl = _calc_pnl(trade, fill_price) if fill_price > 0 else 0.0
+    return await asyncio.to_thread(_close_trade_db, trade["id"], fill_price, pnl)
+
+
 # ── PnL ───────────────────────────────────────────────────────────────────────
 
 def _calc_pnl(trade: dict, exit_price: float) -> float:
@@ -337,6 +480,34 @@ async def monitor_trades(cache) -> None:
                     # close alerts when multiple DB rows exist for the same position)
                     if trade_id in _closing_trade_ids:
                         continue
+
+                    if not _PAPER_MODE:
+                        # Move SL to breakeven once price reaches +1R
+                        await _check_breakeven(trade, session, cache)
+
+                        # Force-close if regime flipped against the trade direction
+                        if _regime_conflicts(trade, cache):
+                            log.warning(
+                                "Regime flip forced close: %s %s",
+                                trade["direction"], trade["symbol"],
+                            )
+                            _closing_trade_ids.add(trade_id)
+                            row_claimed = await _force_regime_close(trade, session, cache)
+                            if row_claimed:
+                                from core.executor import close_deal
+                                close_deal(trade["symbol"], trade["direction"])
+                                pnl = _calc_pnl(trade, float(trade.get("entry", 0)))
+                                log.info(
+                                    "Regime flip closed: %s %s  pnl≈%+.2f USDT",
+                                    trade["direction"], trade["symbol"], pnl,
+                                )
+                                try:
+                                    from notifications.telegram import send_trade_close
+                                    await send_trade_close(trade, "REGIME_FLIP",
+                                                           float(trade["entry"]), pnl)
+                                except Exception:
+                                    pass
+                            continue
 
                     if _PAPER_MODE:
                         result = _check_paper_order(trade, cache)

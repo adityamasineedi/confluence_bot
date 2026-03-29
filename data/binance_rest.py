@@ -324,6 +324,47 @@ class BinanceRestPoller:
             log.debug("_fetch_okx_oi(%s) failed: %s", symbol, exc)
 
 
+# ── Order retry helper ────────────────────────────────────────────────────────
+
+async def _place_with_retry(
+    session:      aiohttp.ClientSession,
+    url:          str,
+    params:       dict,
+    headers:      dict,
+    label:        str,
+    max_attempts: int = 3,
+) -> dict:
+    """Place an order with retry on timeout or rate limit.
+
+    `params` must be the UNSIGNED base params dict — this function calls _sign()
+    on each attempt so the timestamp stays fresh across retries.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with session.post(
+                url, params=_sign(dict(params)), headers=headers
+            ) as resp:
+                result = await resp.json()
+            if isinstance(result.get("code"), int) and result["code"] < 0:
+                if result["code"] in (-1003, -1015):   # rate-limit codes
+                    await asyncio.sleep(5 * attempt)
+                    continue
+                log.warning("%s rejected (attempt %d): %s", label, attempt, result)
+                if attempt < max_attempts:
+                    await asyncio.sleep(2)
+                    continue
+            return result
+        except asyncio.TimeoutError:
+            log.warning("%s timeout (attempt %d/%d)", label, attempt, max_attempts)
+            if attempt < max_attempts:
+                await asyncio.sleep(2 * attempt)
+        except Exception as exc:
+            log.warning("%s error (attempt %d): %s", label, attempt, exc)
+            if attempt < max_attempts:
+                await asyncio.sleep(2)
+    return {}
+
+
 # ── Order execution (signed — used by executor.py) ───────────────────────────
 
 async def setup_symbols(symbols: list[str], leverage: int, margin_type: str = "ISOLATED") -> None:
@@ -455,22 +496,20 @@ async def place_order(
                 log.error("place_order entry rejected %s %s: %s", side, symbol, result)
                 return {}
 
-            # 2. Stop loss
-            async with session.post(
-                url, params=_sign(sl_params), headers=headers
-            ) as resp:
-                sl_resp = await resp.json()
+            # 2. Stop loss (with retry)
+            sl_resp = await _place_with_retry(
+                session, url, sl_params, headers, f"SL {symbol}"
+            )
             if isinstance(sl_resp.get("code"), int) and sl_resp["code"] < 0:
                 log.warning("SL order rejected %s: code=%s msg=%s — software SL/TP will protect position",
                             symbol, sl_resp["code"], sl_resp.get("msg", "?"))
-            else:
+            elif sl_resp.get("orderId"):
                 log.debug("SL placed %s: orderId=%s", symbol, sl_resp.get("orderId"))
 
-            # 3. Take profit
-            async with session.post(
-                url, params=_sign(tp_params), headers=headers
-            ) as resp:
-                tp_resp = await resp.json()
+            # 3. Take profit (with retry)
+            tp_resp = await _place_with_retry(
+                session, url, tp_params, headers, f"TP {symbol}"
+            )
             if isinstance(tp_resp.get("code"), int) and tp_resp["code"] < 0:
                 log.warning("TP order rejected %s: code=%s msg=%s — software SL/TP will protect position",
                             symbol, tp_resp["code"], tp_resp.get("msg", "?"))

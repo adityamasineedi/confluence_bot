@@ -284,11 +284,9 @@ ema_pullback:
   rsi_short_min: 50             # lower bound for SHORT RSI (non-overlapping: 50–70)
   rsi_short_max: 70             # upper bound for SHORT RSI
   exclude_symbols:
-    - ETHUSDT    # not tested — excluded pending backtest
-    - XRPUSDT    # not tested — excluded pending backtest
-    - LINKUSDT   # not tested — excluded pending backtest
-    - DOGEUSDT   # high volatility, unsuitable for EMA pullback
-    - SUIUSDT    # not tested — excluded pending backtest
+    - BTCUSDT    # regime gating broke it — needs separate investigation
+    - BNBUSDT    # BAD: TREND PF0.69 WR19% -$55
+    - DOGEUSDT   # BAD: TREND PF0.80 WR28% -$45
 # ── HTF Demand / Supply Zone strategy ───────────────────────────────────────
 # 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
 # Highest quality, lowest frequency: 1-3x per symbol per day.
@@ -329,7 +327,7 @@ oi_spike:
 # and closes back inside.  Blocked in strong trends (ADX > 30) where bands
 # expand continuously and reversion fails.  Target = VWAP midline (TP dynamic).
 vwap_band:
-  enabled: false
+  enabled: true   # confirmed: XRP RANGE PF1.24 WR34%, LINK RANGE PF1.38 WR29%
   window_bars: 20             # 20 × 15m = 5h rolling VWAP window
   band_mult: 2.0              # ±2σ standard deviation bands
   rsi_long_max: 35            # RSI must be ≤ this for LONG entry (oversold)
@@ -340,13 +338,20 @@ vwap_band:
   cooldown_mins: 30           # per-symbol cooldown after entry
   max_positions: 3
   sl_buffer_pct: 0.002        # SL 0.2% beyond the ±2σ band edge
+  exclude_symbols:
+    - BTCUSDT    # BAD: TREND -$113, RANGE -$70
+    - ETHUSDT    # BAD: TREND -$208, RANGE -$135
+    - SOLUSDT    # BAD: TREND -$363, RANGE -$32
+    - BNBUSDT    # BAD: TREND -$1, RANGE -$93
+    - DOGEUSDT   # BAD: TREND -$79, RANGE -$136
+    - SUIUSDT    # GOOD but ema_pullback is better (PF2.21 vs PF1.30)
 
 # ── Break of Structure / Change of Character strategy ────────────────────────
 # Trades confirmed 1H structure breaks (swing high/low closes) with volume.
 # Low frequency (15-40 per symbol per year), high quality, 2.5× RR minimum.
 # Skips PUMP and CRASH regimes — structure breaks there are unreliable.
 bos:
-  enabled: false
+  enabled: false   # confirmed loser: XRP TREND PF0.20, LINK TREND PF0.32, SUI TREND PF0.52
   pivot_n: 3                  # bars each side to confirm a swing point
   lookback_bars: 50           # 1H candles to scan for swing structure
   vol_confirm_mult: 1.3       # break bar volume ≥ this × 20-bar average
@@ -361,7 +366,7 @@ bos:
 # Entry into unfilled 1H price imbalance zones (FVGs).
 # Fires when price returns to a virgin gap with HTF alignment + RSI confirmation.
 fvg:
-  enabled: false
+  enabled: true   # confirmed: BTC PF1.65 WR39%, SOL PF1.64 WR43%, BNB PF2.11 WR44%
   min_gap_pct: 0.003          # FVG must be ≥ 0.3% wide (filters micro-noise)
   check_interval_secs: 60     # align with 1H bar close
   cooldown_mins: 45           # per-symbol cooldown after entry
@@ -369,18 +374,21 @@ fvg:
   rr_ratio: 2.0               # TP = entry ± dist × 2.0
   sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
   lookback_bars: 50           # scan last 50 1H candles for FVGs
+  exclude_symbols:
+    - XRPUSDT    # BAD: TREND PF0.17 WR7% -$199 (worst result in entire scan)
+    - LINKUSDT   # BAD: TREND PF0.68 WR24% -$58
 
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
 microrange:
   enabled: true
   exclude_symbols:
-    - ETHUSDT               # 28.1% WR, -$419
-    - SOLUSDT
+    - ETHUSDT    # BAD: TREND PF0.89 -$158, RANGE PF0.80 -$183
+    - SOLUSDT    # BAD: RANGE PF0.94 -$30 (TREND marginal at PF1.01)
     - BNBUSDT
-    - XRPUSDT               # not tested yet — exclude until backtest confirms
-    - LINKUSDT              # not tested yet — exclude until backtest confirms
-    - DOGEUSDT
-    - SUIUSDT
+    - XRPUSDT    # BAD: TREND PF0.98, RANGE PF0.98
+    # LINKUSDT confirmed RANGE PF1.37 — removed from exclude
+    # DOGEUSDT confirmed CRASH PF1.97 WR38% — removed from exclude
+    # SUIUSDT confirmed CRASH PF1.91 WR41% — removed from exclude
   window_bars: 10
   range_max_pct: 0.005      # 0.5% max box width (tightened from 1.0%)
   entry_zone_pct: 0.001     # within 0.1% of boundary (tightened from 0.2%)
@@ -484,50 +492,56 @@ symbol_tiers:
 # Individual strategy enabled: false flags are still respected by the router.
 strategy_routing:
   BTCUSDT:
-    TREND:     [ema_pullback, leadlag, sweep, zone, fvg]
-    RANGE:     [microrange, vwap_band, insidebar]
-    BREAKOUT:  [bos, fvg, leadlag]
-    CRASH:     [sweep, crash_scorer]
-    PUMP:      [pump_scorer, leadlag]
-  SOLUSDT:
-    TREND:     [ema_pullback, sweep, leadlag, fvg]
-    RANGE:     [vwap_band, sweep]
-    BREAKOUT:  [bos, fvg]
-    CRASH:     [sweep]
-    PUMP:      [leadlag]
-  BNBUSDT:
-    TREND:     [ema_pullback, leadlag, fvg]
-    RANGE:     [vwap_band]
-    BREAKOUT:  [bos, leadlag]
-    CRASH:     [sweep]
-    PUMP:      [leadlag]
-  DOGEUSDT:
-    TREND:     [leadlag, fvg]
-    RANGE:     [leadlag]
-    BREAKOUT:  [leadlag]
-    CRASH:     [leadlag]
-    PUMP:      [leadlag]
-  SUIUSDT:
-    TREND:     [leadlag]
-    RANGE:     [leadlag]
-    BREAKOUT:  [leadlag]
-    CRASH:     [leadlag]
-    PUMP:      [leadlag]
-  XRPUSDT:
-    TREND:     [ema_pullback, sweep, leadlag]
-    RANGE:     [vwap_band, leadlag]
-    BREAKOUT:  [bos, fvg, leadlag]
-    CRASH:     [sweep]
-    PUMP:      [leadlag]
-  LINKUSDT:
-    TREND:     [ema_pullback, sweep, leadlag]
-    RANGE:     [vwap_band, leadlag]
-    BREAKOUT:  [bos, fvg, leadlag]
-    CRASH:     [sweep]
-    PUMP:      [leadlag]
-  _default:
-    TREND:     [leadlag]
-    RANGE:     [leadlag]
-    BREAKOUT:  [leadlag]
+    TREND:     [fvg, microrange]         # fvg PF1.65 WR39%, microrange PF1.17
+    RANGE:     [microrange]              # microrange PF1.04 — only option
+    BREAKOUT:  [fvg]                     # fvg best in trend transitions
+    CRASH:     []                        # no confirmed strategy
+    PUMP:      []
+  ETHUSDT:
+    TREND:     [ema_pullback, fvg]       # ema_pullback PF1.42 WR37%, fvg PF1.14 borderline
+    RANGE:     []                        # nothing confirmed
+    BREAKOUT:  [ema_pullback]
     CRASH:     []
-    PUMP:      [leadlag]
+    PUMP:      []
+  SOLUSDT:
+    TREND:     [fvg, ema_pullback]       # fvg PF1.64 WR43%, ema_pullback PF1.00 borderline
+    RANGE:     []                        # nothing confirmed
+    BREAKOUT:  [fvg]
+    CRASH:     []
+    PUMP:      []
+  BNBUSDT:
+    TREND:     [fvg]                     # fvg PF2.11 WR44% — best single result
+    RANGE:     []                        # microrange PF1.14 borderline, needs more testing
+    BREAKOUT:  [fvg]
+    CRASH:     []
+    PUMP:      []
+  XRPUSDT:
+    TREND:     [ema_pullback, vwap_band] # ema_pullback PF1.28 WR34%, vwap_band PF1.16
+    RANGE:     [vwap_band]               # vwap_band PF1.24 WR34%
+    BREAKOUT:  [ema_pullback]
+    CRASH:     []
+    PUMP:      []
+  LINKUSDT:
+    TREND:     [ema_pullback]            # ema_pullback PF1.43 WR36%
+    RANGE:     [microrange, vwap_band]   # microrange PF1.37 WR36%, vwap_band PF1.38 WR29%
+    BREAKOUT:  [ema_pullback]
+    CRASH:     []
+    PUMP:      []
+  DOGEUSDT:
+    TREND:     [fvg]                     # fvg PF1.76 WR46%
+    RANGE:     []                        # nothing confirmed
+    BREAKOUT:  [fvg]
+    CRASH:     [microrange]              # microrange PF1.97 WR38% — crash only
+    PUMP:      []
+  SUIUSDT:
+    TREND:     [ema_pullback, fvg, vwap_band]  # ema_pullback PF2.21 WR49%, fvg PF1.31, vwap_band PF1.30
+    RANGE:     []                        # nothing confirmed
+    BREAKOUT:  [ema_pullback, fvg]
+    CRASH:     [microrange]              # microrange PF1.91 WR41%
+    PUMP:      []
+  _default:
+    TREND:     []
+    RANGE:     []
+    BREAKOUT:  []
+    CRASH:     []
+    PUMP:      []

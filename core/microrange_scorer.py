@@ -91,6 +91,12 @@ async def score(symbol: str, cache) -> list[dict]:
         compute_levels,
     )
 
+    from signals.volume_momentum import (
+        volume_divergence_bearish,
+        volume_divergence_bullish,
+        increasing_volume,
+    )
+
     bars = cache.get_ohlcv(symbol, window=_WINDOW_BARS + 22, tf="5m")
     if len(bars) < _WINDOW_BARS + 2:
         return []
@@ -110,70 +116,94 @@ async def score(symbol: str, cache) -> list[dict]:
 
     results = []
 
+    vol_div_bearish = volume_divergence_bearish(bars, lookback=5)
+    vol_div_bullish = volume_divergence_bullish(bars, lookback=5)
+    vol_increasing  = increasing_volume(bars, lookback=5)
+
     # ── LONG: price near range_low ─────────────────────────────────────────────
     if near_range_low(price, box["range_low"], _ENTRY_ZONE_PCT):
-        rsi_ok = rsi_supports_long(closes, _RSI_LONG_MAX)
-        signals = {
-            "box_detected": True,
-            "entry_zone":   True,
-            "volume_ok":    vol_ok,
-            "rsi_aligned":  rsi_ok,
-        }
-        score_val = sum(0.25 for v in signals.values() if v)
-        sl, tp = compute_levels(
-            "LONG",
-            box["range_low"], box["range_high"], box["range_width"],
-            _STOP_PCT, _TP_RATIO,
-        )
-        fire = score_val >= _THRESHOLD and cool_ok
-        results.append({
-            "symbol":          symbol,
-            "regime":          "MICRORANGE",
-            "direction":       "LONG",
-            "score":           round(score_val, 4),
-            "signals":         signals,
-            "fire":            fire,
-            "mr_stop":         sl,
-            "mr_tp":           tp,
-            "range_low":       box["range_low"],
-            "range_high":      box["range_high"],
-            "range_width_pct": round(box["range_width_pct"] * 100, 4),
-            "_atr_pct":        cfg.get("_atr_pct", 0),
-            "_tier":           cfg.get("_tier", "base"),
-            "_dynamic":        cfg.get("_dynamic", False),
-        })
+        # Hard block: bearish divergence (distribution) or accelerating volume into low
+        if vol_div_bearish or vol_increasing:
+            pass   # skip — fall through without appending
+        else:
+            rsi_ok = rsi_supports_long(closes, _RSI_LONG_MAX)
+            signals = {
+                "box_detected":    True,
+                "entry_zone":      True,
+                "volume_ok":       vol_ok,
+                "rsi_aligned":     rsi_ok,
+                "vol_divergence_ok": True,
+            }
+            score_val = sum(0.25 for v in (
+                signals["box_detected"],
+                signals["entry_zone"],
+                signals["volume_ok"],
+                signals["rsi_aligned"],
+            ) if v)
+            sl, tp = compute_levels(
+                "LONG",
+                box["range_low"], box["range_high"], box["range_width"],
+                _STOP_PCT, _TP_RATIO,
+            )
+            fire = score_val >= _THRESHOLD and cool_ok
+            results.append({
+                "symbol":          symbol,
+                "regime":          "MICRORANGE",
+                "direction":       "LONG",
+                "score":           round(score_val, 4),
+                "signals":         signals,
+                "fire":            fire,
+                "mr_stop":         sl,
+                "mr_tp":           tp,
+                "range_low":       box["range_low"],
+                "range_high":      box["range_high"],
+                "range_width_pct": round(box["range_width_pct"] * 100, 4),
+                "_atr_pct":        cfg.get("_atr_pct", 0),
+                "_tier":           cfg.get("_tier", "base"),
+                "_dynamic":        cfg.get("_dynamic", False),
+            })
 
     # ── SHORT: price near range_high ───────────────────────────────────────────
     if near_range_high(price, box["range_high"], _ENTRY_ZONE_PCT):
-        rsi_ok = rsi_supports_short(closes, _RSI_SHORT_MIN)
-        signals = {
-            "box_detected": True,
-            "entry_zone":   True,
-            "volume_ok":    vol_ok,
-            "rsi_aligned":  rsi_ok,
-        }
-        score_val = sum(0.25 for v in signals.values() if v)
-        sl, tp = compute_levels(
-            "SHORT",
-            box["range_low"], box["range_high"], box["range_width"],
-            _STOP_PCT, _TP_RATIO,
-        )
-        fire = score_val >= _THRESHOLD and cool_ok
-        results.append({
-            "symbol":          symbol,
-            "regime":          "MICRORANGE",
-            "direction":       "SHORT",
-            "score":           round(score_val, 4),
-            "signals":         signals,
-            "fire":            fire,
-            "mr_stop":         sl,
-            "mr_tp":           tp,
-            "range_low":       box["range_low"],
-            "range_high":      box["range_high"],
-            "range_width_pct": round(box["range_width_pct"] * 100, 4),
-            "_atr_pct":        cfg.get("_atr_pct", 0),
-            "_tier":           cfg.get("_tier", "base"),
-            "_dynamic":        cfg.get("_dynamic", False),
-        })
+        # Hard block: bullish divergence (accumulation) or accelerating volume into high
+        if vol_div_bullish or vol_increasing:
+            pass   # skip — fall through without appending
+        else:
+            rsi_ok = rsi_supports_short(closes, _RSI_SHORT_MIN)
+            signals = {
+                "box_detected":    True,
+                "entry_zone":      True,
+                "volume_ok":       vol_ok,
+                "rsi_aligned":     rsi_ok,
+                "vol_divergence_ok": True,
+            }
+            score_val = sum(0.25 for v in (
+                signals["box_detected"],
+                signals["entry_zone"],
+                signals["volume_ok"],
+                signals["rsi_aligned"],
+            ) if v)
+            sl, tp = compute_levels(
+                "SHORT",
+                box["range_low"], box["range_high"], box["range_width"],
+                _STOP_PCT, _TP_RATIO,
+            )
+            fire = score_val >= _THRESHOLD and cool_ok
+            results.append({
+                "symbol":          symbol,
+                "regime":          "MICRORANGE",
+                "direction":       "SHORT",
+                "score":           round(score_val, 4),
+                "signals":         signals,
+                "fire":            fire,
+                "mr_stop":         sl,
+                "mr_tp":           tp,
+                "range_low":       box["range_low"],
+                "range_high":      box["range_high"],
+                "range_width_pct": round(box["range_width_pct"] * 100, 4),
+                "_atr_pct":        cfg.get("_atr_pct", 0),
+                "_tier":           cfg.get("_tier", "base"),
+                "_dynamic":        cfg.get("_dynamic", False),
+            })
 
     return results
