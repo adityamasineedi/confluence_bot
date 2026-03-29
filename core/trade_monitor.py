@@ -125,15 +125,14 @@ async def _check_live_order(
             resp.raise_for_status()
             open_orders = await resp.json()
 
-        # Count reduce-only orders for this symbol (our SL + TP bracket)
+        # Count reduce-only orders for this symbol (SL + optional TP/trailing).
+        # Trailing stop trades have only 1 bracket order (SL), so ≥1 means open.
         bracket_open = sum(
             1 for o in open_orders
             if o.get("reduceOnly") and o.get("symbol") == symbol
         )
-        if bracket_open >= 2:
-            return None   # both SL and TP still live → position still open
-        if bracket_open == 1:
-            return None   # one leg remaining → position still open
+        if bracket_open >= 1:
+            return None   # at least one bracket leg still live → position open
 
     except Exception as exc:
         log.debug("_check_live_order openOrders (%s): %s", symbol, exc)
@@ -236,7 +235,7 @@ async def _check_live_order(
             resp.raise_for_status()
             all_orders = await resp.json()
 
-        # Find the filled reduce-only order (SL or TP)
+        # Find the filled reduce-only order (SL, TP, or trailing stop)
         close_side = "SELL" if direction == "LONG" else "BUY"
         for o in reversed(all_orders):
             if (o.get("reduceOnly") and
@@ -246,7 +245,12 @@ async def _check_live_order(
                 order_type = o.get("type", "")
                 if fill_price > 0:
                     actual_exit = fill_price
-                    outcome = "TP" if "TAKE_PROFIT" in order_type else "SL"
+                    if "TAKE_PROFIT" in order_type:
+                        outcome = "TP"
+                    elif "TRAILING_STOP" in order_type:
+                        outcome = "TP"   # trailing stop = profitable exit
+                    else:
+                        outcome = "SL"
                     break
 
     except Exception as exc:

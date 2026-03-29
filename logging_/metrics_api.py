@@ -278,6 +278,20 @@ def debug_symbol(symbol: str) -> JSONResponse:
     except Exception:
         pass
 
+    # ── BTC Dominance ─────────────────────────────────────────────────────────
+    btc_dominance_info: dict = {}
+    if _cache is not None:
+        try:
+            dom_val   = _cache.get_btc_dominance()
+            dom_trend = _cache.get_btc_dominance_trend()
+            btc_dominance_info = {
+                "dominance_pct": round(dom_val * 100, 2) if dom_val > 0 else None,
+                "trend":         dom_trend,
+                "alt_long_ok":   not (dom_trend == "rising" and dom_val > 0.55),
+            }
+        except Exception:
+            pass
+
     return JSONResponse({
         "symbol":               sym,
         "cvd_warmup_remaining": cvd_warmup_remaining,
@@ -285,6 +299,7 @@ def debug_symbol(symbol: str) -> JSONResponse:
         "active_deal":          active_deal,
         "recent_signals":       recent_signals,
         "live":                 live,
+        "btc_dominance":        btc_dominance_info,
     })
 
 

@@ -31,6 +31,32 @@ def _date_to_ms(date_str: str) -> int:
                .replace(tzinfo=timezone.utc).timestamp() * 1000)
 
 
+def _print_cost_analysis(trades: list[dict], capital: float) -> None:
+    """Print gross/net return and fee/slippage/funding breakdown for cost-aware trades."""
+    cost_trades = [t for t in trades if "gross_pnl" in t]
+    if not cost_trades:
+        return   # engine predates cost simulation — skip
+
+    gross = sum(t["gross_pnl"] for t in cost_trades)
+    fees  = sum(t.get("cost_fee",  0.0) for t in cost_trades)
+    slip  = sum(t.get("cost_slip", 0.0) for t in cost_trades)
+    fund  = sum(t.get("cost_fund", 0.0) for t in cost_trades)
+    cost  = fees + slip + fund
+    net   = gross - cost
+    drag  = (cost / abs(gross) * 100) if gross != 0 else 0.0
+
+    print(f"\n  {'─'*52}")
+    print(f"  COST ANALYSIS  ({len(cost_trades)} trades with cost data)")
+    print(f"  {'─'*52}")
+    print(f"  Gross return   : ${gross:+.2f}  ({gross / capital * 100:+.2f}%)")
+    print(f"  ├─ Taker fees  : -${fees:.2f}")
+    print(f"  ├─ Slippage    : -${slip:.2f}")
+    print(f"  └─ Funding     : -${fund:.2f}")
+    print(f"  Net return     : ${net:+.2f}  ({net / capital * 100:+.2f}%)")
+    print(f"  Cost drag      : {drag:.1f}% of gross return")
+    print(f"  {'─'*52}")
+
+
 # Symbols per crash period — kept to 3 for speed (BTC + ETH + one alt)
 _PERIOD_SYMBOLS: dict[str, list[str]] = {
     "covid_2020":  ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
@@ -192,6 +218,98 @@ def _run_crash_periods(args) -> None:
     print("="*68)
 
 
+def _run_walk_forward(args, symbols: list[str]) -> None:
+    """Walk-forward validation: train 2023-2024, validate 2025, report overfitting score."""
+    from backtest.fetcher import fetch_period_sync
+    from backtest.reporter import compute_stats
+
+    strategy = args.strategy if args.strategy not in ("all", "both") else "main"
+
+    TRAIN_FROM = "2023-01-01"
+    TRAIN_TO   = "2024-12-31"
+    VALID_FROM = "2025-01-01"
+    VALID_TO   = "2025-12-31"
+
+    print(f"\n{'='*68}")
+    print("  WALK-FORWARD VALIDATION")
+    print(f"  Strategy : {strategy}")
+    print(f"  Train    : {TRAIN_FROM} → {TRAIN_TO}")
+    print(f"  Validate : {VALID_FROM} → {VALID_TO}")
+    print(f"  Symbols  : {', '.join(symbols)}")
+    print(f"  Capital  : ${args.capital:.0f}  |  Risk: {args.risk_pct*100:.1f}%")
+    print(f"{'='*68}")
+
+    def _run_period(from_date: str, to_date: str) -> tuple[list[dict], dict]:
+        from_ms = _date_to_ms(from_date)
+        to_ms   = _date_to_ms(to_date) + 86_400_000
+        data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+        trades  = _run_strategy(
+            strategy, symbols, data["ohlcv"], data["oi"], data["funding"],
+            args.capital, args.risk_pct,
+        )
+        stats   = compute_stats(trades, starting_capital=args.capital) if trades else {}
+        return trades, stats
+
+    print(f"\nFetching TRAIN period ({TRAIN_FROM} → {TRAIN_TO})...")
+    train_trades, train_stats = _run_period(TRAIN_FROM, TRAIN_TO)
+
+    print(f"\nFetching VALIDATE period ({VALID_FROM} → {VALID_TO})...")
+    valid_trades, valid_stats = _run_period(VALID_FROM, VALID_TO)
+
+    def _g(s: dict, key: str, default=0.0):
+        return s.get(key, default)
+
+    t_pf  = _g(train_stats, "profit_factor",   0.0)
+    t_wr  = _g(train_stats, "win_rate",         0.0) * 100
+    t_ret = _g(train_stats, "total_return_pct", 0.0)
+    t_n   = int(_g(train_stats, "total_trades", 0))
+
+    v_pf  = _g(valid_stats, "profit_factor",   0.0)
+    v_wr  = _g(valid_stats, "win_rate",         0.0) * 100
+    v_ret = _g(valid_stats, "total_return_pct", 0.0)
+    v_n   = int(_g(valid_stats, "total_trades", 0))
+
+    # Print cost-aware gross return when available
+    def _cost_line(trades: list[dict], capital: float) -> str:
+        ct = [t for t in trades if "gross_pnl" in t]
+        if not ct:
+            return ""
+        gross = sum(t["gross_pnl"] for t in ct)
+        cost  = sum(t.get("cost_fee", 0) + t.get("cost_slip", 0) + t.get("cost_fund", 0) for t in ct)
+        return f"  gross {gross/capital*100:+.1f}%  net after costs {(gross-cost)/capital*100:+.1f}%"
+
+    print(f"\n{'─'*68}")
+    print(f"  {'':22s}  {'TRAIN 2023-2024':>20}  {'VALID 2025':>18}")
+    print(f"  {'─'*62}")
+    print(f"  {'Trades':22s}  {t_n:>20d}  {v_n:>18d}")
+    print(f"  {'Win Rate':22s}  {t_wr:>19.1f}%  {v_wr:>17.1f}%")
+    print(f"  {'Profit Factor':22s}  {t_pf:>20.2f}  {v_pf:>18.2f}")
+    print(f"  {'Return (% capital)':22s}  {t_ret:>+19.2f}%  {v_ret:>+17.2f}%")
+
+    t_cost = _cost_line(train_trades, args.capital)
+    v_cost = _cost_line(valid_trades, args.capital)
+    if t_cost or v_cost:
+        print(f"\n  Cost-adjusted (gross → net):")
+        if t_cost:
+            print(f"    TRAIN   : {t_cost.strip()}")
+        if v_cost:
+            print(f"    VALIDATE: {v_cost.strip()}")
+
+    print(f"  {'─'*62}")
+
+    # Overfitting score
+    if v_pf > 0 and t_pf > 0:
+        ratio   = t_pf / v_pf
+        verdict = "⚠  OVERFIT — params may be tuned to train data" if ratio > 1.5 else "✓  OK"
+        print(f"\n  Overfitting score : {ratio:.2f}  (train PF / valid PF)  {verdict}")
+        print(f"  Threshold         : > 1.5 = likely overfit")
+    elif t_n == 0 or v_n == 0:
+        print(f"\n  Overfitting score : N/A — {'train' if t_n == 0 else 'validation'} period produced no trades")
+    else:
+        print(f"\n  Overfitting score : N/A — PF undefined (no losing trades in one period)")
+    print(f"{'='*68}\n")
+
+
 def _run_date_range(args, symbols: list[str]) -> None:
     """Run backtest for a specific --from-date / --to-date window."""
     from backtest.fetcher import fetch_period_sync
@@ -224,6 +342,7 @@ def _run_date_range(args, symbols: list[str]) -> None:
     from backtest.reporter import compute_stats, print_report
     stats = compute_stats(trades, starting_capital=args.capital)
     print_report(stats, trades=trades, starting_capital=args.capital)
+    _print_cost_analysis(trades, args.capital)
 
 
 def main() -> None:
@@ -270,6 +389,10 @@ def main() -> None:
         help="Run all 6 historical crash periods automatically",
     )
     parser.add_argument(
+        "--walk-forward", action="store_true", dest="walk_forward",
+        help="Walk-forward validation: train 2023-2024, validate 2025, print overfitting score",
+    )
+    parser.add_argument(
         "--strategy",
         choices=["main", "leadlag", "both", "microrange", "session", "insidebar", "funding",
                  "sweep", "ema_pullback", "zone", "fvg", "bos", "vwap_band", "oi_spike",
@@ -283,6 +406,11 @@ def main() -> None:
                  "ADAUSDT", "DOTUSDT", "DOGEUSDT", "SUIUSDT"]
     raw = getattr(args, "symbols", "BTCUSDT")
     symbols = _ALL_SYMS if raw.upper() == "ALL" else [s.strip().upper() for s in raw.split(",")]
+
+    # ── Walk-forward validation mode ──────────────────────────────────────────
+    if args.walk_forward:
+        _run_walk_forward(args, symbols)
+        return
 
     # ── Crash periods mode ─────────────────────────────────────────────────────
     if args.crash_periods:
@@ -408,6 +536,7 @@ def main() -> None:
         else:
             mr_stats = compute_stats(mr_trades, starting_capital=args.capital)
             print_report(mr_stats, trades=mr_trades, starting_capital=args.capital)
+            _print_cost_analysis(mr_trades, args.capital)
             mr_path = _os.path.join(_os.path.dirname(__file__), "results_microrange.json")
             with open(mr_path, "w") as f:
                 json.dump({"stats": mr_stats, "trades": mr_trades, "symbols": symbols,
@@ -503,6 +632,7 @@ def main() -> None:
         else:
             sw_stats = compute_stats(sw_trades, starting_capital=args.capital)
             print_report(sw_stats, trades=sw_trades, starting_capital=args.capital)
+            _print_cost_analysis(sw_trades, args.capital)
             sw_path = _os.path.join(_os.path.dirname(__file__), "results_sweep.json")
             with open(sw_path, "w") as f:
                 json.dump({"stats": sw_stats, "trades": sw_trades, "symbols": symbols,
@@ -527,6 +657,7 @@ def main() -> None:
         else:
             ep_stats = compute_stats(ep_trades, starting_capital=args.capital)
             print_report(ep_stats, trades=ep_trades, starting_capital=args.capital)
+            _print_cost_analysis(ep_trades, args.capital)
             ep_path = _os.path.join(_os.path.dirname(__file__), "results_ema_pullback.json")
             with open(ep_path, "w") as f:
                 json.dump({"stats": ep_stats, "trades": ep_trades, "symbols": symbols,
@@ -576,6 +707,7 @@ def main() -> None:
         else:
             fvg_stats = compute_stats(fvg_trades, starting_capital=args.capital)
             print_report(fvg_stats, trades=fvg_trades, starting_capital=args.capital)
+            _print_cost_analysis(fvg_trades, args.capital)
             fvg_path = _os.path.join(_os.path.dirname(__file__), "results_fvg.json")
             with open(fvg_path, "w") as f:
                 json.dump({"stats": fvg_stats, "trades": fvg_trades, "symbols": symbols,
@@ -624,6 +756,7 @@ def main() -> None:
         else:
             vb_stats = compute_stats(vb_trades, starting_capital=args.capital)
             print_report(vb_stats, trades=vb_trades, starting_capital=args.capital)
+            _print_cost_analysis(vb_trades, args.capital)
             vb_path = _os.path.join(_os.path.dirname(__file__), "results_vwap_band.json")
             with open(vb_path, "w") as f:
                 json.dump({"stats": vb_stats, "trades": vb_trades, "symbols": symbols,

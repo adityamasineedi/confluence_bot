@@ -544,7 +544,7 @@ async def place_limit_then_market(
     quantity: float,
     limit_price: float,
     stop: float,
-    take_profit: float,
+    take_profit: float | None,
     timeout_s: float = 30.0,
 ) -> dict:
     """Place a LIMIT entry; fall back to MARKET after timeout_s seconds if unfilled.
@@ -620,24 +620,27 @@ async def place_limit_then_market(
                 log.error("MARKET fallback failed (%s %s): %s", side, symbol, exc)
                 return {}
 
-        # ── Step 5: SL + TP ───────────────────────────────────────────────────
-        sl_params = {
+        # ── Step 5: SL (always) + TP (only when provided) ─────────────────────
+        bracket_orders: list[tuple[str, dict]] = []
+        bracket_orders.append(("SL", {
             "symbol":    symbol,
             "side":      close_side,
             "type":      "STOP_MARKET",
             "quantity":  quantity,
             "stopPrice": _round_price(symbol, stop),
             "reduceOnly": "true",
-        }
-        tp_params = {
-            "symbol":    symbol,
-            "side":      close_side,
-            "type":      "TAKE_PROFIT_MARKET",
-            "quantity":  quantity,
-            "stopPrice": _round_price(symbol, take_profit),
-            "reduceOnly": "true",
-        }
-        for label, params in (("SL", sl_params), ("TP", tp_params)):
+            "workingType": "MARK_PRICE",
+        }))
+        if take_profit is not None:
+            bracket_orders.append(("TP", {
+                "symbol":    symbol,
+                "side":      close_side,
+                "type":      "TAKE_PROFIT_MARKET",
+                "quantity":  quantity,
+                "stopPrice": _round_price(symbol, take_profit),
+                "reduceOnly": "true",
+            }))
+        for label, params in bracket_orders:
             try:
                 async with session.post(url, params=_sign(params), headers=headers) as resp:
                     r = await resp.json()
@@ -664,3 +667,68 @@ async def cancel_order(symbol: str, order_id: int) -> dict:
     except Exception as exc:
         log.error("cancel_order(%s, %s) failed: %s", symbol, order_id, exc)
         return {}
+
+
+async def place_trailing_stop(
+    symbol:         str,
+    side:           str,      # "SELL" for LONG position, "BUY" for SHORT
+    quantity:       float,
+    activation_pct: float,    # unused by Binance directly, kept for API clarity
+    callback_pct:   float,    # trailing distance % behind high watermark (0.1–5.0)
+) -> dict:
+    """Place a Binance TRAILING_STOP_MARKET order on Futures.
+
+    Parameters
+    ----------
+    callback_pct : trailing callback rate as a percentage (e.g. 1.0 = 1%).
+                   Clamped to Binance's accepted range [0.1, 5.0].
+    activation_pct : informational only — Binance activates the trail from
+                   the moment the order is placed when no activationPrice is set.
+
+    Returns the Binance order dict, or {} on rejection/failure.
+    """
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    qty = int(quantity) if quantity == int(quantity) else quantity
+    params = _sign({
+        "symbol":       symbol,
+        "side":         side,
+        "type":         "TRAILING_STOP_MARKET",
+        "quantity":     qty,
+        "callbackRate": round(max(0.1, min(5.0, callback_pct)), 1),
+        "reduceOnly":   "true",
+        "workingType":  "MARK_PRICE",
+    })
+    url = f"{_BINANCE_BASE}/fapi/v1/order"
+    try:
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.post(url, params=params, headers=headers) as resp:
+                result = await resp.json()
+        if isinstance(result.get("code"), int) and result["code"] < 0:
+            log.warning("place_trailing_stop rejected %s: %s", symbol, result)
+            return {}
+        log.info("Trailing stop placed %s side=%s callback=%.1f%%",
+                 symbol, side, callback_pct)
+        return result
+    except Exception as exc:
+        log.error("place_trailing_stop %s failed: %s", symbol, exc)
+        return {}
+
+
+async def get_btc_dominance() -> float:
+    """Fetch BTC market cap dominance % from CoinGecko global endpoint.
+
+    Returns dominance as a float 0.0–1.0 (e.g. 0.56 = 56%).
+    Returns 0.0 on failure so callers can skip the dominance gate.
+    """
+    url = "https://api.coingecko.com/api/v3/global"
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        return float(data["data"]["market_cap_percentage"].get("btc", 0)) / 100.0
+    except Exception as exc:
+        log.debug("get_btc_dominance failed: %s", exc)
+        return 0.0

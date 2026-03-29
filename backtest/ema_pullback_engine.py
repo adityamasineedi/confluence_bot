@@ -10,7 +10,10 @@ import logging
 import os
 import yaml
 
+from backtest.cost_model import apply_costs
 from backtest.regime_classifier import classify_regime
+
+_BAR_MINUTES = 15
 
 log = logging.getLogger(__name__)
 
@@ -137,14 +140,26 @@ def run(
             if open_trade is not None:
                 result = _check_exit(open_trade, bar)
                 if result is not None:
-                    equity += result["pnl"]
+                    hold_bars = bar_idx - open_trade["bar_idx"]
+                    gross_pnl = result["pnl"]
+                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES)
+                    result["gross_pnl"] = gross_pnl; result["cost"] = cost_d["total"]
+                    result["cost_fee"]  = cost_d["fee"]; result["cost_slip"] = cost_d["slip"]
+                    result["cost_fund"] = cost_d["funding"]; result["pnl"] = net_pnl
+                    equity += net_pnl
                     result["equity_after"] = round(equity, 4)
                     all_closed.append(result)
                     cooldown_until = bar_idx + _COOLDOWN_BARS
                     open_trade = None
                 elif bar_idx - open_trade["bar_idx"] >= _MAX_HOLD:
                     result = _force_close(open_trade, bar)
-                    equity += result["pnl"]
+                    hold_bars = bar_idx - open_trade["bar_idx"]
+                    gross_pnl = result["pnl"]
+                    net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES)
+                    result["gross_pnl"] = gross_pnl; result["cost"] = cost_d["total"]
+                    result["cost_fee"]  = cost_d["fee"]; result["cost_slip"] = cost_d["slip"]
+                    result["cost_fund"] = cost_d["funding"]; result["pnl"] = net_pnl
+                    equity += net_pnl
                     result["equity_after"] = round(equity, 4)
                     all_closed.append(result)
                     cooldown_until = bar_idx + _COOLDOWN_BARS
@@ -260,6 +275,8 @@ def run(
                 continue
 
             risk_amount = round(equity * risk_pct, 4)
+            sl_dist     = abs(price - sl)
+            qty         = round(risk_amount / sl_dist, 8) if sl_dist > 0.0 else 0.0
             open_trade = {
                 "symbol":      sym,
                 "regime":      regime,
@@ -271,13 +288,20 @@ def run(
                 "entry_ts":    bar["ts"],
                 "bar_idx":     bar_idx,
                 "risk_amount": risk_amount,
+                "qty":         qty,
                 "score":       _FIRE_THRESHOLD,
             }
 
         if open_trade is not None:
             last_bar = eval_bars[-1]
             result = _force_close(open_trade, last_bar)
-            equity += result["pnl"]
+            hold_bars = len(eval_bars) - 1 - open_trade["bar_idx"]
+            gross_pnl = result["pnl"]
+            net_pnl, cost_d = apply_costs(gross_pnl, open_trade["entry"], open_trade["qty"], hold_bars, _BAR_MINUTES)
+            result["gross_pnl"] = gross_pnl; result["cost"] = cost_d["total"]
+            result["cost_fee"]  = cost_d["fee"]; result["cost_slip"] = cost_d["slip"]
+            result["cost_fund"] = cost_d["funding"]; result["pnl"] = net_pnl
+            equity += net_pnl
             result["equity_after"] = round(equity, 4)
             all_closed.append(result)
 

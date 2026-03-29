@@ -66,6 +66,10 @@ class DataCache:
         self._long_short_ratio: dict[str, float] = {}
         self._account_balance:  float = 0.0
 
+        # BTC dominance — single global value + rolling history (last 24 readings)
+        self._btc_dominance:         float       = 0.0
+        self._btc_dominance_history: list[float] = []
+
         # Order book: latest L2 snapshot per symbol
         self._order_book: dict[str, dict] = {}
 
@@ -240,6 +244,38 @@ class DataCache:
     def set_range_start_timestamp(self, symbol: str, ts: int) -> None:
         with self._lock:
             self._range_start_ts[symbol] = int(ts)
+
+    # ── BTC Dominance ─────────────────────────────────────────────────────────
+
+    def push_btc_dominance(self, value: float) -> None:
+        """Store a new dominance reading and append to the rolling 24-entry history."""
+        with self._lock:
+            self._btc_dominance = float(value)
+            self._btc_dominance_history.append(float(value))
+            if len(self._btc_dominance_history) > 24:
+                self._btc_dominance_history.pop(0)
+
+    def get_btc_dominance(self) -> float:
+        """Return the latest BTC dominance reading (0.0 if not yet fetched)."""
+        return self._btc_dominance
+
+    def get_btc_dominance_trend(self) -> str:
+        """Return 'rising', 'falling', or 'flat' based on the last 6 readings.
+
+        Compares the average of the 3 most recent readings to the 3 before those.
+        Returns 'flat' when fewer than 3 readings are available.
+        """
+        h = self._btc_dominance_history
+        if len(h) < 3:
+            return "flat"
+        recent_avg  = sum(h[-3:]) / 3
+        earlier_avg = sum(h[-6:-3]) / 3 if len(h) >= 6 else h[0]
+        diff = recent_avg - earlier_avg
+        if diff > 0.003:
+            return "rising"
+        if diff < -0.003:
+            return "falling"
+        return "flat"
 
     # ── Perp Basis ────────────────────────────────────────────────────────────
 

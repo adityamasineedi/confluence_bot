@@ -293,16 +293,16 @@ def _bucket_stats(trades: list[dict], capital: float) -> dict:
     if n < _MIN_TRADES:
         return {"status": "insufficient", "trade_count": n}
 
-    gross_win  = sum(t["pnl"] for t in trades if t["pnl"] > 0)
-    gross_loss = abs(sum(t["pnl"] for t in trades if t["pnl"] < 0))
-    total_pnl  = sum(t["pnl"] for t in trades)
-    wins       = sum(1 for t in trades if t["outcome"] == "WIN")
+    net_win   = sum(t["pnl"] for t in trades if t["pnl"] > 0)
+    net_loss  = abs(sum(t["pnl"] for t in trades if t["pnl"] < 0))
+    total_pnl = sum(t["pnl"] for t in trades)
+    wins      = sum(1 for t in trades if t["outcome"] == "WIN")
 
-    pf  = (gross_win / gross_loss) if gross_loss > 0 else float("inf")
+    pf  = (net_win / net_loss) if net_loss > 0 else float("inf")
     wr  = wins / n
     ret = total_pnl / capital * 100
 
-    return {
+    result = {
         "status":        "ok",
         "trade_count":   n,
         "win_rate":      round(wr, 3),
@@ -310,6 +310,32 @@ def _bucket_stats(trades: list[dict], capital: float) -> dict:
         "return_pct":    round(ret, 1),
         "return_abs":    round(total_pnl, 2),
     }
+
+    # Cost breakdown — only when engines supply gross_pnl fields
+    has_costs = any("gross_pnl" in t for t in trades)
+    if has_costs:
+        gross_vals = [t.get("gross_pnl", t["pnl"]) for t in trades]
+        gross_pnl  = sum(gross_vals)
+        gross_win_ = sum(v for v in gross_vals if v > 0)
+        gross_loss_= abs(sum(v for v in gross_vals if v < 0))
+        fees       = sum(t.get("cost_fee",  0.0) for t in trades)
+        slip       = sum(t.get("cost_slip", 0.0) for t in trades)
+        fund       = sum(t.get("cost_fund", 0.0) for t in trades)
+        total_cost = fees + slip + fund
+        gross_pf   = (gross_win_ / gross_loss_) if gross_loss_ > 0 else float("inf")
+        # Break-even PF: the gross PF you need to cover costs
+        be_pf      = 1.0 + (total_cost / gross_loss_) if gross_loss_ > 0 else 1.0
+        result.update({
+            "gross_pnl":     round(gross_pnl,  2),
+            "cost_fee":      round(fees,        2),
+            "cost_slip":     round(slip,        2),
+            "cost_fund":     round(fund,        2),
+            "total_cost":    round(total_cost,  2),
+            "gross_pf":      round(min(gross_pf, 99.9), 3),
+            "break_even_pf": round(be_pf, 3),
+        })
+
+    return result
 
 
 def _keep(stats: dict) -> bool:
@@ -356,13 +382,36 @@ def _print_breakdown(
             print(f"  {regime:<10}  {n:3d} trades  — (insufficient data){note}")
             continue
         route_note = "" if is_routed else "  [not in routing]"
+
+        # Net return label — append gross when cost data available
+        if "gross_pnl" in s:
+            ret_str = f"net {s['return_abs']:+.1f}$  gross {s['gross_pnl']:+.1f}$"
+        else:
+            ret_str = f"return {s['return_abs']:+.1f}$"
+
         print(
             f"  {regime:<10}  {s['trade_count']:3d} trades"
             f"  WR {s['win_rate']*100:.0f}%"
             f"  PF {s['profit_factor']:.2f}"
-            f"  return {s['return_abs']:+.1f}$"
+            f"  {ret_str}"
             f"  {_label(s)}{route_note}"
         )
+
+        # Fee breakdown sub-line
+        if "total_cost" in s and s["total_cost"] > 0:
+            gross = s["gross_pnl"]
+            cost  = s["total_cost"]
+            drag  = (cost / abs(gross) * 100) if gross != 0 else 0.0
+            be_warn = ""
+            if s["gross_pf"] < s["break_even_pf"]:
+                be_warn = f"  ⚠ gross PF {s['gross_pf']:.2f} < break-even PF {s['break_even_pf']:.2f}"
+            print(
+                f"  {'':10}   ${s['cost_fee']:.2f} fees"
+                f"  ${s['cost_slip']:.2f} slip"
+                f"  ${s['cost_fund']:.2f} fund"
+                f"  = ${cost:.2f} total ({drag:.1f}% of gross)"
+                f"{be_warn}"
+            )
 
 
 def _best_strategy(sym_data: dict, regime: str) -> tuple[str, dict] | tuple[None, None]:
@@ -545,6 +594,9 @@ def main() -> None:
         all_results[sym] = {}
         json_out[sym]    = {}
 
+        # Funding totals per strategy for the end-of-symbol summary
+        sym_funding_totals: dict[str, float] = {}
+
         for strategy in strategies:
             combo_idx += 1
             print(f"  [{combo_idx}/{total_combos}] {sym} × {strategy}...", end="", flush=True)
@@ -566,6 +618,11 @@ def main() -> None:
 
             print(f" {len(trades)} trades")
 
+            # Accumulate per-symbol funding paid (display only — PnL already net)
+            strat_fund = sum(t.get("cost_fund", 0.0) for t in trades)
+            if strat_fund > 0:
+                sym_funding_totals[strategy] = round(strat_fund, 4)
+
             all_results[sym][strategy] = {}
             json_out[sym][strategy]    = {}
 
@@ -576,6 +633,15 @@ def main() -> None:
                 json_out[sym][strategy][regime]    = stats   # stats only — no per-trade records
 
             _print_breakdown(sym, strategy, by_regime, args.capital, routing)
+
+        # ── Per-symbol funding summary ─────────────────────────────────────────
+        if sym_funding_totals:
+            total_fund = sum(sym_funding_totals.values())
+            strat_parts = "  ".join(
+                f"{s}: ${v:.2f}" for s, v in sorted(sym_funding_totals.items())
+            )
+            print(f"\n  {sym} funding paid (across all strategies): ${total_fund:.2f}")
+            print(f"    by strategy: {strat_parts}")
 
     _print_best_strategy_matrix(all_results, symbols)
     _print_recommended_routing(all_results, symbols)

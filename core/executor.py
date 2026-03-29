@@ -14,6 +14,14 @@ _POST_TRADE_COOLDOWN = float(_cfg["risk"].get("post_trade_cooldown_mins", 30)) *
 # e.g. 2 longs max: prevents 5 correlated alts all hitting SL in one BTC flush.
 _MAX_SAME_DIRECTION  = int(_cfg["risk"].get("max_same_direction_positions", 2))
 
+# Trailing stop config — applies to PUMP and BREAKOUT regimes only
+_TRAIL_CFG      = _cfg.get("trailing_stop", {})
+_TRAIL_ENABLED  = bool(_TRAIL_CFG.get("enabled", True))
+_TRAIL_REGIMES  = set(_TRAIL_CFG.get("apply_to", ["PUMP", "BREAKOUT"]))
+_TRAIL_MIN_CB   = float(_TRAIL_CFG.get("min_callback_pct", 0.5))
+_TRAIL_MAX_CB   = float(_TRAIL_CFG.get("max_callback_pct", 3.0))
+_TRAIL_ATR_MULT = float(_TRAIL_CFG.get("atr_multiplier",   1.5))
+
 # Paper mode: set PAPER_MODE=1 to skip real order submission
 _PAPER_MODE = os.environ.get("PAPER_MODE", "0") == "1"
 
@@ -181,8 +189,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
 
     stop_dist = abs(entry - stop)
 
-    # PUMP and BREAKOUT: extend TP to 5× and flag trailing stop
-    use_trailing = regime in ("PUMP", "BREAKOUT")
+    # PUMP and BREAKOUT: use exchange-native trailing stop instead of fixed TP.
+    # Fixed 5× TP is used as the RR-gate reference and as fallback if trailing fails.
+    use_trailing = _TRAIL_ENABLED and regime in _TRAIL_REGIMES
     if use_trailing:
         tp = (entry + stop_dist * 5.0) if direction == "LONG" else (entry - stop_dist * 5.0)
 
@@ -217,24 +226,50 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
             "trailing":    use_trailing,
         }
         log.info(
-            "[PAPER] %s %s qty=%.4f entry=%.4f sl=%.4f tp=%.4f",
-            side, symbol, qty, entry, stop, tp,
+            "[PAPER] %s %s qty=%.4f entry=%.4f sl=%.4f tp=%s trailing=%s",
+            side, symbol, qty, entry, stop,
+            f"{tp:.4f}" if tp else "trailing", use_trailing,
         )
     else:
+        # For PUMP/BREAKOUT: place trailing stop before the entry order.
+        # Binance accepts TRAILING_STOP_MARKET with reduceOnly=true before a
+        # position exists — it only fires once the position is open.
+        effective_tp: float | None = tp
+        if use_trailing:
+            from data.binance_rest import place_trailing_stop
+            atr_pct      = abs(stop_dist / entry) * 100
+            callback_pct = max(_TRAIL_MIN_CB, min(_TRAIL_MAX_CB, atr_pct * _TRAIL_ATR_MULT))
+            trail_side   = "SELL" if side == "BUY" else "BUY"
+            trailing_resp = await place_trailing_stop(
+                symbol         = symbol,
+                side           = trail_side,
+                quantity       = qty,
+                activation_pct = atr_pct * 0.5,
+                callback_pct   = callback_pct,
+            )
+            if trailing_resp:
+                log.info("Trailing stop active: %s callback=%.1f%%", symbol, callback_pct)
+                effective_tp = None   # trailing stop handles exit — skip fixed TP
+            else:
+                log.warning(
+                    "Trailing stop failed for %s — falling back to fixed TP 5×", symbol
+                )
+                # effective_tp remains at 5× tp computed above
+
         from data.binance_rest import place_limit_then_market
         order = await place_limit_then_market(
-            symbol=symbol,
-            side=side,
-            quantity=qty,
-            limit_price=entry,   # try LIMIT at computed entry; fall back to MARKET after 30s
-            stop=stop,
-            take_profit=tp,
+            symbol      = symbol,
+            side        = side,
+            quantity    = qty,
+            limit_price = entry,
+            stop        = stop,
+            take_profit = effective_tp,   # None when trailing placed, 5× on fallback
         )
         if not order:
             return None
         order["entry"]       = entry
         order["stop"]        = stop
-        order["take_profit"] = tp
+        order["take_profit"] = effective_tp
         order["qty"]         = qty
         order["regime"]      = regime
 

@@ -251,7 +251,8 @@ funding_harvest:
 # Detects stop-hunt wicks through swing highs/lows then reversal close back.
 # Works in any regime — fills the bear-market gap when MAIN fires nothing.
 sweep:
-  enabled: false  # DISABLED pending re-validation with tightened filters
+  enabled: false   # confirmed: all coins WR 0-10%, PF ≤ 1.03 except LINK
+  # LINK sweep PF1.40 but WR 10% — all timeouts, not reliable
   check_interval_secs: 30
   max_positions: 3              # max simultaneous sweep positions
   cooldown_mins: 30             # 30 min per symbol between sweeps
@@ -259,10 +260,14 @@ sweep:
   volume_spike_mult: 2.0        # sweep candle volume ≥ 2.0× 20-bar average (raised from 1.4×)
   htf_no_block_pct: 0.010       # 4H close within 1.0% of EMA21 = not a strong opposing trend
   min_wick_pct: 0.005           # wick must pierce swing level by ≥ 0.5% (raised from 0.15%)
-  rr_ratio: 1.3                 # reduced TP target so price reaches TP within hold window
+  rr_ratio: 1.1                 # reduced further — when re-enabled, TP closer to entry
   exclude_symbols:
     - DOGEUSDT   # confirmed 0% WR, chaotic wicks extend through TP
     - SUIUSDT    # not tested — exclude until backtest confirms
+    - ETHUSDT    # WR 4.5% PF0.99 — break-even at best
+    - SOLUSDT    # WR 0% PF1.03 — all timeouts, no real wins
+    - BNBUSDT    # insufficient data, excluded proactively
+    # LINKUSDT only candidate — PF1.40 but WR 10%
 
 # ── 15m EMA Pullback strategy ────────────────────────────────────────────────
 # Trend-continuation entries at 15m EMA21 pullback, filtered by 4H direction.
@@ -339,12 +344,14 @@ vwap_band:
   max_positions: 3
   sl_buffer_pct: 0.002        # SL 0.2% beyond the ±2σ band edge
   exclude_symbols:
-    - BTCUSDT    # BAD: TREND -$113, RANGE -$70
-    - ETHUSDT    # BAD: TREND -$208, RANGE -$135
-    - SOLUSDT    # BAD: TREND -$363, RANGE -$32
-    - BNBUSDT    # BAD: TREND -$1, RANGE -$93
-    - DOGEUSDT   # BAD: TREND -$79, RANGE -$136
-    - SUIUSDT    # GOOD but ema_pullback is better (PF2.21 vs PF1.30)
+    - BTCUSDT    # TREND PF1.07 weak, not worth enabling
+    - ETHUSDT    # TREND PF0.67 BAD
+    - SOLUSDT    # TREND PF0.60 BAD
+    - BNBUSDT    # TREND PF1.00 BAD
+    - DOGEUSDT   # TREND PF0.68 BAD — volume filter made worse
+    # XRPUSDT removed — TREND PF1.40 WR31%, RANGE PF1.48 WR30% ✅
+    # LINKUSDT removed — TREND PF1.50 WR40%, RANGE PF2.25 WR36% ✅
+    # SUIUSDT removed — TREND PF1.52 WR27% ✅
 
 # ── Break of Structure / Change of Character strategy ────────────────────────
 # Trades confirmed 1H structure breaks (swing high/low closes) with volume.
@@ -375,18 +382,18 @@ fvg:
   sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
   lookback_bars: 50           # scan last 50 1H candles for FVGs
   exclude_symbols:
-    - XRPUSDT    # BAD: TREND PF0.17 WR7% -$199 (worst result in entire scan)
-    - LINKUSDT   # BAD: TREND PF0.68 WR24% -$58
+    - XRPUSDT    # TR:PF0.17 WR7% -$199 — worst result in entire scan
+    - LINKUSDT   # TR:PF0.68 WR24% -$58
 
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
 microrange:
   enabled: true
   exclude_symbols:
-    - ETHUSDT    # BAD: TREND PF0.89 -$158, RANGE PF0.80 -$183
-    - SOLUSDT    # BAD: RANGE PF0.94 -$30 (TREND marginal at PF1.01)
-    - BNBUSDT
-    - XRPUSDT    # BAD: TREND PF0.98, RANGE PF0.98
-    # LINKUSDT confirmed RANGE PF1.37 — removed from exclude
+    - ETHUSDT    # TREND PF0.89 BAD, RANGE PF0.80 BAD
+    - SOLUSDT    # TREND PF1.01 marginal, RANGE PF0.94 BAD
+    - BNBUSDT    # TREND PF0.93 BAD, RANGE PF1.14 borderline
+    # XRPUSDT removed — RANGE PF1.32 WR28% confirmed ✅
+    # LINKUSDT removed — RANGE PF1.26 WR33% confirmed ✅
     # DOGEUSDT confirmed CRASH PF1.97 WR38% — removed from exclude
     # SUIUSDT confirmed CRASH PF1.91 WR41% — removed from exclude
   window_bars: 10
@@ -527,52 +534,52 @@ volume_momentum:
 # Individual strategy enabled: false flags are still respected by the router.
 strategy_routing:
   BTCUSDT:
-    TREND:     [fvg, microrange]         # fvg PF1.65 WR39%, microrange PF1.17
-    RANGE:     [microrange]              # microrange PF1.04 — only option
-    BREAKOUT:  [fvg]                     # fvg best in trend transitions
-    CRASH:     []                        # no confirmed strategy
+    TREND:     [microrange, fvg, ema_pullback]  # microrange PF1.34, fvg PF1.65
+    RANGE:     [microrange, ema_pullback]        # allow ema_pullback — BTC 15m trends inside 4H range
+    BREAKOUT:  [fvg]
+    CRASH:     []
     PUMP:      []
   ETHUSDT:
-    TREND:     [ema_pullback, fvg]       # ema_pullback PF1.42 WR37%, fvg PF1.14 borderline
-    RANGE:     []                        # nothing confirmed
+    TREND:     [ema_pullback]             # ema_pullback PF1.42 WR37%
+    RANGE:     []
     BREAKOUT:  [ema_pullback]
     CRASH:     []
     PUMP:      []
   SOLUSDT:
-    TREND:     [fvg, ema_pullback]       # fvg PF1.64 WR43%, ema_pullback PF1.00 borderline
-    RANGE:     []                        # nothing confirmed
+    TREND:     [fvg]                      # fvg PF1.64 WR43%
+    RANGE:     []
     BREAKOUT:  [fvg]
     CRASH:     []
     PUMP:      []
   BNBUSDT:
-    TREND:     [fvg]                     # fvg PF2.11 WR44% — best single result
-    RANGE:     []                        # microrange PF1.14 borderline, needs more testing
+    TREND:     [fvg]                      # fvg PF2.11 WR44%
+    RANGE:     []
     BREAKOUT:  [fvg]
     CRASH:     []
     PUMP:      []
   XRPUSDT:
-    TREND:     [ema_pullback, vwap_band] # ema_pullback PF1.28 WR34%, vwap_band PF1.16
-    RANGE:     [vwap_band]               # vwap_band PF1.24 WR34%
+    TREND:     [ema_pullback, vwap_band]  # ema_pullback PF1.28 WR34%, vwap_band PF1.40 WR31%
+    RANGE:     [vwap_band, microrange]    # vwap_band PF1.48 WR30%, microrange PF1.32 WR28%
     BREAKOUT:  [ema_pullback]
     CRASH:     []
     PUMP:      []
   LINKUSDT:
-    TREND:     [ema_pullback]            # ema_pullback PF1.43 WR36%
-    RANGE:     [microrange, vwap_band]   # microrange PF1.37 WR36%, vwap_band PF1.38 WR29%
+    TREND:     [ema_pullback, vwap_band]  # ema_pullback PF1.43 WR36%, vwap_band PF1.50 WR40%
+    RANGE:     [vwap_band, microrange]    # vwap_band PF2.25 WR36%, microrange PF1.26 WR33%
     BREAKOUT:  [ema_pullback]
     CRASH:     []
     PUMP:      []
   DOGEUSDT:
-    TREND:     [fvg]                     # fvg PF1.76 WR46%
-    RANGE:     []                        # nothing confirmed
+    TREND:     [fvg]                      # fvg PF1.76 WR46%
+    RANGE:     [microrange]               # microrange PF1.19 WR26%
     BREAKOUT:  [fvg]
-    CRASH:     [microrange]              # microrange PF1.97 WR38% — crash only
+    CRASH:     [microrange]               # microrange PF1.97 WR38%
     PUMP:      []
   SUIUSDT:
-    TREND:     [ema_pullback, fvg, vwap_band]  # ema_pullback PF2.21 WR49%, fvg PF1.31, vwap_band PF1.30
-    RANGE:     []                        # nothing confirmed
+    TREND:     [ema_pullback, fvg, vwap_band]  # ema_pullback PF2.21 WR49%, fvg PF1.31, vwap_band PF1.52
+    RANGE:     [microrange]               # microrange PF1.17 WR30%
     BREAKOUT:  [ema_pullback, fvg]
-    CRASH:     [microrange]              # microrange PF1.91 WR41%
+    CRASH:     [microrange]               # microrange PF1.91 WR41%
     PUMP:      []
   _default:
     TREND:     []
@@ -580,3 +587,34 @@ strategy_routing:
     BREAKOUT:  []
     CRASH:     []
     PUMP:      []
+
+# ── Trailing stop (PUMP and BREAKOUT regimes only) ───────────────────────────
+# Replaces fixed TAKE_PROFIT_MARKET with Binance TRAILING_STOP_MARKET so
+# profitable PUMP/BREAKOUT trades trail automatically.
+# callback_pct = ATR% × atr_multiplier, clamped to [min_callback_pct, max_callback_pct].
+trailing_stop:
+  enabled:          true
+  min_callback_pct: 0.5    # minimum trail distance (Binance floor is 0.1%)
+  max_callback_pct: 3.0    # maximum trail distance
+  atr_multiplier:   1.5    # callback = ATR% × this
+  activate_after_pct: 0.5  # activationPrice offset from entry (ignored — Binance activates immediately)
+  apply_to: [PUMP, BREAKOUT]
+
+# ── BTC dominance macro filter ───────────────────────────────────────────────
+# BTC dominance rising = money rotating into BTC out of alts → block alt longs.
+# BTC dominance falling = alt season → alt longs are allowed (and noted in logs).
+btc_dominance:
+  rising_threshold:   0.003    # +0.3% dominance change (avg of last 3 vs prior 3) = rising
+  falling_threshold: -0.003    # -0.3% change = falling
+  high_dominance_pct: 55.0     # above this % + rising → block alt longs
+  low_dominance_pct:  48.0     # below this % → alt season confirmed
+  fetch_interval_mins: 30      # how often to refresh from CoinGecko
+
+# ── Backtest cost simulation ──────────────────────────────────────────────────
+# Applied to every round-trip trade: fees (entry + exit), slippage (entry + exit),
+# and accrued funding based on hold duration.
+backtest:
+  taker_fee_pct:       0.0005   # 0.05% per side (Binance Futures taker)
+  maker_fee_pct:       0.0002   # 0.02% per side (limit orders — not used by default)
+  slippage_pct:        0.0002   # 0.02% per side (entry + exit market impact)
+  funding_cost_per_8h: 0.0001   # 0.01% per 8h funding period (long-side bias)

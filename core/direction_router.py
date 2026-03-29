@@ -1,6 +1,8 @@
 """Direction router — decides trade direction before scorer selection."""
 import asyncio
 import logging
+import os
+import yaml
 from typing import Literal
 
 from .regime_detector import Regime, get_trend_bias
@@ -13,6 +15,14 @@ _BTC = "BTCUSDT"
 
 # Funding threshold above which we suppress LONG in TREND (neutral band from config)
 _FUNDING_LONG_MAX = 0.0003
+
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+
+
+def _load_dom_cfg() -> dict:
+    with open(_CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get("btc_dominance", {})
 
 
 class DirectionRouter:
@@ -87,7 +97,7 @@ class DirectionRouter:
     # ── TREND ─────────────────────────────────────────────────────────────────
 
     def _trend_direction(self, symbol: str, cache) -> str:
-        """Macro BTC filter: EMA200 + weekly HH + funding rate."""
+        """Macro BTC filter: EMA200 + weekly HH + funding rate + BTC dominance."""
 
         # ── Factor 1: BTC 4H close vs 200-period EMA ─────────────────────────
         btc_4h = cache.get_closes(_BTC, window=210, tf="4h")
@@ -121,12 +131,38 @@ class DirectionRouter:
         else:
             aligned_long = aligned_short = True   # insufficient data → don't block
 
-        # ── Decision ─────────────────────────────────────────────────────────
+        # ── Raw direction ─────────────────────────────────────────────────────
         if btc_above_ema and hh_intact and funding_ok_long and aligned_long:
-            return "LONG"
-        if not btc_above_ema and not hh_intact and aligned_short:
-            return "SHORT"
-        return "NONE"
+            direction = "LONG"
+        elif not btc_above_ema and not hh_intact and aligned_short:
+            direction = "SHORT"
+        else:
+            return "NONE"
+
+        # ── Factor 5: BTC Dominance filter (alt coins only) ──────────────────
+        # Rising dominance = capital rotating into BTC out of alts → block alt longs.
+        # Falling dominance = alt season → confirms alt longs (no block).
+        # BTCUSDT itself is unaffected — its price benefits from rising dominance.
+        if symbol != _BTC and direction == "LONG":
+            dom_value = cache.get_btc_dominance()
+            if dom_value > 0:   # 0.0 means no data yet — skip gate
+                dom_trend    = cache.get_btc_dominance_trend()
+                dom_cfg      = _load_dom_cfg()
+                high_dom_pct = dom_cfg.get("high_dominance_pct", 55.0) / 100.0
+                low_dom_pct  = dom_cfg.get("low_dominance_pct",  48.0) / 100.0
+                if dom_trend == "rising" and dom_value > high_dom_pct:
+                    log.debug(
+                        "Alt LONG blocked — BTC dominance rising (%.1f%%) for %s",
+                        dom_value * 100, symbol,
+                    )
+                    return "NONE"
+                if dom_trend == "falling" and dom_value < low_dom_pct:
+                    log.debug(
+                        "Alt LONG in alt season — BTC dominance falling (%.1f%%) for %s",
+                        dom_value * 100, symbol,
+                    )
+
+        return direction
 
     # ── EMA helper ────────────────────────────────────────────────────────────
 

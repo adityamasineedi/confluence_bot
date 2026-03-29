@@ -221,6 +221,19 @@ async def main() -> None:
         log.info("Micro-range flip strategy enabled — symbols=%s  excluded=%s",
                  _mr_symbols, _mr_exclude)
 
+    # 6c2. BTC dominance poller — refreshes every 30 min from CoinGecko
+    async def _refresh_btc_dominance(interval_secs: int = 1800) -> None:
+        from data.binance_rest import get_btc_dominance
+        while True:
+            dom = await get_btc_dominance()
+            if dom > 0:
+                cache.push_btc_dominance(dom)
+                log.info("BTC dominance updated: %.1f%%", dom * 100)
+            await asyncio.sleep(interval_secs)
+
+    _dom_interval = int(cfg.get("btc_dominance", {}).get("fetch_interval_mins", 30)) * 60
+    asyncio.create_task(_refresh_btc_dominance(_dom_interval))
+
     # 6d. Trade monitor — closes positions when TP/SL is hit
     from core.trade_monitor import monitor_trades
     asyncio.create_task(monitor_trades(cache))
