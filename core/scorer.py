@@ -14,10 +14,11 @@ from signals.trend.vpvr         import check_vpvr_reclaim
 from signals.trend.htf_structure import check_htf_structure
 from signals.trend.order_block  import check_order_block
 from signals.trend.whale_flow   import check_whale_flow
-from signals.trend.rsi_divergence   import check_rsi_divergence_bullish
+from signals.trend.rsi_divergence   import check_rsi_divergence_bullish, check_rsi_divergence_bullish_mtf
 from signals.trend.ema_cross        import check_ema_pullback_long
 from signals.trend.long_short_ratio import check_ls_crowded_short
 from signals.bear.funding_ramp      import check_funding_ramp_bullish
+from signals.trend.funding_extreme  import check_funding_extreme_long
 from signals.trend.fvg              import check_fvg_bullish
 from signals.trend.bb_squeeze       import check_bb_squeeze_bullish
 from .filter import passes_trend_long_filters
@@ -50,6 +51,7 @@ def _available_signals(symbol: str, cache) -> set[str]:
     _add("htf_structure")
     _add("order_block")
     _add("rsi_divergence")   # needs only 1H OHLCV — always available
+    _add("rsi_div_mtf")      # needs 1H + 4H OHLCV — always available
     _add("ema_pullback")     # needs only 1H closes — always available
 
     # CVD requires aggTrade WebSocket warmup; check if 1H CVD values exist
@@ -72,6 +74,7 @@ def _available_signals(symbol: str, cache) -> set[str]:
     # Extreme negative funding (short squeeze fuel) — available when Coinglass key set
     if cache.get_funding_rate(symbol) is not None:
         _add("funding_ramp_bull")
+        _add("funding_extreme_long")
 
     # FVG and BB squeeze use only OHLCV — always available
     _add("fvg_bullish")
@@ -108,9 +111,11 @@ async def score(symbol: str, cache) -> dict:
         "order_block":   check_order_block(symbol, cache),
         "whale_flow":    check_whale_flow(symbol, cache),
         "rsi_divergence":    check_rsi_divergence_bullish(symbol, cache),
+        "rsi_div_mtf":       check_rsi_divergence_bullish_mtf(symbol, cache),
         "ema_pullback":      check_ema_pullback_long(symbol, cache),
         "ls_crowded_short":  check_ls_crowded_short(symbol, cache),
-        "funding_ramp_bull": check_funding_ramp_bullish(symbol, cache),
+        "funding_ramp_bull":    check_funding_ramp_bullish(symbol, cache),
+        "funding_extreme_long": check_funding_extreme_long(symbol, cache),
         "fvg_bullish":       check_fvg_bullish(symbol, cache),
         "bb_squeeze_bull":   check_bb_squeeze_bullish(symbol, cache),
     }

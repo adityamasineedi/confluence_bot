@@ -138,3 +138,36 @@ def check_rsi_divergence_bearish(symbol: str, cache) -> bool:
     rsi_lower_high    = rsi[sh2 - rsi_offset] < rsi[sh1 - rsi_offset]
 
     return price_higher_high and rsi_lower_high
+
+
+def check_rsi_divergence_bullish_4h(symbol: str, cache) -> bool:
+    """Bullish divergence on 4H — price lower low, RSI higher low.
+    Higher timeframe confirmation of the 1H signal.
+    """
+    ohlcv = cache.get_ohlcv(symbol, window=_MAX_SWING_AGE + 5, tf="4h")
+    if len(ohlcv) < 20:
+        return False
+    closes = [c["c"] for c in ohlcv]
+    lows   = [c["l"] for c in ohlcv]
+    rsi_   = _rsi_series(closes)
+    if not rsi_:
+        return False
+    rsi_offset = len(ohlcv) - len(rsi_)
+    swing_idxs = _swing_low_indices(lows)
+    recent = [i for i in swing_idxs
+              if i >= rsi_offset and i < len(ohlcv) - _SWING_LOOKBACK]
+    if len(recent) < 2:
+        return False
+    sw1, sw2 = recent[-2], recent[-1]
+    if sw2 - sw1 < _MIN_SWING_SEPARATION:
+        return False
+    return (lows[sw2] < lows[sw1] and
+            rsi_[sw2 - rsi_offset] > rsi_[sw1 - rsi_offset])
+
+
+def check_rsi_divergence_bullish_mtf(symbol: str, cache) -> bool:
+    """True when BOTH 1H and 4H show bullish RSI divergence simultaneously.
+    Highest confidence reversal signal — both timeframes confirming.
+    """
+    return (check_rsi_divergence_bullish(symbol, cache) and
+            check_rsi_divergence_bullish_4h(symbol, cache))

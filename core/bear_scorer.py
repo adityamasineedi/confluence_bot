@@ -8,7 +8,7 @@ import yaml
 
 from signals.bear.cvd_bearish    import check_cvd_bearish
 from signals.bear.oi_flush       import check_oi_long_flush
-from signals.bear.funding_extreme import check_funding_extreme_positive
+from signals.trend.funding_extreme import check_funding_extreme_short
 from signals.bear.funding_ramp    import check_funding_ramp_bearish, check_funding_ramp_bullish
 from signals.bear.whale_inflow   import check_whale_exchange_inflow
 from signals.trend.rsi_divergence   import check_rsi_divergence_bearish
@@ -68,7 +68,7 @@ async def score(symbol: str, cache) -> dict:
     signals: dict[str, bool] = {
         "cvd_bearish":     check_cvd_bearish(symbol, cache),
         "oi_flush":        check_oi_long_flush(symbol, cache),
-        "funding_extreme": check_funding_extreme_positive(symbol, cache),
+        "funding_extreme": check_funding_extreme_short(symbol, cache),
         "whale_inflow":    check_whale_exchange_inflow(symbol, cache),
         "rsi_divergence":  check_rsi_divergence_bearish(symbol, cache),
         "ema_pullback":    check_ema_pullback_short(symbol, cache),

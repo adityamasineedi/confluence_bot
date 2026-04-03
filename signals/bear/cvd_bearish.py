@@ -1,28 +1,42 @@
-"""Bearish CVD signal — cumulative delta diverging negatively."""
+"""
+signals/bear/cvd_bearish.py
+Bearish CVD signals — selling pressure confirmation for BEAR/CRASH regime.
 
-
-def check_cvd_bearish_div(symbol: str, cache) -> bool:
-    """True when price makes a higher high but CVD makes a lower high.
-
-    Bearish hidden divergence: buyers can't push CVD up despite price rising
-    → sellers are distributing, reversal likely.
-
-    Requires at least 3 data points (oldest at index -3, newest at -1).
-    """
-    prices = cache.get_closes(symbol, window=10, tf="5m")
-    cvd    = cache.get_cvd(symbol,    window=10, tf="5m")
-    if len(prices) < 3 or len(cvd) < 3:
-        return False
-    return prices[-1] > prices[-3] and cvd[-1] < cvd[-3]
+Uses 1H bars for slope (matches trend CVD fix) and 4H bars for
+divergence (enough context to distinguish a real divergence from noise).
+"""
 
 
 def check_cvd_bearish(symbol: str, cache) -> bool:
-    """True when CVD slope is negative — net selling pressure over last N candles.
+    """True when selling pressure is building over the last 48 × 1H candles.
 
-    A falling CVD (cvd[-1] < cvd[-3]) without any price condition confirms
-    clean downside flow — sellers in control.
+    Compares the average CVD of the second half vs first half of the window.
+    A falling average means net selling is accelerating.
+    Requires at least 12 closed 1H candles to avoid warmup noise.
     """
-    cvd = cache.get_cvd(symbol, window=10, tf="5m")
-    if len(cvd) < 3:
+    cvd = cache.get_cvd(symbol, window=48, tf="1h")
+    if not cvd or len(cvd) < 12:
         return False
-    return cvd[-1] < cvd[-3]
+    mid = len(cvd) // 2
+    first_half_avg  = sum(cvd[:mid]) / mid
+    second_half_avg = sum(cvd[mid:]) / (len(cvd) - mid)
+    return second_half_avg < first_half_avg   # selling accelerating
+
+
+def check_cvd_bearish_div(symbol: str, cache) -> bool:
+    """Bearish divergence: price making higher high but CVD making lower high.
+
+    Institutions selling into retail buying — classic distribution signal.
+    Uses 24 × 4H bars (4 days) for meaningful trend comparison.
+    """
+    prices = cache.get_closes(symbol, window=24, tf="4h")
+    cvd    = cache.get_cvd(symbol,    window=24, tf="4h")
+    if not prices or not cvd or len(prices) < 8 or len(cvd) < 8:
+        return False
+    quarter      = len(prices) // 4
+    price_early  = max(prices[:quarter * 2])
+    price_late   = max(prices[quarter * 2:])
+    cvd_early    = max(cvd[:quarter * 2])
+    cvd_late     = max(cvd[quarter * 2:])
+    # Price made higher high but CVD did not → sellers distributing
+    return price_late > price_early and cvd_late < cvd_early

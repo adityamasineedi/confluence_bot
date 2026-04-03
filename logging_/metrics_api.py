@@ -468,13 +468,9 @@ async def dashboard() -> HTMLResponse:
   .badge-LEADLAG    { background: #0f3460; color: #93c5fd; }
   .badge-MICRORANGE { background: #3b0764; color: #e9d5ff; }
   .badge-SESSION    { background: #164e63; color: #a5f3fc; }
-  .badge-INSIDEBAR  { background: #1c1917; color: #d6d3d1; }
-  .badge-FUNDING    { background: #0c4a6e; color: #7dd3fc; }
-  .badge-SWEEP      { background: #422006; color: #fed7aa; }
   .badge-EMA_PULLBACK { background: #052e16; color: #86efac; }
   .badge-ZONE       { background: #1e1b4b; color: #c7d2fe; }
   .badge-FVG        { background: #14532d; color: #6ee7b7; }
-  .badge-BOS        { background: #7c2d12; color: #fdba74; }
   .badge-VWAPBAND   { background: #134e4a; color: #5eead4; }
   .badge-OISPIKE    { background: #4a044e; color: #f5d0fe; }
 
@@ -785,14 +781,10 @@ async def dashboard() -> HTMLResponse:
         <option value="main">Main Trend/Range</option>
         <option value="microrange">MicroRange</option>
         <option value="ema_pullback">EMA Pullback</option>
-        <option value="sweep">Sweep Reversal</option>
         <option value="zone">HTF Zone Retest</option>
         <option value="leadlag">Lead-Lag</option>
         <option value="session">Session Trap</option>
-        <option value="insidebar">Inside Bar</option>
-        <option value="funding">Funding Harvest</option>
         <option value="fvg">FVG Fill</option>
-        <option value="bos">BOS / CHoCH</option>
         <option value="vwap_band">VWAP Band Reversion</option>
         <option value="oi_spike">OI Spike Fade</option>
       </select>
@@ -2545,15 +2537,6 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         elif strategy == "session":
             from backtest.session_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "insidebar":
-            from backtest.insidebar_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "funding":
-            from backtest.funding_harvest_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, funding=funding, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "sweep":
-            from backtest.sweep_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
         elif strategy == "ema_pullback":
             from backtest.ema_pullback_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
@@ -2562,9 +2545,6 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
         elif strategy == "fvg":
             from backtest.fvg_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "bos":
-            from backtest.bos_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
         elif strategy == "vwap_band":
             from backtest.vwap_band_engine import run as _run
@@ -2657,13 +2637,9 @@ async def _backtest_legacy() -> HTMLResponse:
   .badge-LEADLAG    { background:#0f3460; color:#93c5fd; }
   .badge-MICRORANGE { background:#3b0764; color:#e9d5ff; }
   .badge-SESSION    { background:#164e63; color:#a5f3fc; }
-  .badge-INSIDEBAR  { background:#1c1917; color:#d6d3d1; }
-  .badge-FUNDING    { background:#0c4a6e; color:#7dd3fc; }
-  .badge-SWEEP      { background:#422006; color:#fed7aa; }
   .badge-EMA_PULLBACK { background:#052e16; color:#86efac; }
   .badge-ZONE       { background:#1e1b4b; color:#c7d2fe; }
   .badge-FVG        { background:#14532d; color:#6ee7b7; }
-  .badge-BOS        { background:#7c2d12; color:#fdba74; }
   .badge-VWAPBAND   { background:#134e4a; color:#5eead4; }
   .badge-OISPIKE    { background:#4a044e; color:#f5d0fe; }
 </style>

@@ -75,9 +75,11 @@ weights:
     order_block:    0.05          # keep: confluence entry point
     whale_flow:     0.10          # keep: works all symbols
     rsi_divergence:    0.15        # bullish divergence — price lower low + RSI higher low on 1H
+    rsi_div_mtf:       0.20        # MTF divergence — 1H + 4H both confirming, higher confidence
     ema_pullback:      0.10        # 20/50 EMA pullback entry — best trend timing signal
     ls_crowded_short:  0.10        # Coinglass L/S ratio < 0.6 → crowd overly short → contrarian bullish
-    funding_ramp_bull: 0.10        # Coinglass extreme negative funding → short squeeze fuel
+    funding_ramp_bull:    0.10      # Coinglass extreme negative funding → short squeeze fuel
+    funding_extreme_long: 0.10     # extreme negative funding → crowd max short → contrarian LONG
     fvg_bullish:       0.10        # NEW: Fair Value Gap retest — unfilled 1H imbalance zone
     bb_squeeze_bull:   0.05        # NEW: Bollinger squeeze release upside — volatility expansion
 
@@ -184,6 +186,17 @@ funding:
   extreme_positive: 0.001         # 0.1% per 8h (bearish contrarian)
   extreme_negative: -0.001        # -0.1% (crash panic)
   neutral_band: 0.0003            # ±0.03% = neutral for range
+
+# ── Funding contrarian ───────────────────────────────────────────────────────
+funding_contrarian:
+  enabled: true
+  extreme_positive_pct: 0.0012   # 0.12%/8H threshold for SHORT
+  extreme_negative_pct: -0.0012  # -0.12%/8H threshold for LONG
+  sl_pct: 0.008                  # 0.8% SL
+  tp_pct: 0.016                  # 1.6% TP (2:1 RR)
+  cooldown_hours: 8              # one signal per 8H per symbol
+  max_positions: 2
+  check_interval_secs: 300       # check every 5 min (funding updates every 8H)
 
 # ── VPVR ─────────────────────────────────────────────────────────────────────
 vpvr:

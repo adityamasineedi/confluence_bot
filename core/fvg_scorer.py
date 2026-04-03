@@ -47,6 +47,8 @@ _SIGNAL_WEIGHTS = {
     "vol_confirm":  0.05,   # reduced from 0.10 to make room for irb_confirm
     "vol_not_dist": 0.10,   # no distribution/accumulation pattern
     "irb_confirm":  0.10,   # IRB: 2-bar pullback + close in top/bottom 25% of range
+    "oi_div_long":  0.10,   # OI rising while price falls = squeeze fuel
+    "oi_div_short": 0.10,   # OI falling while price rises = fake breakout
     # rvol_ok removed from weights (kept in signals for logging) — freed 0.05 for irb_confirm
 }
 _SL_BUFFER_PCT  = float(_FVG_CFG.get("sl_buffer_pct",   0.002))
@@ -139,6 +141,7 @@ async def score(symbol: str, cache) -> list[dict]:
     """
     from signals.trend.fvg import check_fvg_bullish, check_fvg_bearish, get_fvg_levels
     from signals.trend.irb import check_irb_long, check_irb_short
+    from signals.trend.oi_divergence import check_oi_divergence_long, check_oi_divergence_short
     from signals.volume_momentum import extreme_volatility
 
     # Extreme volatility gate — flat during flash crashes (gaps past SL, huge slippage)
@@ -202,6 +205,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 "vol_not_dist": vol_not_dist,
                 "rvol_ok":      rvol_ok,       # informational only — weight removed
                 "irb_confirm":  check_irb_long(symbol, cache),
+                "oi_div_long":  check_oi_divergence_long(symbol, cache),
             }
             score_val = round(sum(
                 _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
@@ -265,6 +269,7 @@ async def score(symbol: str, cache) -> list[dict]:
                 "vol_not_dist":  vol_not_accum,   # reuse shared weight key
                 "rvol_ok":       rvol_ok,          # informational only — weight removed
                 "irb_confirm":   check_irb_short(symbol, cache),
+                "oi_div_short":  check_oi_divergence_short(symbol, cache),
             }
             score_val = round(sum(
                 _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
