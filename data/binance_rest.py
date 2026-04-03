@@ -165,7 +165,7 @@ class BinanceRestPoller:
         await asyncio.gather(
             self._fetch_oi(session, symbol),
             self._fetch_funding(session, symbol),
-            self._fetch_klines(session, symbol, "1w", 5),
+            self._fetch_klines(session, symbol, "1w", 15),
             self._fetch_klines(session, symbol, "1d", 60 if load_history else 2),
             # 4H: need 210 bars for EMA200 + ADX warmup on startup; 2 bars to stay current
             self._fetch_klines(session, symbol, "4h", 210 if load_history else 2),

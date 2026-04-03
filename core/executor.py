@@ -41,6 +41,54 @@ _deal_lock = _asyncio.Lock()
 # Post-trade cooldown: symbol → monotonic timestamp when cooldown expires
 _post_trade_until: dict[str, float] = {}
 
+# ── Dynamic slippage ──────────────────────────────────────────────────────────
+# Baseline slippage per regime (one-way). Used as the reference in log output
+# and as the fallback when config doesn't override a regime.
+_SLIP_BY_REGIME: dict[str, float] = {
+    "TREND":    0.0002,   # 0.02% — normal trending market
+    "RANGE":    0.0002,   # 0.02% — range-bound, tight spreads
+    "CRASH":    0.0010,   # 0.10% — cascading liquidations, wide spreads
+    "PUMP":     0.0008,   # 0.08% — euphoria, thin asks above
+    "BREAKOUT": 0.0005,   # 0.05% — momentum, some slippage on entry
+}
+_SLIP_BASE = 0.0002   # fallback when regime unknown
+
+
+def _dynamic_slippage(symbol: str, regime: str, cache) -> float:
+    """Return estimated one-way slippage for a market order.
+
+    Scales the regime base by the current ATR ratio:
+        slip = base_regime × clamp(current_atr / avg_atr, 0.5, 5.0)
+
+    ATR scaling can be disabled via config: risk.slippage_atr_scale: false
+    Never returns less than 0.0001 (1 basis point minimum).
+    Falls back to the regime base without ATR adjustment on any error.
+    """
+    _risk_cfg  = _cfg.get("risk", {})
+    _slip_cfg  = _risk_cfg.get("slippage_by_regime", {})
+    base = float(_slip_cfg.get(regime.upper(),
+                               _SLIP_BY_REGIME.get(regime.upper(), _SLIP_BASE)))
+    try:
+        if not _risk_cfg.get("slippage_atr_scale", True):
+            return base
+        bars = cache.get_ohlcv(symbol, 22, "1h")
+        if not bars or len(bars) < 15:
+            return base
+        trs = []
+        for i in range(1, len(bars)):
+            h, l, pc = bars[i]["h"], bars[i]["l"], bars[i - 1]["c"]
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        if len(trs) < 14:
+            return base
+        avg_atr = sum(trs[-21:-1]) / min(20, len(trs) - 1)
+        if avg_atr == 0.0:
+            return base
+        atr_ratio = min(max(trs[-1] / avg_atr, 0.5), 5.0)
+        return max(base * atr_ratio, 0.0001)
+    except Exception as exc:
+        log.debug("_dynamic_slippage fallback for %s: %s", symbol, exc)
+        return base
+
 
 async def execute_signal(score_dict: dict, cache) -> dict | None:
     """Place an order based on a fired score dict.
@@ -201,7 +249,17 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
 
     # Allow per-signal risk override (e.g. drawdown scaling from strategy loops)
     signal_risk_pct = score_dict.get("risk_pct")
-    qty = position_size(entry, stop, cache, symbol, risk_pct=signal_risk_pct)
+    est_slip = _dynamic_slippage(symbol, regime, cache)
+    log.info(
+        "Dynamic slippage %s %s [%s]: %.4f%%  (base=%.4f%%)",
+        direction, symbol, regime,
+        est_slip * 100,
+        _SLIP_BY_REGIME.get(regime.upper(), _SLIP_BASE) * 100,
+    )
+    raw_balance = cache.get_account_balance()
+    qty = position_size(entry, stop, cache, symbol, risk_pct=signal_risk_pct, slip_pct=est_slip)
+    log.debug("Position sizing %s %s: raw_bal=%.2f entry=%.4f stop=%.4f qty=%.4f",
+              direction, symbol, raw_balance, entry, stop, qty)
     if qty <= 0.0:
         log.warning("Position size 0 for %s %s — skipping", direction, symbol)
         return None

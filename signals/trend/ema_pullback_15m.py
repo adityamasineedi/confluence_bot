@@ -16,8 +16,11 @@ Long setup:
 Short setup: mirror image.
 """
 
+import logging
 import os, yaml
 from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
 with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
@@ -174,10 +177,11 @@ def _rsi(closes: list[float], period: int = _RSI_PERIOD) -> float:
 
 
 def _htf_bullish(symbol: str, cache) -> bool:
-    """4H macro bias is bullish: price above EMA50 AND EMA21 above EMA50.
+    """4H macro bias is bullish AND 1D close above EMA200.
 
-    Changed from OR to AND — OR was too permissive, firing LONG when EMA21
-    briefly crossed above EMA50 even with price below it (early bear bounce).
+    Both timeframes must confirm simultaneously.  Using OR was too permissive:
+    the 1D could still be above EMA200 from the prior bull while the 4H had
+    already turned down — firing LONG entries into an early bear market.
     """
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_SLOW + 5, tf="4h")
     if len(bars_4h) < _EMA_SLOW:
@@ -185,28 +189,50 @@ def _htf_bullish(symbol: str, cache) -> bool:
     closes_4h = [b["c"] for b in bars_4h]
     ema50_4h  = _ema(closes_4h, _EMA_SLOW)
     ema21_4h  = _ema(closes_4h, _EMA_FAST)
-    # AND: both conditions must hold — prevents longs during early bear bounces
-    if not (closes_4h[-1] > ema50_4h and ema21_4h > ema50_4h):
-        return False
-    # Weekly confirmation — prevents longs when weekly trend has turned bear
-    weekly_bars = cache.get_ohlcv(symbol, window=12, tf="1w")
-    if len(weekly_bars) >= 10:
-        w_closes = [b["c"] for b in weekly_bars]
-        ema10w = _ema(w_closes, 10)
-        if w_closes[-1] < ema10w:   # weekly bear — block longs
-            return False
-    return True
+    htf_4h_ok = closes_4h[-1] > ema50_4h and ema21_4h > ema50_4h
+
+    # 1D EMA200 — macro trend gate
+    daily_bars = cache.get_ohlcv(symbol, window=205, tf="1d")
+    if len(daily_bars) >= 200:
+        d_closes = [b["c"] for b in daily_bars]
+        ema200_1d = _ema(d_closes, 200)
+        daily_ok  = d_closes[-1] > ema200_1d
+    else:
+        daily_ok = True   # insufficient history — don't block
+
+    result = htf_4h_ok and daily_ok
+    log.debug("EMA Pullback HTF gate %s LONG: 4h_ok=%s daily_ok=%s → %s",
+              symbol, htf_4h_ok, daily_ok, result)
+    return result
 
 
 def _htf_bearish(symbol: str, cache) -> bool:
-    """4H macro bias is bearish: close below 4H EMA50 AND 4H EMA21 < EMA50."""
+    """4H macro bias is bearish AND 1D close below EMA200.
+
+    Both timeframes must confirm simultaneously — prevents SHORT entries in
+    bull markets where only the 4H has pulled back but the 1D is still above EMA200.
+    """
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_SLOW + 5, tf="4h")
     if len(bars_4h) < _EMA_SLOW:
         return False
-    closes_4h = [b["c"] for b in bars_4h]
-    ema50_4h  = _ema(closes_4h, _EMA_SLOW)
-    ema21_4h  = _ema(closes_4h, _EMA_FAST)
-    return closes_4h[-1] < ema50_4h and ema21_4h < ema50_4h
+    closes_4h  = [b["c"] for b in bars_4h]
+    ema50_4h   = _ema(closes_4h, _EMA_SLOW)
+    ema21_4h   = _ema(closes_4h, _EMA_FAST)
+    htf_4h_bear = closes_4h[-1] < ema50_4h and ema21_4h < ema50_4h
+
+    # 1D EMA200 — macro trend gate
+    daily_bars = cache.get_ohlcv(symbol, window=205, tf="1d")
+    if len(daily_bars) >= 200:
+        d_closes  = [b["c"] for b in daily_bars]
+        ema200_1d = _ema(d_closes, 200)
+        daily_ok  = d_closes[-1] < ema200_1d
+    else:
+        daily_ok = True   # insufficient history — don't block
+
+    result = htf_4h_bear and daily_ok
+    log.debug("EMA Pullback HTF gate %s SHORT: 4h_ok=%s daily_ok=%s → %s",
+              symbol, htf_4h_bear, daily_ok, result)
+    return result
 
 
 def check_ema15m_pullback_long(symbol: str, cache) -> bool:

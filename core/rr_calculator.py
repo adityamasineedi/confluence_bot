@@ -16,10 +16,6 @@ _STOP_ATR_MULT     = 1.5   # stop = entry ± ATR × multiplier
 # stop distance of 0.5 % of entry price so we always stay outside the noise band.
 _MIN_STOP_PCT      = 0.005  # 0.5 % minimum stop distance
 _PAPER_DEFAULT_BAL = 10_000.0  # default paper balance when no API key is set
-# Binance Futures taker fee: 0.05% per side = 0.10% round-trip.
-# Inflating the effective stop distance by the round-trip fee ensures the
-# dollar risk calculation already accounts for both entry and exit commissions.
-_TAKER_FEE_RT      = 0.0010   # 0.10% round-trip (entry + exit)
 
 # Binance Futures lot-size step sizes (decimal places for quantity)
 # stepSize=0.001 → 3 dp, stepSize=1 → 0 dp, etc.
@@ -108,16 +104,22 @@ def position_size(
     cache,
     symbol: str = "",
     risk_pct: float | None = None,
+    slip_pct: float = 0.0002,
 ) -> float:
     """Return position size in base currency units.
 
-    Formula: size = (balance × risk_pct) / |entry − stop|
+    Formula: size = (balance × risk_pct) / (|entry − stop| × round_trip_adj)
+    where round_trip_adj = 1 + (slip_pct + fee_pct) × 2 inflates the effective
+    stop distance to account for slippage and taker fees on both legs.
+
     Capped at max_position_size_usdt / entry.
     Rounded to the symbol's Binance lot-size step precision.
 
     Args:
         risk_pct: override the config risk fraction (e.g. for drawdown scaling).
                   None = use the global _RISK_PER_TRADE from config.
+        slip_pct: one-way slippage estimate (dynamic, regime-aware).
+                  Defaults to 0.02% (calm market baseline).
     """
     if entry == 0.0 or stop == 0.0 or entry == stop:
         return 0.0
@@ -137,10 +139,11 @@ def position_size(
 
     effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
     risk_usdt = min(available_equity * effective_risk, _MAX_RISK_USDT)
-    # Inflate stop distance by round-trip fees so risk_usdt is the true net loss
-    # including commissions (entry + exit taker fees).
-    fee_per_unit     = entry * _TAKER_FEE_RT
-    effective_stop   = abs(entry - stop) + fee_per_unit
+    # Inflate stop distance by round-trip slippage + fees so risk_usdt is the
+    # true net loss including market impact and commissions (both legs).
+    _fee_pct        = 0.0005   # taker fee per side (0.05%)
+    round_trip_adj  = 1.0 + (slip_pct + _fee_pct) * 2
+    effective_stop  = abs(entry - stop) * round_trip_adj
     size = risk_usdt / effective_stop
 
     max_size = _MAX_SIZE_USDT / entry

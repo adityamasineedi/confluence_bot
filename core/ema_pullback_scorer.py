@@ -17,6 +17,7 @@ import os
 import yaml
 
 from core.cooldown_store import CooldownStore
+from core.filter import atr_spike_ok
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +126,12 @@ async def score(symbol: str, cache) -> list[dict]:
         tier = get_symbol_tier(symbol)
         entry, stop, tp = get_ema15m_long_levels(symbol, cache, tier=tier)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
-        fire = score_val >= _THRESHOLD and bounce_ok and vol_ok and cool_ok and entry > 0
+        from core.weekly_trend_gate import weekly_allows_long
+        spike_ok  = atr_spike_ok(symbol, cache, tf="15m")
+        weekly_ok = weekly_allows_long("ema_pullback", cache)
+        signals["atr_spike_ok"]   = spike_ok
+        signals["weekly_gate_ok"] = weekly_ok
+        fire = score_val >= _THRESHOLD and spike_ok and bounce_ok and vol_ok and weekly_ok and cool_ok and entry > 0
 
         results.append({
             "symbol":    symbol,
@@ -166,7 +172,12 @@ async def score(symbol: str, cache) -> list[dict]:
         tier = get_symbol_tier(symbol)
         entry, stop, tp = get_ema15m_short_levels(symbol, cache, tier=tier)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
-        fire = score_val >= _THRESHOLD and bounce_ok and vol_ok and cool_ok and entry > 0
+        from core.weekly_trend_gate import weekly_allows_short
+        spike_ok  = atr_spike_ok(symbol, cache, tf="15m")
+        weekly_ok = weekly_allows_short("ema_pullback", cache)
+        signals["atr_spike_ok"]   = spike_ok
+        signals["weekly_gate_ok"] = weekly_ok
+        fire = score_val >= _THRESHOLD and spike_ok and bounce_ok and vol_ok and weekly_ok and cool_ok and entry > 0
 
         results.append({
             "symbol":    symbol,

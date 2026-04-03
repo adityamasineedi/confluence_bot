@@ -154,6 +154,19 @@ risk:
   # ── Extreme volatility gate ──────────────────────────────────────────────
   # Halts all new entries when 4H ATR spikes 3× above median (flash crash events).
   # Catches: COVID March 2020, LUNA May 2022, FTX November 2022.
+  atr_spike_gate_enabled: true
+  atr_spike_gate_mult: 3.0    # block when current ATR > 3× 20-bar average
+  # ── Dynamic slippage model ──────────────────────────────────────────────
+  # Slippage scales with ATR ratio so position size shrinks automatically
+  # when market conditions are noisy. Set slippage_atr_scale: false to use
+  # the regime base only (disables the ATR multiplier).
+  slippage_atr_scale: true
+  slippage_by_regime:
+    TREND:    0.0002   # 0.02% baseline
+    RANGE:    0.0002   # same — tight markets
+    CRASH:    0.0010   # 0.10% — cascade conditions
+    PUMP:     0.0008   # 0.08% — thin ask side
+    BREAKOUT: 0.0005   # 0.05% — momentum entries
   extreme_vol_gate:
     enabled: true
     lookback_bars: 50       # bars to compute median ATR
@@ -366,6 +379,7 @@ vwap_band:
     base:  1.5
   min_sl_pct: 0.003           # absolute floor — SL never < 0.3% regardless of ATR
   max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — VWAP reversion should happen within 1h)
+  long_only: true    # backtest confirmed SHORT direction: WR 0.5%, PF 0.01, 196 SL/197 trades
   exclude_symbols:
     - BTCUSDT    # TREND PF1.07 weak, not worth enabling
     - ETHUSDT    # TREND PF0.67 BAD
@@ -578,52 +592,52 @@ volume_momentum:
 # Individual strategy enabled: false flags are still respected by the router.
 strategy_routing:
   BTCUSDT:
-    TREND:     [microrange, fvg, ema_pullback]  # microrange PF1.34, fvg PF1.65
-    RANGE:     [microrange, ema_pullback]        # allow ema_pullback — BTC 15m trends inside 4H range
+    TREND:     [microrange, fvg]           # removed ema_pullback — PF 0.28 confirmed loser
+    RANGE:     [microrange]                # removed ema_pullback — negative PF in range
     BREAKOUT:  [fvg]
     CRASH:     []
     PUMP:      []
   ETHUSDT:
-    TREND:     [ema_pullback]             # ema_pullback PF1.42 WR37%
+    TREND:     []                          # removed ema_pullback — PF 0.35 confirmed loser
     RANGE:     []
-    BREAKOUT:  [ema_pullback]
+    BREAKOUT:  []                          # removed ema_pullback
     CRASH:     []
     PUMP:      []
   SOLUSDT:
-    TREND:     [fvg]                      # fvg PF1.64 WR43%
+    TREND:     [fvg]
     RANGE:     []
     BREAKOUT:  [fvg]
-    CRASH:     []
+    CRASH:     [fvg]                       # added — fvg SHORT PF 3.14 in bear
     PUMP:      []
   BNBUSDT:
-    TREND:     [fvg]                      # fvg PF2.11 WR44%
+    TREND:     [fvg]
     RANGE:     []
     BREAKOUT:  [fvg]
-    CRASH:     []
+    CRASH:     [fvg]                       # added — fvg SHORT PF 3.86 in bear
     PUMP:      []
   XRPUSDT:
-    TREND:     [ema_pullback, vwap_band]  # ema_pullback PF1.28 WR34%, vwap_band PF1.40 WR31%
-    RANGE:     [vwap_band, microrange]    # vwap_band PF1.48 WR30%, microrange PF1.32 WR28%
-    BREAKOUT:  [ema_pullback]
-    CRASH:     []
+    TREND:     [vwap_band]                 # removed ema_pullback (PF 1.28 marginal), keep vwap
+    RANGE:     [vwap_band]                 # removed microrange PF 1.32 — below fee break-even
+    BREAKOUT:  [vwap_band]
+    CRASH:     [fvg]                       # added — fvg SHORT PF 5.03 WR 67%
     PUMP:      []
   LINKUSDT:
-    TREND:     [ema_pullback, vwap_band]  # ema_pullback PF1.43 WR36%, vwap_band PF1.50 WR40%
-    RANGE:     [vwap_band, microrange]    # vwap_band PF2.25 WR36%, microrange PF1.26 WR33%
-    BREAKOUT:  [ema_pullback]
+    TREND:     [vwap_band]                 # removed ema_pullback — not significant edge
+    RANGE:     [vwap_band]                 # removed microrange PF 1.26 — below break-even
+    BREAKOUT:  [vwap_band]
     CRASH:     []
     PUMP:      []
   DOGEUSDT:
-    TREND:     [fvg]                      # fvg PF1.76 WR46%
-    RANGE:     [microrange]               # microrange PF1.19 WR26%
+    TREND:     [fvg]
+    RANGE:     []                          # removed microrange — PF 1.19 below fee floor
     BREAKOUT:  [fvg]
-    CRASH:     [microrange]               # microrange PF1.97 WR38%
+    CRASH:     [microrange]
     PUMP:      []
   SUIUSDT:
-    TREND:     [ema_pullback, fvg, vwap_band]  # ema_pullback PF2.21 WR49%, fvg PF1.31, vwap_band PF1.52
-    RANGE:     [microrange]               # microrange PF1.17 WR30%
+    TREND:     [ema_pullback, fvg]         # removed vwap_band — not confirmed
+    RANGE:     []                          # removed microrange — PF 1.17 below fee floor
     BREAKOUT:  [ema_pullback, fvg]
-    CRASH:     [microrange]               # microrange PF1.91 WR41%
+    CRASH:     [microrange]
     PUMP:      []
   _default:
     TREND:     []
@@ -631,6 +645,14 @@ strategy_routing:
     BREAKOUT:  []
     CRASH:     []
     PUMP:      []
+
+# ── ATR spike gate ───────────────────────────────────────────────────────────
+# Blocks all scorer entries when current 1H bar ATR is > multiplier × 20-bar avg.
+# Flash crash / news spike bars have terrible fill prices and near-instant stop-outs.
+atr_spike_gate:
+  enabled: true
+  multiplier: 3.0    # block when current ATR > 3× 20-bar average
+  tf: "1h"           # timeframe to measure ATR on
 
 # ── Trailing stop (PUMP and BREAKOUT regimes only) ───────────────────────────
 # Replaces fixed TAKE_PROFIT_MARKET with Binance TRAILING_STOP_MARKET so

@@ -29,6 +29,7 @@ import yaml
 from datetime import datetime, timezone
 
 from core.cooldown_store import CooldownStore
+from core.filter import atr_spike_ok
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ with open(_CONFIG_PATH) as _f:
 
 _VB_CFG = _cfg.get("vwap_band", {})
 
+_LONG_ONLY     = bool(_VB_CFG.get("long_only", True))
 _COOLDOWN_SECS = float(_VB_CFG.get("cooldown_mins",  30)) * 60.0
 _THRESHOLD     = 0.67   # 2 of 3 scored signals required
 _SL_BUFFER_PCT = float(_VB_CFG.get("sl_buffer_pct",  0.002))
@@ -280,16 +282,23 @@ async def score(symbol: str, cache) -> list[dict]:
             current_ts  = bars_15m_ts[-1]["ts"] if bars_15m_ts else 0
             session_gate = _session_ok(current_ts) if current_ts > 0 else True
             btc_gate     = _vwap_btc_direction_ok("LONG", cache) if symbol != "BTCUSDT" else True
+            from core.weekly_trend_gate import weekly_allows_long
+            spike_ok  = atr_spike_ok(symbol, cache, tf="15m")
+            weekly_ok = weekly_allows_long("vwap_band", cache)
+            signals["atr_spike_ok"]   = spike_ok
+            signals["weekly_gate_ok"] = weekly_ok
             fire = (
                 score_val >= _THRESHOLD
                 and regime_gate
                 and adx_ok
+                and spike_ok
                 and rr >= _MIN_RR
                 and rvol_ok
                 and momentum_ok
                 and cool_ok
                 and session_gate
                 and btc_gate
+                and weekly_ok
             )
 
             results.append({
@@ -306,6 +315,13 @@ async def score(symbol: str, cache) -> list[dict]:
             })
 
     # ── SHORT: upper_2 band touch + rejection ────────────────────────────────
+    # ── LONG-only gate ────────────────────────────────────────────────────────
+    # Backtest confirmed: VWAP SHORT WR=0.5%, PF=0.01 across 400+ trades.
+    # Upper band touch in trending or ranging market = price continues up, not mean-reverts.
+    # Only allow SHORT when config explicitly sets long_only: false.
+    if _LONG_ONLY:
+        return results
+
     band_short = check_vwap_short(symbol, cache)
     if band_short:
         levels = get_vwap_levels(symbol, cache, "SHORT")

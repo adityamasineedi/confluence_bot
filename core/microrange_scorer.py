@@ -34,6 +34,7 @@ _MR = _cfg.get("microrange", {})
 _COOLDOWN_SECS = float(_MR.get("cooldown_mins", 20)) * 60.0
 
 from core.cooldown_store import CooldownStore
+from core.filter import atr_spike_ok
 _cd = CooldownStore("MICRORANGE")
 
 
@@ -179,7 +180,9 @@ async def score(symbol: str, cache) -> list[dict]:
                 box["range_low"], box["range_high"], box["range_width"],
                 _STOP_PCT, _TP_RATIO,
             )
-            fire = score_val >= _THRESHOLD and cool_ok
+            spike_ok = atr_spike_ok(symbol, cache, tf="5m")
+            signals["atr_spike_ok"] = spike_ok
+            fire = score_val >= _THRESHOLD and spike_ok and cool_ok
             results.append({
                 "symbol":          symbol,
                 "regime":          "MICRORANGE",
@@ -222,7 +225,9 @@ async def score(symbol: str, cache) -> list[dict]:
                 box["range_low"], box["range_high"], box["range_width"],
                 _STOP_PCT, _TP_RATIO,
             )
-            fire = score_val >= _THRESHOLD and cool_ok
+            spike_ok = atr_spike_ok(symbol, cache, tf="5m")
+            signals["atr_spike_ok"] = spike_ok
+            fire = score_val >= _THRESHOLD and spike_ok and cool_ok
             results.append({
                 "symbol":          symbol,
                 "regime":          "MICRORANGE",

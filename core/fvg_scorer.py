@@ -26,6 +26,7 @@ import os
 import yaml
 
 from core.cooldown_store import CooldownStore
+from core.filter import passes_trend_long_filters, passes_trend_short_filters, atr_spike_ok
 
 log = logging.getLogger(__name__)
 
@@ -206,8 +207,18 @@ async def score(symbol: str, cache) -> list[dict]:
             dist = abs(price - sl)
             tp   = price + dist * _RR_RATIO
 
+            from core.weekly_trend_gate import weekly_allows_long
+            trend_long_ok = passes_trend_long_filters(symbol, cache)
+            spike_ok      = atr_spike_ok(symbol, cache)
+            weekly_ok     = weekly_allows_long("fvg", cache)
+            signals["trend_long_filter"] = trend_long_ok
+            signals["atr_spike_ok"]      = spike_ok
+            signals["weekly_gate_ok"]    = weekly_ok
             fire = (score_val >= _THRESHOLD
                     and regime_gate
+                    and trend_long_ok          # DI edge + ADX rising + BTC macro
+                    and spike_ok
+                    and weekly_ok
                     and liq_vol_ok
                     and cool_ok)
 
@@ -253,8 +264,18 @@ async def score(symbol: str, cache) -> list[dict]:
             dist = abs(sl - price)
             tp   = price - dist * _RR_RATIO
 
+            from core.weekly_trend_gate import weekly_allows_short
+            trend_short_ok = passes_trend_short_filters(symbol, cache)
+            spike_ok_s     = atr_spike_ok(symbol, cache)
+            weekly_ok      = weekly_allows_short("fvg", cache)
+            signals["trend_short_filter"] = trend_short_ok
+            signals["atr_spike_ok"]       = spike_ok_s
+            signals["weekly_gate_ok"]     = weekly_ok
             fire = (score_val >= _THRESHOLD
                     and regime_gate
+                    and trend_short_ok         # BTC below EMA200 + -DI > +DI
+                    and spike_ok_s
+                    and weekly_ok
                     and liq_vol_ok
                     and cool_ok)
 

@@ -316,3 +316,58 @@ def passes_crash_filters(symbol: str, cache) -> bool:
         return False
 
     return True
+
+
+def atr_spike_ok(
+    symbol: str,
+    cache,
+    tf: str = "1h",
+    multiplier: float | None = None,
+) -> bool:
+    """Return False when current bar ATR is abnormally large.
+
+    Blocks entries during flash crashes, liquidation cascades, or news spikes
+    where fills will be noisy and SL hits are near-certain.
+    Returns True on insufficient data (conservative — allow rather than block
+    when data is missing).
+
+    Each scorer passes its own tf so the check matches the entry timeframe:
+        fvg           → tf="1h"   (default)
+        ema_pullback  → tf="15m"
+        vwap_band     → tf="15m"
+        microrange    → tf="5m"
+    """
+    _risk_cfg = _cfg.get("risk", {})
+    if not _risk_cfg.get("atr_spike_gate_enabled", True):
+        return True
+
+    if multiplier is None:
+        try:
+            multiplier = float(_risk_cfg.get("atr_spike_gate_mult", 3.0))
+        except Exception:
+            multiplier = 3.0
+
+    bars = cache.get_ohlcv(symbol, 22, tf)
+    if not bars or len(bars) < 15:
+        return True   # insufficient data — do not block
+
+    trs = []
+    for i in range(1, len(bars)):
+        h  = bars[i]["h"]
+        l  = bars[i]["l"]
+        pc = bars[i - 1]["c"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+
+    if len(trs) < 14:
+        return True
+
+    avg_atr     = sum(trs[-21:-1]) / min(20, len(trs) - 1)
+    current_atr = trs[-1]
+
+    ok = current_atr < avg_atr * multiplier
+    if not ok:
+        log.info(
+            "ATR spike gate BLOCKED %s (%s): current=%.6f  avg=%.6f  mult=%.1f",
+            symbol, tf, current_atr, avg_atr, multiplier,
+        )
+    return ok
