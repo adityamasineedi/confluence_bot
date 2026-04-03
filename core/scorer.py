@@ -13,7 +13,6 @@ from signals.trend.oi_funding   import check_oi_funding
 from signals.trend.vpvr         import check_vpvr_reclaim
 from signals.trend.htf_structure import check_htf_structure
 from signals.trend.order_block  import check_order_block
-from signals.trend.options      import check_options_flow
 from signals.trend.whale_flow   import check_whale_flow
 from signals.trend.rsi_divergence   import check_rsi_divergence_bullish
 from signals.trend.ema_cross        import check_ema_pullback_long
@@ -53,17 +52,14 @@ def _available_signals(symbol: str, cache) -> set[str]:
     _add("rsi_divergence")   # needs only 1H OHLCV — always available
     _add("ema_pullback")     # needs only 1H closes — always available
 
-    # CVD requires aggTrade WebSocket warmup; check if any CVD values exist
-    if cache.get_cvd(symbol, 1, "5m"):
+    # CVD requires aggTrade WebSocket warmup; check if 1H CVD values exist
+    # (check_cvd_bullish uses 1H tf — guard must match to avoid stale denominator)
+    if cache.get_cvd(symbol, 1, "1h"):
         _add("cvd_bullish")
 
     # Liq clusters from CoinGlass (paid) OR synthetic pivots (BinanceRestPoller)
     if cache.get_liq_clusters(symbol):
         _add("liq_sweep")
-
-    # Deribit options flow — skew history must be non-empty
-    if cache.get_skew_history(symbol, 1):
-        _add("options_flow")
 
     # CryptoQuant whale inflow — exchange inflow must be non-None
     if cache.get_exchange_inflow(symbol) is not None:
@@ -110,7 +106,6 @@ async def score(symbol: str, cache) -> dict:
         "vpvr_support":  check_vpvr_reclaim(symbol, cache),
         "htf_structure": check_htf_structure(symbol, cache),
         "order_block":   check_order_block(symbol, cache),
-        "options_flow":  check_options_flow(symbol, cache),
         "whale_flow":    check_whale_flow(symbol, cache),
         "rsi_divergence":    check_rsi_divergence_bullish(symbol, cache),
         "ema_pullback":      check_ema_pullback_long(symbol, cache),

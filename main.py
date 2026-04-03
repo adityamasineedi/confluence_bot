@@ -138,14 +138,6 @@ async def main() -> None:
         )
         log.info("Session open trap enabled")
 
-    # 6b3. 1H inside bar flip (scans every 60s for compression zones)
-    if cfg.get("insidebar", {}).get("enabled", False):
-        from core.insidebar_loop import run_insidebar_loop
-        extra_tasks.append(
-            asyncio.create_task(run_insidebar_loop(symbols, cache))
-        )
-        log.info("1H inside bar flip enabled")
-
     # 6b3a0. OI Spike Fade (fades liquidation cascades on OI surge + wick rejection)
     if cfg.get("oi_spike", {}).get("enabled", False):
         from core.oi_spike_loop import run_oi_spike_loop
@@ -162,14 +154,6 @@ async def main() -> None:
         )
         log.info("VWAP Band Reversion strategy enabled")
 
-    # 6b3b. BOS/CHoCH strategy (1H structure break entries)
-    if cfg.get("bos", {}).get("enabled", False):
-        from core.bos_loop import run_bos_loop
-        extra_tasks.append(
-            asyncio.create_task(run_bos_loop(symbols, cache))
-        )
-        log.info("BOS/CHoCH strategy enabled")
-
     # 6b3c. FVG Fill strategy (scans every 60s for 1H imbalance zone retests)
     if cfg.get("fvg", {}).get("enabled", False):
         from core.fvg_loop import run_fvg_loop
@@ -178,23 +162,7 @@ async def main() -> None:
         )
         log.info("FVG Fill strategy enabled")
 
-    # 6b4. Funding rate harvest (wakes before each 8h settlement window)
-    if cfg.get("funding_harvest", {}).get("enabled", False):
-        from core.funding_harvest_loop import run_funding_harvest_loop
-        extra_tasks.append(
-            asyncio.create_task(run_funding_harvest_loop(symbols, cache))
-        )
-        log.info("Funding rate harvest enabled")
-
-    # 6b5. Liquidity Sweep Reversal (scans every 30s on 15m bars — any regime)
-    if cfg.get("sweep", {}).get("enabled", False):
-        from core.sweep_loop import run_sweep_loop
-        extra_tasks.append(
-            asyncio.create_task(run_sweep_loop(symbols, cache))
-        )
-        log.info("Sweep Reversal strategy enabled")
-
-    # 6b6. 15m EMA Pullback (trend-continuation at EMA21, 4H filtered)
+    # 6b5. 15m EMA Pullback (trend-continuation at EMA21, 4H filtered)
     if cfg.get("ema_pullback", {}).get("enabled", False):
         from core.ema_pullback_loop import run_ema_pullback_loop
         extra_tasks.append(

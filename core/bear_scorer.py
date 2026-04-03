@@ -7,9 +7,7 @@ import os
 import yaml
 
 from signals.bear.cvd_bearish    import check_cvd_bearish
-from signals.bear.bear_ob        import check_bear_ob_breakdown
 from signals.bear.oi_flush       import check_oi_long_flush
-from signals.bear.htf_lower_high import check_htf_lower_high
 from signals.bear.funding_extreme import check_funding_extreme_positive
 from signals.bear.funding_ramp    import check_funding_ramp_bearish, check_funding_ramp_bullish
 from signals.bear.whale_inflow   import check_whale_exchange_inflow
@@ -34,13 +32,11 @@ def _available_signals(symbol: str, cache) -> set[str]:
         if _WEIGHTS.get(name, 0.0) > 0.0:
             available.add(name)
 
-    _add("bear_ob")
     _add("oi_flush")
-    _add("htf_lower_high")
     _add("funding_extreme")
     _add("rsi_divergence")   # needs only 1H OHLCV — always available
     _add("ema_pullback")
-    if cache.get_cvd(symbol, 1, "5m"):
+    if cache.get_cvd(symbol, 1, "1h"):
         _add("cvd_bearish")
     if cache.get_exchange_inflow(symbol) is not None:
         _add("whale_inflow")
@@ -71,9 +67,7 @@ async def score(symbol: str, cache) -> dict:
     """
     signals: dict[str, bool] = {
         "cvd_bearish":     check_cvd_bearish(symbol, cache),
-        "bear_ob":         check_bear_ob_breakdown(symbol, cache),
         "oi_flush":        check_oi_long_flush(symbol, cache),
-        "htf_lower_high":  check_htf_lower_high(symbol, cache),
         "funding_extreme": check_funding_extreme_positive(symbol, cache),
         "whale_inflow":    check_whale_exchange_inflow(symbol, cache),
         "rsi_divergence":  check_rsi_divergence_bearish(symbol, cache),

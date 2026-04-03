@@ -69,10 +69,10 @@ weights:
     cvd_bullish:    0.20          # reduced slightly to make room for new signals
     liq_sweep:      0.10          # reduced: synthetic clusters less reliable
     htf_structure:  0.25          # reduced: shares dominance with new signals
-    vpvr_support:   0.00          # DISABLED: -22% edge in backtest — actively hurts WR
+    vpvr_support:   0.15          # POC reclaim (cross from below + vol confirm)
+                                  # was 0.00 due to wrong backtest logic — restored
     oi_funding:     0.05          # reduced: fired only 2x in backtest
     order_block:    0.05          # keep: confluence entry point
-    options_flow:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
     whale_flow:     0.10          # keep: works all symbols
     rsi_divergence:    0.15        # bullish divergence — price lower low + RSI higher low on 1H
     ema_pullback:      0.10        # 20/50 EMA pullback entry — best trend timing signal
@@ -86,10 +86,7 @@ weights:
     wyckoff_spring:  0.20         # ideal range entry, works all symbols
     rsi_oversold:    0.15         # RSI(14)<35 turning up near range_low
     perp_basis:      0.10         # absorbed freed weight, works all symbols
-    options_skew:    0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
     anchored_vwap:   0.15         # strong live signal
-    time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
-    call_skew_roc:   0.00         # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
     vwap_oversold:   0.15         # NEW: price below VWAP-2σ — statistically oversold
     fvg_bullish:     0.05         # NEW: Fair Value Gap retest — unfilled 1H imbalance
 
@@ -105,9 +102,7 @@ weights:
 
   bear:
     cvd_bearish:     0.35         # dominant bear predictor
-    bear_ob:         0.00         # DISABLED: -65% edge (10% WR) — actively harmful
     oi_flush:        0.30         # strong confirmation signal
-    htf_lower_high:  0.00         # DISABLED: -65% edge (10% WR) — actively harmful
     funding_extreme: 0.15         # useful contrarian signal
     whale_inflow:    0.10         # supplementary
     rsi_divergence:  0.10         # NEW: bearish divergence — price higher high + RSI lower high on 1H
@@ -133,9 +128,8 @@ weights:
     bb_squeeze_bull: 0.20         # NEW: squeeze release = precise breakout timing
 
   breakout_short:
-    htf_lower_high: 0.45          # raised: most important bear signal
-    oi_flush:       0.40          # raised: must see OI flush to confirm
-    ask_absorption: 0.15          # reduced: supplementary
+    oi_flush:       0.70          # primary: OI flush confirms capitulation
+    ask_absorption: 0.30          # secondary: absorption at resistance confirms supply
 
 # ── Risk management ──────────────────────────────────────────────────────────
 risk:
@@ -235,60 +229,6 @@ session_trap:
   cooldown_mins: 60
   max_entries_per_session: 3
   fire_threshold: 0.75       # 3 of 4 (tightened from 0.50)
-
-# ── 1H inside bar flip ────────────────────────────────────────────────────────
-# Mean-reversion off 1H compression zones (3+ consecutive inside bars).
-insidebar:
-  enabled: false  # DISABLED: 33.7% WR, account wiped in backtest (16k overtraded entries)
-  min_inside_bars: 3             # raised from 2 → 3 (strong_compression is now a hard gate)
-  max_zone_pct: 0.010            # tightened from 1.5% → 1.0% (real compression only)
-  near_poc_pct: 0.005            # price within 0.5% of POC (tightened from 1.0%)
-  entry_zone_pct: 0.002          # price within 0.2% of zone boundary to enter
-  sl_buffer_pct: 0.002           # SL 0.2% beyond zone boundary
-  rr_ratio: 1.5                  # TP = entry ± SL_dist × 1.5
-  fire_threshold: 0.75           # raised from 0.50 — both soft signals must fire
-  max_hold_bars: 6               # 6 × 1H bars = 6h max hold
-  cooldown_mins: 60              # per-symbol cooldown (1h between trades)
-  max_positions: 3               # max simultaneous inside bar positions
-  check_interval_secs: 60        # scan interval (align with 1H bar close)
-
-# ── Funding rate harvest ──────────────────────────────────────────────────────
-# Collect 8h funding payments by entering on the correct side of extreme rates.
-funding_harvest:
-  enabled: false  # DISABLED: 9.1% WR, only 11 trades in 6 months — insufficient activity
-  min_rate_pct: 0.0008           # |rate| ≥ 0.08% per 8h to trigger (raised from 0.05%)
-  strong_rate_pct: 0.0010        # ≥ 0.10% = bonus signal strength
-  trend_filter: true             # block counter-trend trades in TREND regime
-  entry_mins_before: 30          # enter 30 min before settlement
-  exit_mins_after: 15            # force-exit 15 min after settlement
-  sl_pct: 0.005                  # 0.5% SL (tight — limit directional risk)
-  tp_pct: 0.008                  # 0.8% TP (modest — income supplements this)
-  cooldown_hours: 8              # one trade per symbol per 8h window
-  max_entries_per_window: 4      # max simultaneous funding harvest positions
-  poll_interval_secs: 60         # how often to check within the active window
-  risk_pct: 0.005                # 0.5% risk per trade (smaller: income strategy)
-
-# ── Liquidity Sweep Reversal strategy ───────────────────────────────────────
-# Detects stop-hunt wicks through swing highs/lows then reversal close back.
-# Works in any regime — fills the bear-market gap when MAIN fires nothing.
-sweep:
-  enabled: false   # confirmed: all coins WR 0-10%, PF ≤ 1.03 except LINK
-  # LINK sweep PF1.40 but WR 10% — all timeouts, not reliable
-  check_interval_secs: 30
-  max_positions: 3              # max simultaneous sweep positions
-  cooldown_mins: 30             # 30 min per symbol between sweeps
-  fire_threshold: 0.75          # all 3 scored signals must fire (sweep_detected always True)
-  volume_spike_mult: 2.0        # sweep candle volume ≥ 2.0× 20-bar average (raised from 1.4×)
-  htf_no_block_pct: 0.010       # 4H close within 1.0% of EMA21 = not a strong opposing trend
-  min_wick_pct: 0.005           # wick must pierce swing level by ≥ 0.5% (raised from 0.15%)
-  rr_ratio: 1.1                 # reduced further — when re-enabled, TP closer to entry
-  exclude_symbols:
-    - DOGEUSDT   # confirmed 0% WR, chaotic wicks extend through TP
-    - SUIUSDT    # not tested — exclude until backtest confirms
-    - ETHUSDT    # WR 4.5% PF0.99 — break-even at best
-    - SOLUSDT    # WR 0% PF1.03 — all timeouts, no real wins
-    - BNBUSDT    # insufficient data, excluded proactively
-    # LINKUSDT only candidate — PF1.40 but WR 10%
 
 # ── 15m EMA Pullback strategy ────────────────────────────────────────────────
 # Trend-continuation entries at 15m EMA21 pullback, filtered by 4H direction.
@@ -407,22 +347,6 @@ btc_direction_gate:
   # flat BTC = allowed (altcoin season conditions)
   apply_to: [ema_pullback, vwap_band]
   skip_for: [BTCUSDT]
-
-# ── Break of Structure / Change of Character strategy ────────────────────────
-# Trades confirmed 1H structure breaks (swing high/low closes) with volume.
-# Low frequency (15-40 per symbol per year), high quality, 2.5× RR minimum.
-# Skips PUMP and CRASH regimes — structure breaks there are unreliable.
-bos:
-  enabled: false   # confirmed loser: XRP TREND PF0.20, LINK TREND PF0.32, SUI TREND PF0.52
-  pivot_n: 3                  # bars each side to confirm a swing point
-  lookback_bars: 50           # 1H candles to scan for swing structure
-  vol_confirm_mult: 1.3       # break bar volume ≥ this × 20-bar average
-  max_extension_pct: 0.02     # block if price already 2% beyond break level
-  check_interval_secs: 60
-  cooldown_mins: 60
-  max_positions: 2            # low frequency — cap at 2 simultaneous positions
-  rr_ratio: 2.5
-  sl_buffer_pct: 0.001        # SL 0.1% beyond the prior swing point
 
 # ── Fair Value Gap Fill strategy ─────────────────────────────────────────────
 # Entry into unfilled 1H price imbalance zones (FVGs).

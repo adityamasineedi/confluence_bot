@@ -38,14 +38,16 @@ _FVG_CFG = _cfg.get("fvg", {})
 
 _COOLDOWN_SECS  = float(_FVG_CFG.get("cooldown_mins",   45))   * 60.0
 _THRESHOLD      = 0.67          # fvg(0.30) + htf(0.25) + rsi(0.20) = 0.75 >= 0.67 → fires
+                                # irb_confirm(0.10) raises ceiling; vol_confirm/rvol_ok reduced to compensate
 
 _SIGNAL_WEIGHTS = {
     "fvg_detected": 0.30,   # hard gate — primary signal
     "htf_aligned":  0.25,   # HTF direction alignment
     "rsi_confirm":  0.20,   # RSI zone
-    "vol_confirm":  0.10,   # volume spike at entry
+    "vol_confirm":  0.05,   # reduced from 0.10 to make room for irb_confirm
     "vol_not_dist": 0.10,   # no distribution/accumulation pattern
-    "rvol_ok":      0.05,   # relative volume acceptable
+    "irb_confirm":  0.10,   # IRB: 2-bar pullback + close in top/bottom 25% of range
+    # rvol_ok removed from weights (kept in signals for logging) — freed 0.05 for irb_confirm
 }
 _SL_BUFFER_PCT  = float(_FVG_CFG.get("sl_buffer_pct",   0.002))
 _RR_RATIO       = float(_FVG_CFG.get("rr_ratio",        2.0))
@@ -136,6 +138,7 @@ async def score(symbol: str, cache) -> list[dict]:
         fvg_stop, fvg_tp  — gap-anchored SL/TP for executor
     """
     from signals.trend.fvg import check_fvg_bullish, check_fvg_bearish, get_fvg_levels
+    from signals.trend.irb import check_irb_long, check_irb_short
     from signals.volume_momentum import extreme_volatility
 
     # Extreme volatility gate — flat during flash crashes (gaps past SL, huge slippage)
@@ -197,11 +200,17 @@ async def score(symbol: str, cache) -> list[dict]:
                 "rsi_confirm":  rsi_ok,
                 "vol_confirm":  vol_confirms,
                 "vol_not_dist": vol_not_dist,
-                "rvol_ok":      rvol_ok,
+                "rvol_ok":      rvol_ok,       # informational only — weight removed
+                "irb_confirm":  check_irb_long(symbol, cache),
             }
             score_val = round(sum(
                 _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
             ), 4)
+
+            at_key_level = cache.near_key_level(symbol, price, 0.003)
+            signals["at_key_level"] = at_key_level
+            if at_key_level:
+                score_val = min(score_val + 0.15, 1.0)
 
             sl   = gap_low * (1.0 - _SL_BUFFER_PCT)
             dist = abs(price - sl)
@@ -254,11 +263,17 @@ async def score(symbol: str, cache) -> list[dict]:
                 "rsi_confirm":   rsi_ok,
                 "vol_confirm":   vol_confirms,
                 "vol_not_dist":  vol_not_accum,   # reuse shared weight key
-                "rvol_ok":       rvol_ok,
+                "rvol_ok":       rvol_ok,          # informational only — weight removed
+                "irb_confirm":   check_irb_short(symbol, cache),
             }
             score_val = round(sum(
                 _SIGNAL_WEIGHTS.get(k, 0.0) for k, v in signals.items() if v
             ), 4)
+
+            at_key_level = cache.near_key_level(symbol, price, 0.003)
+            signals["at_key_level"] = at_key_level
+            if at_key_level:
+                score_val = min(score_val + 0.15, 1.0)
 
             sl   = gap_high * (1.0 + _SL_BUFFER_PCT)
             dist = abs(sl - price)

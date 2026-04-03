@@ -253,9 +253,8 @@ def _trend_coros(symbol: str, cache) -> list:
 
 def _range_coros(symbol: str, cache) -> list:
     from .range_scorer import score as range_long
-    from .range_short_scorer import score as range_short
 
-    return [range_long(symbol, cache), range_short(symbol, cache)]
+    return [range_long(symbol, cache)]
 
 
 def _crash_coros(symbol: str, cache) -> list:

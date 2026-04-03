@@ -1,28 +1,37 @@
-"""Cumulative Volume Delta — bullish divergence signal for TREND regime."""
-
-
-def check_cvd_divergence(symbol: str, cache) -> bool:
-    """True when price is making a lower low but CVD is making a higher low.
-
-    Bullish hidden divergence: sellers can't push CVD down despite price falling
-    → buyers are absorbing, reversal likely.
-
-    Requires at least 3 data points (oldest is index -3, newest is -1).
-    """
-    prices = cache.get_closes(symbol, window=10, tf="5m")
-    cvd    = cache.get_cvd(symbol,    window=10, tf="5m")
-    if len(prices) < 3 or len(cvd) < 3:
-        return False
-    return prices[-1] < prices[-3] and cvd[-1] > cvd[-3]
+"""Cumulative Volume Delta — bullish pressure signals for TREND regime."""
 
 
 def check_cvd_bullish(symbol: str, cache) -> bool:
-    """True when CVD slope is positive — net buying pressure over last N candles.
+    """True when buying pressure is building over the last 48 × 1H candles (2 days).
 
-    Uses the same divergence check as the primary signal; a positive slope
-    (cvd[-1] > cvd[-3]) without the price condition confirms clean upside flow.
+    Compares the average CVD of the second half of the window to the first half.
+    A rising average means net buying is accelerating, not fading.
+    Requires at least 12 closed 1H candles to avoid noise during warmup.
     """
-    cvd = cache.get_cvd(symbol, window=10, tf="5m")
-    if len(cvd) < 3:
+    cvd = cache.get_cvd(symbol, window=48, tf="1h")
+    if not cvd or len(cvd) < 12:
         return False
-    return cvd[-1] > cvd[-3]
+    mid = len(cvd) // 2
+    first_half_avg  = sum(cvd[:mid]) / mid
+    second_half_avg = sum(cvd[mid:]) / (len(cvd) - mid)
+    return second_half_avg > first_half_avg
+
+
+def check_cvd_divergence(symbol: str, cache) -> bool:
+    """Bullish divergence: price making a lower low but CVD making a higher low.
+
+    Uses 24 × 4H bars (4 days) so both the price and flow comparison span
+    a meaningful trend segment rather than intraday noise.
+    Compares the minimum of the first half to the minimum of the second half
+    for both series, which is more robust than a single point comparison.
+    """
+    prices = cache.get_closes(symbol, window=24, tf="4h")
+    cvd    = cache.get_cvd(symbol,    window=24, tf="4h")
+    if not prices or not cvd or len(prices) < 8 or len(cvd) < 8:
+        return False
+    quarter     = len(prices) // 4
+    price_early = min(prices[:quarter * 2])
+    price_late  = min(prices[quarter * 2:])
+    cvd_early   = min(cvd[:quarter * 2])
+    cvd_late    = min(cvd[quarter * 2:])
+    return price_late < price_early and cvd_late > cvd_early

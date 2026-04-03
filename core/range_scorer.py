@@ -5,11 +5,8 @@ import yaml
 from signals.range.absorption      import check_absorption_ratio
 from signals.range.wyckoff_spring  import check_wyckoff_spring
 from signals.range.perp_basis      import check_perp_basis
-from signals.range.options_skew    import check_options_skew
 from signals.range.anchored_vwap   import check_anchored_vwap, check_vwap_oversold
 from signals.trend.fvg             import check_fvg_bullish
-from signals.range.time_distribution import check_time_distribution
-from signals.range.call_skew_roc   import check_call_skew_roc
 from signals.range.rsi_oversold    import check_rsi_oversold
 from .range_filter import passes_range_filters
 
@@ -39,10 +36,7 @@ async def score(symbol: str, cache) -> dict:
         "absorption":        check_absorption_ratio(symbol, cache),
         "wyckoff_spring":    check_wyckoff_spring(symbol, cache),
         "perp_basis":        check_perp_basis(symbol, cache),
-        "options_skew":      check_options_skew(symbol, cache),
         "anchored_vwap":     check_anchored_vwap(symbol, cache),
-        "time_distribution": check_time_distribution(symbol, cache),
-        "call_skew_roc":     check_call_skew_roc(symbol, cache),
         "rsi_oversold":      check_rsi_oversold(symbol, cache),
         "vwap_oversold":     check_vwap_oversold(symbol, cache),
         "fvg_bullish":       check_fvg_bullish(symbol, cache),

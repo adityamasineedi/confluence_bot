@@ -9,7 +9,6 @@ from signals.trend.htf_structure  import check_htf_structure
 from signals.trend.oi_funding     import check_oi_funding
 from signals.range.absorption     import check_absorption_ratio
 from signals.trend.bb_squeeze     import check_bb_squeeze_bullish
-from signals.bear.htf_lower_high  import check_htf_lower_high
 from signals.bear.oi_flush        import check_oi_long_flush
 from signals.range.ask_absorption import check_ask_absorption_ratio
 from .filter import passes_breakout_long_filters, passes_breakout_short_filters
@@ -61,15 +60,14 @@ async def score_long(symbol: str, cache) -> dict:
 async def score_short(symbol: str, cache) -> dict:
     """BREAKOUT SHORT: price just broke below range low with OI flush confirmation."""
     signals: dict[str, bool] = {
-        "htf_lower_high": check_htf_lower_high(symbol, cache),
         "oi_flush":       check_oi_long_flush(symbol, cache),
         "ask_absorption": check_ask_absorption_ratio(symbol, cache),
     }
-    avail     = {"htf_lower_high", "oi_flush", "ask_absorption"}
+    avail     = {"oi_flush", "ask_absorption"}
     score_val = _norm(signals, _W_SHORT, avail)
 
-    # Need at least 2 of 3 signals
-    min_ok = sum(signals.values()) >= 2
+    # Both signals required — _norm auto-weights over the two remaining signals
+    min_ok = signals["oi_flush"] and signals["ask_absorption"]
     fire   = score_val >= _THR_S and min_ok and passes_breakout_short_filters(symbol, cache)
 
     return {

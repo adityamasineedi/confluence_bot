@@ -175,7 +175,6 @@ async def score_range_short(symbol: str, cache) -> dict:
     from signals.range.ask_absorption   import check_ask_absorption_ratio
     from signals.range.upthrust         import check_wyckoff_upthrust
     from signals.range.anchored_vwap    import check_anchored_vwap
-    from signals.range.time_distribution import check_time_distribution
     from core.range_filter import passes_range_filters
 
     weights = _cfg["weights"]["range_short"]
@@ -186,7 +185,6 @@ async def score_range_short(symbol: str, cache) -> dict:
         "ask_absorption":    check_ask_absorption_ratio(symbol, cache),
         "upthrust":          check_wyckoff_upthrust(symbol, cache),
         "anchored_vwap":     check_anchored_vwap(symbol, cache),
-        "time_distribution": check_time_distribution(symbol, cache),
     }
 
     score  = _normalised_score(signals, weights, avail)
@@ -254,8 +252,7 @@ async def score_breakout_long(symbol: str, cache) -> dict:
 
 async def score_breakout_short(symbol: str, cache) -> dict:
     """BREAKOUT SHORT scorer — price just broke below range low with volume."""
-    from signals.bear.htf_lower_high import check_htf_lower_high
-    from signals.bear.oi_flush       import check_oi_long_flush
+    from signals.bear.oi_flush        import check_oi_long_flush
     from signals.range.ask_absorption import check_ask_absorption_ratio
     from core.filter import passes_breakout_short_filters
 
@@ -264,7 +261,6 @@ async def score_breakout_short(symbol: str, cache) -> dict:
     avail   = _AVAILABLE["breakout_short"]
 
     signals: dict[str, bool] = {
-        "htf_lower_high": check_htf_lower_high(symbol, cache),
         "oi_flush":       check_oi_long_flush(symbol, cache),
         "ask_absorption": check_ask_absorption_ratio(symbol, cache),
     }

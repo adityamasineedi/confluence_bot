@@ -72,6 +72,7 @@ async def score(symbol: str, cache) -> list[dict]:
         _htf_bullish,
         _htf_bearish,
     )
+    from signals.trend.irb import check_irb_long, check_irb_short
 
     from signals.volume_momentum import extreme_volatility
 
@@ -120,11 +121,16 @@ async def score(symbol: str, cache) -> list[dict]:
             "htf_aligned":    htf_aligned,
             "ema_structure":  ema_structure,
             "pullback_touch": True,   # True by definition (pullback_long passed)
+            "irb_confirm":    check_irb_long(symbol, cache),
         }
         score_val = sum(0.25 for v in signals.values() if v)
         from core.symbol_config import get_symbol_tier
         tier = get_symbol_tier(symbol)
         entry, stop, tp = get_ema15m_long_levels(symbol, cache, tier=tier)
+        at_key_level = cache.near_key_level(symbol, entry, 0.003) if entry > 0 else False
+        signals["at_key_level"] = at_key_level
+        if at_key_level:
+            score_val = min(score_val + 0.25, 1.0)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
         from core.weekly_trend_gate import weekly_allows_long
         spike_ok  = atr_spike_ok(symbol, cache, tf="15m")
@@ -166,11 +172,16 @@ async def score(symbol: str, cache) -> list[dict]:
             "htf_aligned":    htf_aligned,
             "ema_structure":  ema_structure,
             "pullback_touch": True,
+            "irb_confirm":    check_irb_short(symbol, cache),
         }
         score_val = sum(0.25 for v in signals.values() if v)
         from core.symbol_config import get_symbol_tier
         tier = get_symbol_tier(symbol)
         entry, stop, tp = get_ema15m_short_levels(symbol, cache, tier=tier)
+        at_key_level = cache.near_key_level(symbol, entry, 0.003) if entry > 0 else False
+        signals["at_key_level"] = at_key_level
+        if at_key_level:
+            score_val = min(score_val + 0.25, 1.0)
         # bounce_ok and vol_ok are hard gates — not scored, but block fire if False
         from core.weekly_trend_gate import weekly_allows_short
         spike_ok  = atr_spike_ok(symbol, cache, tf="15m")

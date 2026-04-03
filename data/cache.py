@@ -169,6 +169,32 @@ class DataCache:
                 return float(buf[-1]["c"])
         return 0.0
 
+    # ── Key institutional levels ──────────────────────────────────────────────
+
+    def get_key_levels(self, symbol: str) -> dict:
+        """Return prior day and prior week high/low for symbol.
+
+        Returns zeros for any unavailable level — callers must handle 0.0 gracefully.
+        """
+        daily  = self.get_ohlcv(symbol, window=3, tf="1d")
+        weekly = self.get_ohlcv(symbol, window=3, tf="1w")
+
+        pdh = daily[-2]["h"]  if len(daily)  >= 2 else 0.0
+        pdl = daily[-2]["l"]  if len(daily)  >= 2 else 0.0
+        pwh = weekly[-2]["h"] if len(weekly) >= 2 else 0.0
+        pwl = weekly[-2]["l"] if len(weekly) >= 2 else 0.0
+
+        return {"pdh": pdh, "pdl": pdl, "pwh": pwh, "pwl": pwl}
+
+    def near_key_level(self, symbol: str, price: float,
+                       tolerance_pct: float = 0.003) -> bool:
+        """True when price is within tolerance_pct of any PDH/PDL/PWH/PWL level."""
+        levels = self.get_key_levels(symbol)
+        for level in levels.values():
+            if level > 0 and abs(price - level) / level <= tolerance_pct:
+                return True
+        return False
+
     # ── CVD reads ─────────────────────────────────────────────────────────────
 
     def get_cvd(self, symbol: str, window: int, tf: str) -> list[float]:

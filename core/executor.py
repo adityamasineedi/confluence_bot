@@ -190,13 +190,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "LEADLAG":     ("ll_stop",  "ll_tp"),
         "MICRORANGE":  ("mr_stop",  "mr_tp"),
         "SESSION":     ("ss_stop",  "ss_tp"),
-        "INSIDEBAR":   ("ib_stop",  "ib_tp"),
-        "FUNDING":     ("fh_stop",  "fh_tp"),
-        "SWEEP":       ("sw_stop",  "sw_tp"),
         "EMA_PULLBACK":("ep_stop",  "ep_tp"),
         "ZONE":        ("zn_stop",  "zn_tp"),
         "FVG":         ("fvg_stop", "fvg_tp"),
-        "BOS":         ("bos_stop", "bos_tp"),
         "VWAPBAND":    ("vb_stop",  "vb_tp"),
         "OISPIKE":     ("os_stop",  "os_tp"),
     }
@@ -206,13 +202,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "LEADLAG":      _cfg["risk"]["rr_ratio"],   # 2.5
         "MICRORANGE":   1.5,
         "SESSION":      1.2,
-        "INSIDEBAR":    1.2,
-        "FUNDING":      1.2,
-        "SWEEP":        2.0,
         "EMA_PULLBACK": 2.0,
         "ZONE":         2.0,
         "FVG":          2.0,
-        "BOS":          2.5,
         "VWAPBAND":     1.5,
         "OISPIKE":      2.0,
     }
@@ -351,15 +343,6 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     elif regime == "MICRORANGE":
         from .microrange_scorer import set_cooldown
         set_cooldown(symbol)
-    elif regime == "INSIDEBAR":
-        from .insidebar_scorer import set_cooldown
-        set_cooldown(symbol)
-    elif regime == "FUNDING":
-        from .funding_harvest_scorer import set_cooldown
-        set_cooldown(symbol)
-    elif regime == "SWEEP":
-        from .sweep_scorer import set_cooldown
-        set_cooldown(symbol)
     elif regime == "EMA_PULLBACK":
         from .ema_pullback_scorer import set_cooldown
         set_cooldown(symbol)
@@ -368,9 +351,6 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         set_cooldown(symbol)
     elif regime == "FVG":
         from .fvg_scorer import set_cooldown
-        set_cooldown(symbol)
-    elif regime == "BOS":
-        from .bos_scorer import set_cooldown
         set_cooldown(symbol)
     elif regime == "VWAPBAND":
         from .vwap_band_scorer import set_cooldown

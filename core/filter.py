@@ -57,6 +57,30 @@ def _btc_not_overextended(cache) -> bool:
     return btc_4h[-1] <= ema * _BTC_OVEREXT_MULT
 
 
+def _eth_above_ema21_4h(cache) -> bool:
+    """True when ETH 4H close is above its 4H EMA21 (secondary macro confirmation)."""
+    closes = cache.get_closes("ETHUSDT", window=25, tf="4h")
+    if len(closes) < 21:
+        return True   # insufficient data — fail open
+    k   = 2.0 / 22
+    ema = sum(closes[:21]) / 21
+    for c in closes[21:]:
+        ema = c * k + ema * (1.0 - k)
+    return closes[-1] > ema
+
+
+def _eth_below_ema21_4h(cache) -> bool:
+    """True when ETH 4H close is below its 4H EMA21 (secondary macro confirmation)."""
+    closes = cache.get_closes("ETHUSDT", window=25, tf="4h")
+    if len(closes) < 21:
+        return True   # insufficient data — fail open
+    k   = 2.0 / 22
+    ema = sum(closes[:21]) / 21
+    for c in closes[21:]:
+        ema = c * k + ema * (1.0 - k)
+    return closes[-1] < ema
+
+
 def _di_lines(symbol: str, cache) -> tuple[float, float]:
     """Return (+DI, -DI) from ADX(14) on the symbol's 4H candles."""
     from core.regime_detector import get_adx_info
@@ -152,6 +176,22 @@ def passes_trend_long_filters(symbol: str, cache) -> bool:
         log.info("TREND LONG filter BLOCKED %s: Gate6 vol_24h=%.0f too low", symbol, vol_24h)
         return False
 
+    # Gate 7: ETH cross-confirmation (Dow Theory)
+    # For non-ETH alts: require ETH also in uptrend.
+    # BTC up + ETH down = BTC-specific move; alts fail more often in that environment.
+    if symbol.upper() not in ("BTCUSDT", "ETHUSDT"):
+        if not _eth_above_ema21_4h(cache):
+            log.info("Dow cross-confirm BLOCKED %s LONG: ETH below 4H EMA21", symbol)
+            return False
+
+    # Gate 8: Distribution filter (Dow Theory principle 3)
+    # Block LONG if institutions appear to be selling into the trend:
+    # price making higher highs but CVD (net buying pressure) is not confirming.
+    from signals.trend.distribution import is_distributing
+    if is_distributing(symbol, cache):
+        log.info("Distribution BLOCKED %s LONG: price HH but CVD LH", symbol)
+        return False
+
     return True
 
 
@@ -192,6 +232,14 @@ def passes_trend_short_filters(symbol: str, cache) -> bool:
     vol_24h = cache.get_vol_24h(symbol)
     if vol_24h is not None and vol_24h < _MIN_24H_VOL:
         return False
+
+    # Gate 6: ETH cross-confirmation (Dow Theory)
+    # For non-ETH alts: require ETH also in downtrend.
+    # BTC down + ETH up = BTC-specific; alts often decouple and recover faster.
+    if symbol.upper() not in ("BTCUSDT", "ETHUSDT"):
+        if not _eth_below_ema21_4h(cache):
+            log.info("Dow cross-confirm BLOCKED %s SHORT: ETH above 4H EMA21", symbol)
+            return False
 
     return True
 
