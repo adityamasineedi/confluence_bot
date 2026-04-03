@@ -1,303 +1,568 @@
-"""Backtest engine — replays history bar-by-bar through the live scoring pipeline.
-
-Capital compounds: each trade risks `risk_pct` of the current equity.
-At 2.5 RR a win returns risk × 2.5; a loss costs exactly risk.
-ATR-based stops from rr_calculator determine entry/SL/TP price levels;
-the dollar risk is always the percentage of current equity, not a fixed amount.
 """
-import asyncio
-import logging
+backtest/engine.py
+Pure numpy vectorized backtest engine.
+No live scorer calls. No asyncio overhead.
+All indicators computed once as arrays, signal detection
+is boolean array intersection — O(n) total not O(n²).
+"""
+import json
+import os
+from dataclasses import dataclass
 
-log = logging.getLogger(__name__)
+import numpy as np
 
-_RR_RATIO           = 2.5    # must match config.yaml risk.rr_ratio
-_PUMP_RR_MAX        = 5.0    # PUMP regime: let winners run to 5× before hard cap
-_MAX_HOLD_BARS      = 48     # force-close after 48 × 1h bars (2 days)
-_WARMUP_BARS        = 210    # bars to skip for indicator warmup
-_TRAIL_ACTIVATE_RR  = 1.0    # trailing stop activates once 1R in profit (locks in 0R min)
-_TRAIL_DIST_MULT    = 1.0    # trailing distance = 1× stop dist
+DATA_DIR  = os.path.join(os.path.dirname(__file__), "data")
+WARMUP    = 210      # bars skipped for indicator warmup
+MAX_HOLD  = 48       # 1H bars max — force close after 2 days
+RR        = 2.5      # reward:risk ratio
+SL_MULT   = 1.5      # stop = entry +/- ATR x SL_MULT
+MIN_SL    = 0.005    # minimum 0.5% stop distance (noise floor)
+FEE_RT    = 0.001    # 0.10% round-trip taker fee
 
-
-def _update_trailing(trade: dict, bar: dict) -> None:
-    """Update trailing stop in-place for PUMP trades.
-
-    Activates once the trade is _TRAIL_ACTIVATE_RR × risk in profit.
-    Tracks the extreme price (high for LONG, low for SHORT) and ratchets
-    the stop up / down — never in the adverse direction.
-    """
-    if not trade.get("trailing"):
-        return
-
-    stop_dist = trade["trail_dist"]
-
-    if trade["direction"] == "LONG":
-        trade["trail_extreme"] = max(trade.get("trail_extreme", trade["entry"]), bar["h"])
-        # Only activate once price has moved TRAIL_ACTIVATE_RR × stop_dist above entry
-        if trade["trail_extreme"] >= trade["entry"] + stop_dist * _TRAIL_ACTIVATE_RR:
-            new_sl = trade["trail_extreme"] - stop_dist * _TRAIL_DIST_MULT
-            if new_sl > trade["sl"]:
-                trade["sl"] = round(new_sl, 8)
-    else:
-        trade["trail_extreme"] = min(trade.get("trail_extreme", trade["entry"]), bar["l"])
-        if trade["trail_extreme"] <= trade["entry"] - stop_dist * _TRAIL_ACTIVATE_RR:
-            new_sl = trade["trail_extreme"] + stop_dist * _TRAIL_DIST_MULT
-            if new_sl < trade["sl"]:
-                trade["sl"] = round(new_sl, 8)
+# numpy column indices
+O, H, L, C, V, TS = 0, 1, 2, 3, 4, 5
 
 
-def _check_exit(trade: dict, bar: dict) -> dict | None:
-    """Check SL/TP hit using bar high/low. SL wins on simultaneous hit."""
-    h, l   = bar["h"], bar["l"]
-    risk   = trade["risk_amount"]
-    rr     = _PUMP_RR_MAX if trade.get("trailing") else _RR_RATIO
+# ─── Data loading ─────────────────────────────────────────────────────────────
 
-    if trade["direction"] == "LONG":
-        sl_hit = l <= trade["sl"]
-        tp_hit = h >= trade["tp"]
-    else:
-        sl_hit = h >= trade["sl"]
-        tp_hit = l <= trade["tp"]
-
-    if sl_hit and tp_hit:
-        sl_hit, tp_hit = True, False   # worst-case: SL first
-
-    if sl_hit:
-        # For trailing trades, calculate actual PnL from current SL (not entry)
-        if trade.get("trailing") and trade["sl"] > trade["entry"] and trade["direction"] == "LONG":
-            stop_dist = trade.get("trail_dist") or abs(trade["entry"] - trade["sl"])
-            actual_pnl = (trade["sl"] - trade["entry"]) / stop_dist * risk if stop_dist > 0 else -risk
-            actual_pnl = max(actual_pnl, -risk)
-            return {**trade, "exit_ts": bar["ts"], "outcome": "WIN" if actual_pnl > 0 else "LOSS",
-                    "pnl": round(actual_pnl, 2)}
-        return {**trade, "exit_ts": bar["ts"], "outcome": "LOSS",
-                "pnl": round(-risk, 2)}
-    if tp_hit:
-        return {**trade, "exit_ts": bar["ts"], "outcome": "WIN",
-                "pnl": round(risk * rr, 2)}
-    return None
+def load(symbol: str) -> dict[str, np.ndarray] | None:
+    """Load all timeframes for a symbol from backtest/data/{symbol}.json"""
+    path = os.path.join(DATA_DIR, f"{symbol}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        raw = json.load(f)
+    result = {}
+    for key, bars in raw.items():
+        if bars:
+            result[key] = np.array(
+                [[b["o"], b["h"], b["l"], b["c"], b["v"], b["ts"]]
+                 for b in bars],
+                dtype=np.float64
+            )
+    return result
 
 
-def _force_close(trade: dict, bar: dict) -> dict:
-    """Close at current bar close (max-hold timeout). PnL scales with risk_amount."""
-    entry     = trade["entry"]
-    close     = bar["c"]
-    risk      = trade["risk_amount"]
+# ─── Indicators ───────────────────────────────────────────────────────────────
 
-    if trade["direction"] == "LONG":
-        pct = (close - entry) / entry
-    else:
-        pct = (entry - close) / entry
+def ema(closes: np.ndarray, period: int) -> np.ndarray:
+    """EMA — seeded SMA then Wilder smoothing."""
+    n = len(closes)
+    if n < period:
+        return np.zeros(n)
+    k   = 2.0 / (period + 1)
+    out = np.empty(n)
+    out[:period] = 0.0
+    out[period - 1] = closes[:period].mean()
+    # use numpy cumulative approach via python loop
+    # — but now only called ONCE per symbol not per bar
+    rest = closes[period:]
+    prev = out[period - 1]
+    for i, c in enumerate(rest, start=period):
+        prev   = c * k + prev * (1.0 - k)
+        out[i] = prev
+    return out
 
-    stop_dist = abs(entry - trade["sl"])
-    pnl = (pct * entry / stop_dist * risk) if stop_dist > 0 else 0.0
-    # Cap loss at risk_amount (stop was never hit, but price may have gapped through)
-    pnl = max(pnl, -risk)
 
-    return {**trade, "exit_ts": bar["ts"], "outcome": "TIMEOUT",
-            "pnl": round(pnl, 2)}
+def atr(bars: np.ndarray, period: int = 14) -> np.ndarray:
+    n  = len(bars)
+    tr = np.zeros(n)
+    if n < 2:
+        return tr
+    tr[1:] = np.maximum(
+        bars[1:, H] - bars[1:, L],
+        np.maximum(np.abs(bars[1:, H] - bars[:-1, C]),
+                   np.abs(bars[1:, L] - bars[:-1, C]))
+    )
+    out = np.zeros(n)
+    if n >= period:
+        out[period - 1] = tr[1:period].mean()
+        a = 1.0 / period
+        for i in range(period, n):
+            out[i] = out[i - 1] * (1 - a) + tr[i] * a
+    return out
 
 
-async def run(
-    symbols:          list[str],
-    ohlcv:            dict[str, list[dict]],
-    oi:               dict[str, list[dict]],
-    funding:          dict[str, list[dict]],
-    warmup_bars:      int   = _WARMUP_BARS,
-    starting_capital: float = 1_000.0,
-    risk_pct:         float = 0.02,          # 2 % of equity per trade
-) -> list[dict]:
-    """
-    Run the full backtest.  Returns a list of closed trade dicts.
+def rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
+    n    = len(closes)
+    out  = np.full(n, 50.0)
+    if n < period + 1:
+        return out
+    d    = np.diff(closes, prepend=closes[0])
+    gain = np.where(d > 0,  d, 0.0)
+    loss = np.where(d < 0, -d, 0.0)
+    ag, al = np.zeros(n), np.zeros(n)
+    ag[period] = gain[1:period + 1].mean()
+    al[period] = loss[1:period + 1].mean()
+    for i in range(period + 1, n):
+        ag[i] = (ag[i - 1] * (period - 1) + gain[i]) / period
+        al[i] = (al[i - 1] * (period - 1) + loss[i]) / period
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = 100.0 - 100.0 / (1.0 + np.where(al > 0, ag / al, 100.0))
+    return out
 
-    Each trade dict contains:
-        symbol, regime, direction, entry, sl, tp,
-        entry_ts, exit_ts, outcome (WIN/LOSS/TIMEOUT),
-        pnl, risk_amount, equity_after,
-        score, signals
-    """
-    from backtest.cache import BacktestCache
-    from core.regime_detector import RegimeDetector
-    import core.rr_calculator as rr_calc
-    from backtest.scorer import (
-        score_trend_long, score_trend_short,
-        score_range_long, score_range_short,
-        score_crash,
-        score_pump,
-        score_breakout_long, score_breakout_short,
+
+def adx(bars: np.ndarray, period: int = 14) -> np.ndarray:
+    n = len(bars)
+    if n < period * 2 + 2:
+        return np.zeros(n)
+    up  = np.diff(bars[:, H], prepend=bars[0, H])
+    dn  = -np.diff(bars[:, L], prepend=bars[0, L])
+    pdm = np.where((up > dn)  & (up > 0),  up, 0.0)
+    mdm = np.where((dn > up)  & (dn > 0),  dn, 0.0)
+    tr_ = np.zeros(n)
+    tr_[1:] = np.maximum(
+        bars[1:, H] - bars[1:, L],
+        np.maximum(np.abs(bars[1:, H] - bars[:-1, C]),
+                   np.abs(bars[1:, L] - bars[:-1, C]))
     )
 
-    cache    = BacktestCache(ohlcv, oi, funding)
-    detector = RegimeDetector()
-    equity   = starting_capital
+    def wilder(x: np.ndarray) -> np.ndarray:
+        w = np.zeros(n)
+        w[period] = x[1:period + 1].sum()
+        for i in range(period + 1, n):
+            w[i] = w[i - 1] - w[i - 1] / period + x[i]
+        return w
 
-    anchor_key = f"{symbols[0]}:1h"
-    all_1h     = ohlcv.get(anchor_key, [])
-    if len(all_1h) < warmup_bars + 10:
-        log.error("Insufficient 1h data (need >%d bars, got %d)", warmup_bars, len(all_1h))
+    sa, sp, sm = wilder(tr_), wilder(pdm), wilder(mdm)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dip = np.where(sa > 0, 100.0 * sp / sa, 0.0)
+        dim = np.where(sa > 0, 100.0 * sm / sa, 0.0)
+        dx  = np.where((dip + dim) > 0,
+                       np.abs(dip - dim) / (dip + dim) * 100.0, 0.0)
+    out = np.zeros(n)
+    start = period * 2
+    if n > start:
+        out[start] = dx[period:start].mean()
+        for i in range(start + 1, n):
+            out[i] = (out[i - 1] * (period - 1) + dx[i]) / period
+    return out
+
+
+def vol_ma(bars: np.ndarray, period: int = 20) -> np.ndarray:
+    """Rolling volume MA using numpy stride tricks — no Python loop."""
+    n   = len(bars)
+    vol = bars[:, V]
+    out = np.zeros(n)
+    if n < period:
+        return out
+    # np.cumsum trick: O(n) instead of O(n x period)
+    cs       = np.cumsum(vol)
+    out[period:] = (cs[period:] - cs[:-period]) / period
+    # fill first `period` bars with expanding mean
+    out[period - 1] = vol[:period].mean()
+    return out
+
+
+def map_series(src_bars: np.ndarray, src_vals: np.ndarray,
+               tgt_bars: np.ndarray) -> np.ndarray:
+    """Map src_vals (aligned with src_bars) onto tgt_bars via timestamp.
+    Each target bar gets the most recent source value at or before its ts.
+    """
+    idx = np.searchsorted(src_bars[:, TS], tgt_bars[:, TS], side="right") - 1
+    idx = np.clip(idx, 0, len(src_vals) - 1)
+    return src_vals[idx]
+
+
+# ─── Signal detection (boolean arrays) ───────────────────────────────────────
+
+def sig_fvg_long(bars_1h: np.ndarray) -> np.ndarray:
+    """Bullish FVG: bar[i-2].high < bar[i].low  (upward price gap)."""
+    s = np.zeros(len(bars_1h), bool)
+    if len(bars_1h) >= 3:
+        s[2:] = bars_1h[:-2, H] < bars_1h[2:, L]
+    return s
+
+
+def sig_fvg_short(bars_1h: np.ndarray) -> np.ndarray:
+    """Bearish FVG: bar[i-2].low > bar[i].high  (downward price gap)."""
+    s = np.zeros(len(bars_1h), bool)
+    if len(bars_1h) >= 3:
+        s[2:] = bars_1h[:-2, L] > bars_1h[2:, H]
+    return s
+
+
+def sig_ema_pullback_long(bars: np.ndarray,
+                           e21: np.ndarray, e50: np.ndarray,
+                           touch_pct: float = 0.003) -> np.ndarray:
+    """EMA21 pullback LONG: trend intact + touch + green bar + vol confirm."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        touch = np.where(e21 > 0, np.abs(bars[:, C] - e21) / e21 <= touch_pct, False)
+    green = bars[:, C] > bars[:, O]
+    vol_c = np.zeros(len(bars), bool)
+    vol_c[1:] = bars[1:, V] > bars[:-1, V]
+    return (e21 > e50) & touch & green & vol_c
+
+
+def sig_ema_pullback_short(bars: np.ndarray,
+                            e21: np.ndarray, e50: np.ndarray,
+                            touch_pct: float = 0.003) -> np.ndarray:
+    """EMA21 pullback SHORT: mirror of long."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        touch = np.where(e21 > 0, np.abs(bars[:, C] - e21) / e21 <= touch_pct, False)
+    red   = bars[:, C] < bars[:, O]
+    vol_c = np.zeros(len(bars), bool)
+    vol_c[1:] = bars[1:, V] > bars[:-1, V]
+    return (e21 < e50) & touch & red & vol_c
+
+
+def sig_vwap_long(bars: np.ndarray) -> np.ndarray:
+    """VWAP lower-band touch using rolling cumsum — no Python loop."""
+    n     = len(bars)
+    rsi_  = rsi(bars[:, C])
+    vol   = bars[:, V]
+    pv    = bars[:, C] * vol     # price x volume
+    pc2   = bars[:, C] ** 2      # price^2 for std calculation
+
+    win = 20
+    out = np.zeros(n, bool)
+
+    # Rolling sums via cumsum — O(n) no loop
+    cs_vol = np.cumsum(vol)
+    cs_pv  = np.cumsum(pv)
+    cs_pc2 = np.cumsum(pc2)
+
+    if n < win + 1:
+        return out
+
+    # For i >= win:
+    # sum_vol  = cs_vol[i] - cs_vol[i-win]
+    # sum_pv   = cs_pv[i]  - cs_pv[i-win]
+    # sum_pc2  = cs_pc2[i] - cs_pc2[i-win]
+    i = np.arange(win, n)
+    sum_vol = cs_vol[i]   - cs_vol[i - win]
+    sum_pv  = cs_pv[i]    - cs_pv[i - win]
+    sum_pc2 = cs_pc2[i]   - cs_pc2[i - win]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        vwap_ = np.where(sum_vol > 0, sum_pv / sum_vol, bars[i, C])
+        var_  = np.where(sum_vol > 0, sum_pc2 / sum_vol - vwap_**2, 0.0)
+        std_  = np.sqrt(np.maximum(var_, 0.0))
+
+    lower = vwap_ - 2.0 * std_
+
+    # price low touched or went below the lower band
+    at_band       = np.zeros(n, bool)
+    at_band[win:] = bars[win:, L] <= lower
+
+    out = (rsi_ < 35) & at_band
+    return out
+
+
+def sig_microrange_short(bars: np.ndarray,
+                          win: int = 10,
+                          max_rng_pct: float = 0.007) -> np.ndarray:
+    """Microrange SHORT — vectorized using rolling max/min + cumsum vol."""
+    n    = len(bars)
+    rsi_ = rsi(bars[:, C])
+    vm   = vol_ma(bars, 20)
+    sig  = np.zeros(n, bool)
+
+    if n < win + WARMUP:
+        return sig
+
+    # Rolling max of highs and min of lows over window `win`
+    # Use stride tricks for O(n) rolling window
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    highs = bars[:, H]
+    lows  = bars[:, L]
+
+    # sliding_window_view gives shape (n-win+1, win)
+    # We want the window ENDING at each bar i -> bars[i-win:i]
+    # sliding_window_view(arr, win)[i] = arr[i:i+win]
+    # so sliding_window_view(arr, win)[i-win] = arr[i-win:i] ✓
+    if n < win:
+        return sig
+
+    swv_h = sliding_window_view(highs, win)  # shape: (n-win+1, win)
+    swv_l = sliding_window_view(lows,  win)
+
+    roll_hi = swv_h.max(axis=1)   # shape: (n-win+1,)
+    roll_lo = swv_l.min(axis=1)
+
+    # roll_hi[k] = max of bars[k:k+win]
+    # we want: at bar i, box = bars[i-win:i]
+    # -> roll_hi[i-win] = max of bars[i-win:i-win+win] = bars[i-win:i] ✓
+    # valid range: i from win to n-1  ->  k from 0 to n-win-1
+    k          = np.arange(0, n - win)
+    bar_i      = k + win   # bar index for each window
+
+    mid        = (roll_hi[k] + roll_lo[k]) / 2.0
+    safe_mid   = np.where(mid > 0, mid, 1.0)
+    tight      = (roll_hi[k] - roll_lo[k]) / safe_mid <= max_rng_pct
+
+    price_i    = bars[bar_i, C]
+    near_top   = price_i >= roll_hi[k] * (1.0 - 0.002)
+
+    vm_at_i    = vm[bar_i]
+    vol_at_i   = bars[bar_i, V]
+    quiet_vol  = (vm_at_i > 0) & (vol_at_i < vm_at_i * 0.8)
+
+    overbought = rsi_[bar_i] > 60.0
+
+    # Only valid in WARMUP+ region
+    warmup_ok  = bar_i >= WARMUP
+
+    fired = tight & near_top & quiet_vol & overbought & warmup_ok
+
+    sig[bar_i[fired]] = True
+    return sig
+
+
+# ─── Regime masks ─────────────────────────────────────────────────────────────
+
+def mask_trend(b4h: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    return map_series(b4h, adx(b4h) > 25, ref)
+
+
+def mask_range(b4h: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    return map_series(b4h, adx(b4h) < 22, ref)
+
+
+def mask_crash(b1d: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    e50   = ema(b1d[:, C], 50)
+    below = b1d[:, C] < e50
+    drop  = np.zeros(len(b1d), bool)
+    for i in range(7, len(b1d)):
+        prev = b1d[i - 7, C]
+        if prev > 0:
+            drop[i] = (b1d[i, C] - prev) / prev < -0.12
+    return map_series(b1d, below & drop, ref)
+
+
+def mask_weekly_long(b1w: np.ndarray | None, ref: np.ndarray) -> np.ndarray:
+    if b1w is None or len(b1w) < 11:
+        return np.ones(len(ref), bool)
+    return map_series(b1w, b1w[:, C] > ema(b1w[:, C], 10), ref)
+
+
+def mask_weekly_short(b1w: np.ndarray | None, ref: np.ndarray) -> np.ndarray:
+    return ~mask_weekly_long(b1w, ref)
+
+
+def mask_htf_bull(b4h: np.ndarray | None, ref: np.ndarray) -> np.ndarray:
+    if b4h is None:
+        return np.ones(len(ref), bool)
+    return map_series(b4h, b4h[:, C] > ema(b4h[:, C], 21), ref)
+
+
+def mask_htf_bear(b4h: np.ndarray | None, ref: np.ndarray) -> np.ndarray:
+    if b4h is None:
+        return np.ones(len(ref), bool)
+    return map_series(b4h, b4h[:, C] < ema(b4h[:, C], 21), ref)
+
+
+# ─── Trade simulation ─────────────────────────────────────────────────────────
+
+@dataclass
+class Trade:
+    symbol:    str
+    strategy:  str
+    direction: str
+    bar_idx:   int
+    entry:     float
+    stop:      float
+    tp:        float
+    outcome:   str   = "TIMEOUT"
+    pnl_r:     float = 0.0
+
+
+def simulate(entry_idx: np.ndarray, bars: np.ndarray,
+             atr_: np.ndarray, direction: str,
+             symbol: str, strategy: str,
+             max_hold: int = MAX_HOLD) -> list[Trade]:
+    """Walk forward from each entry to find TP/SL hit. Prevents overlapping."""
+    trades, last_exit = [], -1
+
+    for idx in entry_idx:
+        idx = int(idx)
+        if idx <= last_exit or idx + max_hold >= len(bars):
+            continue
+
+        entry   = bars[idx, C]
+        atr_val = atr_[idx]
+        if entry == 0.0 or atr_val == 0.0:
+            continue
+
+        sl_dist = max(atr_val * SL_MULT, entry * MIN_SL)
+
+        if direction == "LONG":
+            stop, tp = entry - sl_dist, entry + sl_dist * RR
+        else:
+            stop, tp = entry + sl_dist, entry - sl_dist * RR
+
+        outcome, pnl_r, exit_i = "TIMEOUT", 0.0, idx + max_hold
+
+        for j in range(1, max_hold + 1):
+            bi = idx + j
+            if bi >= len(bars):
+                break
+            bar = bars[bi]
+            if direction == "LONG":
+                if bar[L] <= stop:
+                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi
+                    break
+                if bar[H] >= tp:
+                    outcome, pnl_r, exit_i = "TP", RR - FEE_RT, bi
+                    break
+            else:
+                if bar[H] >= stop:
+                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi
+                    break
+                if bar[L] <= tp:
+                    outcome, pnl_r, exit_i = "TP", RR - FEE_RT, bi
+                    break
+
+        if outcome == "TIMEOUT":
+            ep = bars[min(idx + max_hold, len(bars) - 1), C]
+            raw = (ep - entry) / sl_dist if direction == "LONG" \
+                  else (entry - ep) / sl_dist
+            pnl_r = raw - FEE_RT
+
+        trades.append(Trade(
+            symbol, strategy, direction, idx,
+            entry, stop, tp, outcome, round(pnl_r, 4)
+        ))
+        last_exit = exit_i
+
+    return trades
+
+
+# ─── Strategy runners ─────────────────────────────────────────────────────────
+
+def run_fvg(symbol: str, data: dict, btc_data: dict | None,
+            from_ts: int, to_ts: int) -> list[Trade]:
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    b1d = data.get(f"{symbol}:1d")
+    b1w = (btc_data or {}).get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
         return []
 
-    eval_bars = all_1h[warmup_bars:]
-    log.info("Backtesting %d bars (%s -> %s) for %s  |  capital=$%.2f  risk=%.0f%%",
-             len(eval_bars),
-             _ts_str(eval_bars[0]["ts"]),
-             _ts_str(eval_bars[-1]["ts"]),
-             symbols, starting_capital, risk_pct * 100)
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
 
-    open_trades:   list[dict] = []
-    closed_trades: list[dict] = []
-    bar_count = 0
+    atr1h   = atr(b1h)
+    rsi1h   = rsi(b1h[:, C])
+    fvg_l   = sig_fvg_long(b1h)
+    fvg_s   = sig_fvg_short(b1h)
+    wk_l    = mask_weekly_long(b1w, b1h)
+    wk_s    = mask_weekly_short(b1w, b1h)
+    htf_l   = mask_htf_bull(b4h, b1h)
+    htf_s   = mask_htf_bear(b4h, b1h)
+    trend   = mask_trend(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+    crash   = mask_crash(b1d, b1h) if b1d is not None else np.zeros(len(b1h), bool)
 
-    # Consecutive-loss cooldown: after 2 back-to-back losses on the same symbol,
-    # pause new entries for 48 bars (2 days) to avoid chasing bad conditions.
-    _COOLDOWN_BARS   = 48
-    consec_losses:   dict[str, int] = {s: 0 for s in symbols}
-    cooldown_until:  dict[str, int] = {s: 0 for s in symbols}   # bar_ts epoch ms
+    long_entries  = np.where(fvg_l & wk_l  & htf_l & (rsi1h < 45) & trend & valid)[0]
+    short_entries = np.where(fvg_s & wk_s  & htf_s & (rsi1h > 55) & (trend | crash) & valid)[0]
 
-    for bar in eval_bars:
-        bar_ts = bar["ts"]
-        cache.advance(bar_ts)
-        bar_count += 1
-
-        if bar_count % 1000 == 0:
-            log.info("  progress: %d / %d bars  open=%d  closed=%d  equity=$%.2f",
-                     bar_count, len(eval_bars),
-                     len(open_trades), len(closed_trades), equity)
-
-        # ── Resolve open trades ───────────────────────────────────────────────
-        still_open: list[dict] = []
-        for trade in open_trades:
-            sym      = trade["symbol"]
-            sym_bar  = cache.get_ohlcv(sym, window=1, tf="1h")
-            if not sym_bar:
-                still_open.append(trade)
-                continue
-
-            current_bar = sym_bar[-1]
-            _update_trailing(trade, current_bar)   # ratchet SL for PUMP trades
-            result      = _check_exit(trade, current_bar)
-
-            if result is not None:
-                equity += result["pnl"]
-                result["equity_after"] = round(equity, 2)
-                closed_trades.append(result)
-                # Track consecutive losses for cooldown
-                if result["outcome"] == "LOSS":
-                    consec_losses[sym] = consec_losses.get(sym, 0) + 1
-                    if consec_losses[sym] >= 2:
-                        cooldown_until[sym] = bar_ts + _COOLDOWN_BARS * 3_600_000
-                        log.debug("Cooldown on %s until %s (2 consecutive losses)",
-                                  sym, _ts_str(cooldown_until[sym]))
-                else:
-                    consec_losses[sym] = 0   # any win/timeout resets streak
-            elif bar_ts - trade["entry_ts"] >= _MAX_HOLD_BARS * 3_600_000:
-                closed = _force_close(trade, current_bar)
-                equity += closed["pnl"]
-                closed["equity_after"] = round(equity, 2)
-                closed_trades.append(closed)
-                consec_losses[sym] = 0   # timeout resets streak
-            else:
-                still_open.append(trade)
-
-        open_trades = still_open
-
-        # ── Score each symbol ─────────────────────────────────────────────────
-        for symbol in symbols:
-            if any(t["symbol"] == symbol for t in open_trades):
-                continue
-
-            # Skip if symbol is in consecutive-loss cooldown
-            if cooldown_until.get(symbol, 0) > bar_ts:
-                continue
-
-            try:
-                regime = detector.detect(symbol, cache)
-
-                if regime == "TREND":
-                    candidates = [
-                        await score_trend_long(symbol, cache),
-                        await score_trend_short(symbol, cache),
-                    ]
-                elif regime == "RANGE":
-                    candidates = [
-                        await score_range_long(symbol, cache),
-                        await score_range_short(symbol, cache),
-                    ]
-                elif regime == "CRASH":
-                    candidates = [await score_crash(symbol, cache)]
-                elif regime == "PUMP":
-                    candidates = [await score_pump(symbol, cache)]
-                elif regime == "BREAKOUT":
-                    bdir = detector.get_breakout_direction(symbol)
-                    if bdir == "LONG":
-                        candidates = [await score_breakout_long(symbol, cache)]
-                    elif bdir == "SHORT":
-                        candidates = [await score_breakout_short(symbol, cache)]
-                    else:
-                        continue
-                else:
-                    continue
-
-            except Exception as exc:
-                log.debug("Pipeline error %s @ %s: %s", symbol, _ts_str(bar_ts), exc)
-                continue
-
-            for score_dict in candidates:
-                if not score_dict.get("fire"):
-                    continue
-
-                direction = score_dict["direction"]
-                try:
-                    entry, sl, tp = rr_calc.compute(symbol, direction, cache)
-                except Exception:
-                    continue
-
-                if entry == 0.0 or sl == 0.0 or tp == 0.0:
-                    continue
-                if abs(entry - sl) == 0.0:
-                    continue
-
-                risk_amount = round(equity * risk_pct, 4)
-                regime_str  = score_dict["regime"]
-
-                # PUMP and BREAKOUT trades use trailing stop + extended TP cap
-                use_trailing = regime_str in ("PUMP", "BREAKOUT")
-                stop_dist    = abs(entry - sl)
-
-                trade_rec = {
-                    "symbol":      symbol,
-                    "regime":      regime_str,
-                    "direction":   direction,
-                    "entry":       entry,
-                    "sl":          sl,
-                    "tp":          entry + stop_dist * _PUMP_RR_MAX if use_trailing and direction == "LONG"
-                                   else entry - stop_dist * _PUMP_RR_MAX if use_trailing
-                                   else tp,
-                    "entry_ts":    bar_ts,
-                    "score":       score_dict["score"],
-                    "signals":     score_dict.get("signals", {}),
-                    "risk_amount": risk_amount,
-                    "trailing":    use_trailing,
-                    "trail_dist":  stop_dist,
-                    "trail_extreme": entry,
-                }
-                open_trades.append(trade_rec)
-                break   # one trade per symbol per bar
-
-    # Force-close remaining open trades at the final bar
-    for trade in open_trades:
-        sym_bar = cache.get_ohlcv(trade["symbol"], window=1, tf="1h")
-        if sym_bar:
-            closed = _force_close(trade, sym_bar[-1])
-            equity += closed["pnl"]
-            closed["equity_after"] = round(equity, 2)
-            closed_trades.append(closed)
-
-    log.info("Backtest complete: %d trades  final equity=$%.2f  return=%.1f%%",
-             len(closed_trades), equity,
-             (equity - starting_capital) / starting_capital * 100)
-    return closed_trades
+    return (simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "fvg") +
+            simulate(short_entries, b1h, atr1h, "SHORT", symbol, "fvg"))
 
 
-def _ts_str(ts_ms: int) -> str:
-    from datetime import datetime, timezone
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+def run_ema_pullback(symbol: str, data: dict, btc_data: dict | None,
+                     from_ts: int, to_ts: int) -> list[Trade]:
+    b15m = data.get(f"{symbol}:15m")
+    b4h  = data.get(f"{symbol}:4h")
+    b1w  = (btc_data or {}).get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+
+    if b15m is None or len(b15m) < WARMUP + 10:
+        return []
+
+    period_mask = (b15m[:, TS] >= from_ts) & (b15m[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b15m), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr15m  = atr(b15m)
+    rsi15m  = rsi(b15m[:, C])
+    e21     = ema(b15m[:, C], 21)
+    e50     = ema(b15m[:, C], 50)
+    wk_l    = mask_weekly_long(b1w, b15m)
+    wk_s    = mask_weekly_short(b1w, b15m)
+    htf_l   = mask_htf_bull(b4h, b15m)
+    htf_s   = mask_htf_bear(b4h, b15m)
+
+    long_entries  = np.where(
+        sig_ema_pullback_long(b15m, e21, e50) & wk_l & htf_l
+        & (rsi15m >= 30) & (rsi15m <= 50) & valid)[0]
+    short_entries = np.where(
+        sig_ema_pullback_short(b15m, e21, e50) & wk_s & htf_s
+        & (rsi15m >= 50) & (rsi15m <= 70) & valid)[0]
+
+    return (simulate(long_entries,  b15m, atr15m, "LONG",  symbol, "ema_pullback") +
+            simulate(short_entries, b15m, atr15m, "SHORT", symbol, "ema_pullback"))
+
+
+def run_vwap_band(symbol: str, data: dict, btc_data: dict | None,
+                  from_ts: int, to_ts: int) -> list[Trade]:
+    b15m = data.get(f"{symbol}:15m")
+    b4h  = data.get(f"{symbol}:4h")
+
+    if b15m is None or len(b15m) < WARMUP + 10:
+        return []
+
+    period_mask = (b15m[:, TS] >= from_ts) & (b15m[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b15m), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr15m  = atr(b15m)
+    range_m = mask_range(b4h, b15m) if b4h is not None else np.ones(len(b15m), bool)
+
+    long_entries = np.where(sig_vwap_long(b15m) & range_m & valid)[0]
+    return simulate(long_entries, b15m, atr15m, "LONG", symbol, "vwap_band")
+
+
+def run_microrange(symbol: str, data: dict, btc_data: dict | None,
+                   from_ts: int, to_ts: int) -> list[Trade]:
+    b5m = data.get(f"{symbol}:5m")
+    b1d = data.get(f"{symbol}:1d")
+
+    if b5m is None or len(b5m) < WARMUP + 10:
+        return []
+
+    period_mask = (b5m[:, TS] >= from_ts) & (b5m[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b5m), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr5m   = atr(b5m)
+    crash_m = mask_crash(b1d, b5m) if b1d is not None else np.zeros(len(b5m), bool)
+
+    short_entries = np.where(sig_microrange_short(b5m) & crash_m & valid)[0]
+    return simulate(short_entries, b5m, atr5m, "SHORT", symbol, "microrange",
+                    max_hold=24)
+
+
+# ─── Stats ────────────────────────────────────────────────────────────────────
+
+def compute_stats(trades: list[Trade]) -> dict:
+    if not trades:
+        return dict(n=0, wins=0, losses=0, timeouts=0,
+                    wr=0.0, pf=0.0, avg_r=0.0)
+    wins    = [t for t in trades if t.outcome == "TP"]
+    losses  = [t for t in trades if t.pnl_r < 0]
+    gw      = sum(t.pnl_r for t in wins)
+    gl      = abs(sum(t.pnl_r for t in losses))
+    return dict(
+        n        = len(trades),
+        wins     = len(wins),
+        losses   = len(losses),
+        timeouts = len([t for t in trades if t.outcome == "TIMEOUT"]),
+        wr       = round(len(wins) / len(trades) * 100, 1),
+        pf       = round(gw / gl, 2) if gl > 0 else 9.99,
+        avg_r    = round(sum(t.pnl_r for t in trades) / len(trades), 3),
+    )
+
+
+RUNNERS: dict = {
+    "fvg":          run_fvg,
+    "ema_pullback": run_ema_pullback,
+    "vwap_band":    run_vwap_band,
+    "microrange":   run_microrange,
+}
