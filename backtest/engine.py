@@ -310,6 +310,209 @@ def sig_microrange_short(bars: np.ndarray,
     return sig
 
 
+def sig_wyckoff_spring(bars: np.ndarray,
+                       lookback: int = 50) -> np.ndarray:
+    """Wyckoff spring: wick pierces recent range_low then closes back inside.
+    Signals accumulation — smart money absorbing supply at support.
+
+    Conditions (all must hold):
+    1. bar.low < min(bars[-lookback:-1].low)  ← pierces range low
+    2. bar.close > min(bars[-lookback:-1].low) ← closes back above it
+    3. Depth of pierce ≤ 0.5% of price        ← shallow sweep only
+    4. Volume ≥ 1.5× 20-bar vol MA            ← absorption volume
+    """
+    n      = len(bars)
+    vm     = vol_ma(bars, 20)
+    sig    = np.zeros(n, bool)
+
+    for i in range(lookback + 20, n):
+        ref_lows   = bars[i - lookback: i, L]
+        range_low  = ref_lows.min()
+        bar_low    = bars[i, L]
+        bar_close  = bars[i, C]
+
+        # Must wick below range low
+        if bar_low >= range_low:
+            continue
+        # Must close back above range low
+        if bar_close <= range_low:
+            continue
+        # Shallow pierce only (≤ 0.5%)
+        if range_low > 0 and (range_low - bar_low) / range_low > 0.005:
+            continue
+        # Volume spike
+        if vm[i] > 0 and bars[i, V] < vm[i] * 1.5:
+            continue
+
+        sig[i] = True
+    return sig
+
+
+def sig_wyckoff_upthrust(bars: np.ndarray,
+                          lookback: int = 50) -> np.ndarray:
+    """Wyckoff upthrust: wick pierces recent range_high then closes back inside.
+    Signals distribution — smart money selling supply at resistance.
+
+    Conditions:
+    1. bar.high > max(bars[-lookback:-1].high)  ← pierces range high
+    2. bar.close < max(bars[-lookback:-1].high) ← closes back below it
+    3. Depth ≤ 0.5% of price
+    4. Volume ≥ 1.5× 20-bar vol MA
+    """
+    n   = len(bars)
+    vm  = vol_ma(bars, 20)
+    sig = np.zeros(n, bool)
+
+    for i in range(lookback + 20, n):
+        ref_highs  = bars[i - lookback: i, H]
+        range_high = ref_highs.max()
+        bar_high   = bars[i, H]
+        bar_close  = bars[i, C]
+
+        if bar_high <= range_high:
+            continue
+        if bar_close >= range_high:
+            continue
+        if range_high > 0 and (bar_high - range_high) / range_high > 0.005:
+            continue
+        if vm[i] > 0 and bars[i, V] < vm[i] * 1.5:
+            continue
+
+        sig[i] = True
+    return sig
+
+
+def sig_liq_sweep_long(bars: np.ndarray,
+                        lookback: int = 20) -> np.ndarray:
+    """Liquidity sweep LONG with RSI divergence + volume confirmation.
+
+    Added filters vs previous version:
+    1. RSI divergence: price makes lower low at sweep but RSI is higher
+       than it was at previous swing low (seller exhaustion)
+    2. Confirmation bar: the bar AFTER the sweep must close above sweep close
+       (momentum confirming reversal)
+    3. Volume on sweep bar must be > 2.0× average (raised from 1.5×)
+    """
+    n     = len(bars)
+    vm    = vol_ma(bars, 20)
+    rsi_  = rsi(bars[:, C])
+    sig   = np.zeros(n, bool)
+
+    for i in range(lookback + 25, n - 1):
+        window = bars[i - lookback: i]
+        lows   = window[:, L]
+
+        # Find equal lows
+        swing_lows = []
+        for j in range(2, len(lows) - 2):
+            if lows[j] == lows[max(0,j-2):j+3].min():
+                swing_lows.append((j, lows[j]))
+
+        if len(swing_lows) < 2:
+            continue
+
+        eq_low_val = None
+        prev_low_idx = None
+        for a in range(len(swing_lows)):
+            for b in range(a+1, len(swing_lows)):
+                idx_a, val_a = swing_lows[a]
+                idx_b, val_b = swing_lows[b]
+                if val_a > 0 and abs(val_a - val_b) / val_a <= 0.002:
+                    eq_low_val    = min(val_a, val_b)
+                    prev_low_idx  = i - lookback + max(idx_a, idx_b)
+                    break
+            if eq_low_val:
+                break
+
+        if eq_low_val is None or prev_low_idx is None:
+            continue
+
+        # Current bar sweeps below equal lows
+        if bars[i, L] >= eq_low_val:
+            continue
+        # Current bar closes ABOVE the equal low (reversal body)
+        if bars[i, C] <= eq_low_val:
+            continue
+
+        # Volume must be strong (2× not 1.5×)
+        if vm[i] > 0 and bars[i, V] < vm[i] * 2.0:
+            continue
+
+        # RSI divergence — current sweep RSI > previous swing RSI
+        if (prev_low_idx >= 0 and prev_low_idx < len(rsi_) and i < len(rsi_)):
+            prev_rsi = rsi_[prev_low_idx]
+            curr_rsi = rsi_[i]
+            # Price made lower low (sweep) but RSI higher = bullish divergence
+            if curr_rsi <= prev_rsi:
+                continue  # no divergence — skip
+
+        # Next bar must confirm (close above sweep bar close)
+        if i + 1 < n and bars[i+1, C] < bars[i, C]:
+            continue  # no follow-through
+
+        sig[i] = True
+    return sig
+
+
+def sig_liq_sweep_short(bars: np.ndarray,
+                         lookback: int = 20) -> np.ndarray:
+    """Liquidity sweep SHORT with RSI divergence + volume + confirmation bar."""
+    n     = len(bars)
+    vm    = vol_ma(bars, 20)
+    rsi_  = rsi(bars[:, C])
+    sig   = np.zeros(n, bool)
+
+    for i in range(lookback + 25, n - 1):
+        window = bars[i - lookback: i]
+        highs  = window[:, H]
+
+        swing_highs = []
+        for j in range(2, len(highs) - 2):
+            if highs[j] == highs[max(0,j-2):j+3].max():
+                swing_highs.append((j, highs[j]))
+
+        if len(swing_highs) < 2:
+            continue
+
+        eq_high_val   = None
+        prev_high_idx = None
+        for a in range(len(swing_highs)):
+            for b in range(a+1, len(swing_highs)):
+                idx_a, val_a = swing_highs[a]
+                idx_b, val_b = swing_highs[b]
+                if val_a > 0 and abs(val_a - val_b) / val_a <= 0.002:
+                    eq_high_val   = max(val_a, val_b)
+                    prev_high_idx = i - lookback + max(idx_a, idx_b)
+                    break
+            if eq_high_val:
+                break
+
+        if eq_high_val is None or prev_high_idx is None:
+            continue
+
+        if bars[i, H] <= eq_high_val:
+            continue
+        if bars[i, C] >= eq_high_val:
+            continue
+
+        if vm[i] > 0 and bars[i, V] < vm[i] * 2.0:
+            continue
+
+        # RSI bearish divergence: price made higher high but RSI lower
+        if (prev_high_idx >= 0 and prev_high_idx < len(rsi_) and i < len(rsi_)):
+            prev_rsi = rsi_[prev_high_idx]
+            curr_rsi = rsi_[i]
+            if curr_rsi >= prev_rsi:
+                continue  # no bearish divergence
+
+        # Confirmation bar: next bar closes below sweep bar close
+        if i + 1 < n and bars[i+1, C] > bars[i, C]:
+            continue
+
+        sig[i] = True
+    return sig
+
+
 # ─── Regime masks ─────────────────────────────────────────────────────────────
 
 def mask_trend(b4h: np.ndarray, ref: np.ndarray) -> np.ndarray:
@@ -436,7 +639,8 @@ def run_fvg(symbol: str, data: dict, btc_data: dict | None,
     b1h = data.get(f"{symbol}:1h")
     b4h = data.get(f"{symbol}:4h")
     b1d = data.get(f"{symbol}:1d")
-    b1w = (btc_data or {}).get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
 
     if b1h is None or len(b1h) < WARMUP + 10:
         return []
@@ -468,7 +672,8 @@ def run_ema_pullback(symbol: str, data: dict, btc_data: dict | None,
                      from_ts: int, to_ts: int) -> list[Trade]:
     b15m = data.get(f"{symbol}:15m")
     b4h  = data.get(f"{symbol}:4h")
-    b1w  = (btc_data or {}).get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
 
     if b15m is None or len(b15m) < WARMUP + 10:
         return []
@@ -539,6 +744,123 @@ def run_microrange(symbol: str, data: dict, btc_data: dict | None,
                     max_hold=24)
 
 
+def run_wyckoff_range(symbol: str, data: dict,
+                      btc_data: dict | None,
+                      from_ts: int, to_ts: int) -> list[Trade]:
+    """Wyckoff spring + upthrust range trading.
+    Spring = LONG at range support. Upthrust = SHORT at range resistance.
+    Works on any coin in RANGE regime.
+    Uses 1H bars — daily timeframe signals.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr1h   = atr(b1h)
+    rsi1h   = rsi(b1h[:, C])
+    range_m = mask_range(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+
+    spring   = sig_wyckoff_spring(b1h)
+    upthrust = sig_wyckoff_upthrust(b1h)
+
+    # Spring LONG: spring + range regime + RSI < 45 (oversold)
+    long_entries  = np.where(spring   & range_m & (rsi1h < 45) & valid)[0]
+    # Upthrust SHORT: upthrust + range regime + RSI > 55 (overbought)
+    short_entries = np.where(upthrust & range_m & (rsi1h > 55) & valid)[0]
+
+    long_entries  = long_entries[long_entries >= WARMUP]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "wyckoff_range")
+    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "wyckoff_range")
+    return trades
+
+
+def run_liq_sweep(symbol: str, data: dict,
+                  btc_data: dict | None,
+                  from_ts: int, to_ts: int) -> list[Trade]:
+    """Liquidity sweep reversal — equal highs/lows stop hunt then reverse.
+    The #1 institutional entry pattern on BTC, ETH, and high-liquidity alts.
+    Works on 1H bars across all market conditions.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    b1d = data.get(f"{symbol}:1d")
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr1h  = atr(b1h)
+    rsi1h  = rsi(b1h[:, C])
+    wk_l   = mask_weekly_long(b1w, b1h)
+    wk_s   = mask_weekly_short(b1w, b1h)
+    htf_l  = mask_htf_bull(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+    htf_s  = mask_htf_bear(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+    crash  = mask_crash(b1d, b1h)    if b1d is not None else np.zeros(len(b1h), bool)
+
+    sweep_l = sig_liq_sweep_long(b1h)
+    sweep_s = sig_liq_sweep_short(b1h)
+
+    # LONG sweep: macro bull allowed + HTF bullish + RSI not overbought
+    long_entries  = np.where(sweep_l & wk_l & htf_l & (rsi1h < 55) & valid)[0]
+    # SHORT sweep: macro bear + HTF bearish OR crash + RSI not oversold
+    short_entries = np.where(sweep_s & wk_s & (htf_s | crash) & (rsi1h > 45) & valid)[0]
+
+    long_entries  = long_entries[long_entries >= WARMUP]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "liq_sweep")
+    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "liq_sweep")
+    return trades
+
+
+def run_wyckoff_spring_only(symbol: str, data: dict,
+                             btc_data: dict | None,
+                             from_ts: int, to_ts: int) -> list[Trade]:
+    """Pure Wyckoff spring LONG — works in RANGE and at crash bottoms.
+    Best for BTC and ETH during consolidation and accumulation phases.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr1h  = atr(b1h)
+    rsi1h  = rsi(b1h[:, C])
+    wk_l   = mask_weekly_long(b1w, b1h)
+
+    spring = sig_wyckoff_spring(b1h)
+
+    # Spring LONG — no regime restriction (works in RANGE and CRASH bottoms)
+    # Weekly gate: only long in macro bull
+    long_entries = np.where(spring & wk_l & (rsi1h < 50) & valid)[0]
+    long_entries = long_entries[long_entries >= WARMUP]
+
+    return simulate(long_entries, b1h, atr1h, "LONG", symbol, "wyckoff_spring")
+
+
 # ─── Stats ────────────────────────────────────────────────────────────────────
 
 def compute_stats(trades: list[Trade]) -> dict:
@@ -561,8 +883,11 @@ def compute_stats(trades: list[Trade]) -> dict:
 
 
 RUNNERS: dict = {
-    "fvg":          run_fvg,
-    "ema_pullback": run_ema_pullback,
-    "vwap_band":    run_vwap_band,
-    "microrange":   run_microrange,
+    "fvg":             run_fvg,
+    "ema_pullback":    run_ema_pullback,
+    "vwap_band":       run_vwap_band,
+    "microrange":      run_microrange,
+    "wyckoff_range":   run_wyckoff_range,
+    "liq_sweep":       run_liq_sweep,
+    "wyckoff_spring":  run_wyckoff_spring_only,
 }

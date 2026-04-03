@@ -332,9 +332,10 @@ async def recent_regimes(limit: int = 20) -> JSONResponse:
 
 @app.get("/signals/live")
 def signals_live() -> JSONResponse:
-    """Live Binance snapshot for all 9 symbols — price, 24h change, funding, ADX, regime."""
+    """Live Binance snapshot for all 8 symbols — price, 24h change, funding, ADX, regime."""
     import datetime
-    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
+    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
+               "XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT"]
     result = []
     now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -770,9 +771,9 @@ async def dashboard() -> HTMLResponse:
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Symbol</label>
       <select id="bt-sym" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:130px">
         <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
-        <option>BNBUSDT</option><option>AVAXUSDT</option><option>ADAUSDT</option>
-        <option>DOTUSDT</option><option>DOGEUSDT</option><option>SUIUSDT</option>
-        <option value="ALL">ALL (9 symbols)</option>
+        <option>BNBUSDT</option><option>XRPUSDT</option><option>LINKUSDT</option>
+        <option>DOGEUSDT</option><option>SUIUSDT</option>
+        <option value="ALL">ALL (8 symbols)</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
@@ -819,8 +820,8 @@ async def dashboard() -> HTMLResponse:
   <div style="padding:16px 20px 0">
     <select id="debug-sym" style="background:#1a1d27;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 12px;font-size:0.85rem">
       <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
-      <option>BNBUSDT</option><option>AVAXUSDT</option><option>ADAUSDT</option>
-      <option>DOTUSDT</option><option>DOGEUSDT</option><option>SUIUSDT</option>
+      <option>BNBUSDT</option><option>XRPUSDT</option><option>LINKUSDT</option>
+      <option>DOGEUSDT</option><option>SUIUSDT</option>
     </select>
     <button onclick="loadDebug()" style="margin-left:8px;padding:6px 14px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem">Refresh</button>
     <span id="debug-cvd" style="margin-left:16px;font-size:0.8rem;color:#6b7280"></span>
@@ -1715,7 +1716,7 @@ async def dashboard() -> HTMLResponse:
 </div>
 
 <script>
-const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','ADAUSDT','DOTUSDT','DOGEUSDT','SUIUSDT'];
+const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT'];
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 let mktLoaded = false, btLoaded = false, mktTimer = null;
@@ -2506,7 +2507,7 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         from_ms = _date_ms(from_date)
         to_ms   = _date_ms(to_date) + 86_400_000
 
-        _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
+        _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT"]
         symbols   = _ALL_SYMS if symbol == "ALL" else [symbol]
 
         data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
@@ -3226,9 +3227,10 @@ def _coinglass_fields(sym: str, price: float) -> dict:
 
 @app.get("/market/data")
 def market_data() -> JSONResponse:
-    """Live market conditions for all 9 configured symbols — prices, regime, ADX, funding,
+    """Live market conditions for all 8 configured symbols — prices, regime, ADX, funding,
     plus Coinglass paid data: OI 24h trend, L/S ratio, liquidation heatmap clusters."""
-    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","AVAXUSDT","ADAUSDT","DOTUSDT","DOGEUSDT","SUIUSDT"]
+    symbols = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",
+               "XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT"]
     result  = {}
     try:
         # Fetch tickers (price + 24h change + volume)
@@ -3376,7 +3378,7 @@ async def _market_legacy() -> HTMLResponse:
 </div>
 
 <script>
-const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','AVAXUSDT','ADAUSDT','DOTUSDT','DOGEUSDT','SUIUSDT'];
+const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT'];
 
 function fmt(n, dec=2) { return (+n).toLocaleString('en',{minimumFractionDigits:dec,maximumFractionDigits:dec}); }
 function fmtPct(v) { return (v>=0?'+':'')+fmt(v,2)+'%'; }
