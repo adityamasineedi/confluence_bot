@@ -11,6 +11,8 @@ Startup sequence:
 import asyncio
 import logging
 import os
+import signal
+import sys
 import threading
 import yaml
 
@@ -21,11 +23,30 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — rely on shell env vars
 
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("logs/bot.log", mode="a", encoding="utf-8"),
+    ],
 )
 log = logging.getLogger("confluence_bot")
+log.info("=" * 60)
+log.info("Bot started — PAPER_MODE=%s  balance will load shortly",
+         os.environ.get("PAPER_MODE", "0") == "1")
+log.info("=" * 60)
+
+
+def _handle_shutdown(sig, frame):
+    log.info("Shutdown signal received — stopping bot cleanly")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT,  _handle_shutdown)
+signal.signal(signal.SIGTERM, _handle_shutdown)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(_CONFIG_PATH) as _f:
@@ -342,4 +363,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Bot stopped by user")
+    except Exception as exc:
+        log.exception("Bot crashed unexpectedly: %s", exc)
+        raise

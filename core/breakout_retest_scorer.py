@@ -1,20 +1,19 @@
 """
 core/breakout_retest_scorer.py
-Breakout-retest scorer — 5M range breakout + level retest entry.
+Breakout + Retest + Flip scorer on 5m bars.
 
-Backtest confirmed: ALL 8 coins PASS, PF 3.0+, WR 67-68%,
-24,313 trades over 3 years.
+Confirmed: ALL 8 coins PF 3.0+, WR 67-68%, 24,313 trades/3yr.
+Regime-agnostic — fires in TREND, RANGE, CRASH, BREAKOUT.
 
-3-phase logic:
-  1. Range detection (last 8 bars of 5m)
-  2. Breakout detection (close through range boundary + volume)
-  3. Retest detection (price returns to flip level, holds)
-
-State machine per symbol tracks phase progression across calls.
+Entry at flip level (old resistance → new support or vice versa).
+SL = ATR(14, 5m) × 1.3
+TP = risk × 1.5R
 """
+
 import logging
 import os
-import time
+from datetime import datetime, timezone
+
 import yaml
 
 from core.cooldown_store import CooldownStore
@@ -28,65 +27,50 @@ with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
 _BR_CFG         = _cfg.get("breakout_retest", {})
-_RANGE_BARS     = int(_BR_CFG.get("range_bars", 8))
-_MIN_WIDTH      = float(_BR_CFG.get("min_width_pct", 0.0018))
-_MAX_WIDTH      = float(_BR_CFG.get("max_width_pct", 0.0080))
-_ATR_MULT_MAX   = float(_BR_CFG.get("atr_mult_max", 1.35))
-_VOL_SPIKE_MULT = float(_BR_CFG.get("vol_spike_mult", 1.25))
-_RETEST_BARS    = int(_BR_CFG.get("retest_bars", 8))
-_SL_ATR_MULT    = float(_BR_CFG.get("sl_atr_mult", 1.3))
-_RR_RATIO       = float(_BR_CFG.get("rr_ratio", 1.5))
-_COOLDOWN_SECS  = float(_BR_CFG.get("cooldown_mins", 15)) * 60.0
-_MAX_TRADES_DAY = int(_BR_CFG.get("max_trades_per_day", 4))
-_THRESHOLD      = 0.70
+_RANGE_BARS     = int(  _BR_CFG.get("range_bars",       8))
+_MIN_WIDTH      = float(_BR_CFG.get("min_width_pct",    0.0018))
+_MAX_WIDTH      = float(_BR_CFG.get("max_width_pct",    0.0080))
+_ATR_MULT_MAX   = float(_BR_CFG.get("atr_mult_max",     1.35))
+_VOL_MULT       = float(_BR_CFG.get("vol_spike_mult",   1.25))
+_RETEST_BARS    = int(  _BR_CFG.get("retest_bars",      8))
+_SL_ATR_MULT    = float(_BR_CFG.get("sl_atr_mult",      1.3))
+_RR_RATIO       = float(_BR_CFG.get("rr_ratio",         1.5))
+_COOLDOWN_SECS  = float(_BR_CFG.get("cooldown_mins",    15)) * 60
+_MAX_DAY_TRADES = int(  _BR_CFG.get("max_trades_per_day", 4))
+_SKIP_HOUR_S    = 14   # skip 14:00–15:00 UTC
+_SKIP_HOUR_E    = 15
 
 _cd = CooldownStore("BREAKOUT_RETEST")
 
-# ── Per-symbol state machine ─────────────────────────────────────────────────
-# States: IDLE → BREAKOUT → (fire or discard)
+# Per-symbol state machine
+# state: "IDLE" | "AWAITING_RETEST"
 _state: dict[str, dict] = {}
 
+# Daily trade counter: symbol → (date_str, count)
+_daily_trades: dict[str, tuple[str, int]] = {}
 
-def _get_state(symbol: str) -> dict:
-    if symbol not in _state:
-        _state[symbol] = {
-            "state": "IDLE",
-            "direction": "",
-            "flip_level": 0.0,
-            "breakout_bar_ts": 0,
-            "bars_waited": 0,
-            "range_high": 0.0,
-            "range_low": 0.0,
-            "daily_trades": 0,
-            "last_trade_day": "",
-        }
-    return _state[symbol]
-
-
-def _reset_state(symbol: str) -> None:
-    s = _get_state(symbol)
-    s["state"] = "IDLE"
-    s["direction"] = ""
-    s["flip_level"] = 0.0
-    s["breakout_bar_ts"] = 0
-    s["bars_waited"] = 0
-    s["range_high"] = 0.0
-    s["range_low"] = 0.0
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _utc_hour() -> int:
-    return time.gmtime().tm_hour
+    return datetime.now(timezone.utc).hour
 
 
-def _today_utc() -> str:
-    return time.strftime("%Y-%m-%d", time.gmtime())
+def _today_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _vol_ma(bars: list[dict], period: int = 20) -> float:
-    vols = [b["v"] for b in bars[-period:] if b.get("v", 0) > 0]
-    return sum(vols) / len(vols) if vols else 0.0
+def _daily_count(symbol: str) -> int:
+    today = _today_str()
+    rec = _daily_trades.get(symbol, ("", 0))
+    if rec[0] != today:
+        return 0
+    return rec[1]
+
+
+def _increment_daily(symbol: str) -> None:
+    today = _today_str()
+    rec = _daily_trades.get(symbol, ("", 0))
+    count = rec[1] + 1 if rec[0] == today else 1
+    _daily_trades[symbol] = (today, count)
 
 
 def _atr(bars: list[dict], period: int = 14) -> float:
@@ -94,292 +78,231 @@ def _atr(bars: list[dict], period: int = 14) -> float:
         return 0.0
     trs = []
     for i in range(1, len(bars)):
-        h, l, pc = bars[i]["h"], bars[i]["l"], bars[i - 1]["c"]
+        h  = bars[i]["h"]
+        l  = bars[i]["l"]
+        pc = bars[i-1]["c"]
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    if not trs:
-        return 0.0
-    return sum(trs[-period:]) / min(period, len(trs))
+    return sum(trs[-period:]) / period
+
+
+def _vol_ma(bars: list[dict], period: int = 20) -> float:
+    vols = [b["v"] for b in bars[-period:] if b.get("v", 0) > 0]
+    return sum(vols) / len(vols) if vols else 0.0
 
 
 def _ema(closes: list[float], period: int) -> float:
     if len(closes) < period:
-        return closes[-1] if closes else 0.0
+        return 0.0
     k = 2.0 / (period + 1)
-    ema_val = sum(closes[:period]) / period
+    e = sum(closes[:period]) / period
     for c in closes[period:]:
-        ema_val = c * k + ema_val * (1 - k)
-    return ema_val
+        e = c * k + e * (1 - k)
+    return e
 
 
-# ── Phase 1: Range detection ────────────────────────────────────────────────
-
-def _detect_range(bars: list[dict]) -> tuple[bool, float, float]:
-    """Check if last RANGE_BARS bars form a valid consolidation."""
-    if len(bars) < _RANGE_BARS + 2:
+def _detect_range(bars_5m: list[dict]) -> tuple[bool, float, float]:
+    """Check last _RANGE_BARS form a valid tight range."""
+    if len(bars_5m) < _RANGE_BARS + 20:
         return False, 0.0, 0.0
 
-    window = bars[-_RANGE_BARS:]
+    window   = bars_5m[-(_RANGE_BARS + 1):-1]  # exclude current bar
     rng_high = max(b["h"] for b in window)
-    rng_low = min(b["l"] for b in window)
+    rng_low  = min(b["l"] for b in window)
 
     if rng_low <= 0:
         return False, 0.0, 0.0
 
-    mid = (rng_high + rng_low) / 2.0
+    mid   = (rng_high + rng_low) / 2.0
     width = (rng_high - rng_low) / mid
 
     if not (_MIN_WIDTH <= width <= _MAX_WIDTH):
         return False, 0.0, 0.0
 
-    # ATR spike filter: current bar ATR vs average
-    recent = bars[-20:] if len(bars) >= 20 else bars
-    if len(recent) < 3:
-        return False, 0.0, 0.0
-
+    # ATR regime check
+    atr_bars = bars_5m[-21:-1]
     trs = []
-    for i in range(1, len(recent)):
-        h, l, pc = recent[i]["h"], recent[i]["l"], recent[i - 1]["c"]
+    for i in range(1, len(atr_bars)):
+        h  = atr_bars[i]["h"]
+        l  = atr_bars[i]["l"]
+        pc = atr_bars[i-1]["c"]
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
 
-    if not trs:
-        return False, 0.0, 0.0
-
-    avg_tr = sum(trs[:-1]) / max(len(trs) - 1, 1)
-    if avg_tr > 0 and trs[-1] > avg_tr * _ATR_MULT_MAX:
-        return False, 0.0, 0.0
+    if len(trs) >= 2:
+        avg_atr     = sum(trs[:-1]) / len(trs[:-1])
+        current_atr = trs[-1]
+        if avg_atr > 0 and current_atr > avg_atr * _ATR_MULT_MAX:
+            return False, 0.0, 0.0
 
     return True, rng_high, rng_low
 
 
-# ── Phase 2: Breakout detection ─────────────────────────────────────────────
-
-def _is_breakout_long(bar: dict, rng_high: float, vm: float) -> bool:
-    if bar["c"] <= rng_high:
-        return False
-    if max(bar["o"], bar["c"]) <= rng_high:
-        return False
-    if vm > 0 and bar["v"] < vm * _VOL_SPIKE_MULT:
-        return False
-    return True
-
-
-def _is_breakout_short(bar: dict, rng_low: float, vm: float) -> bool:
-    if bar["c"] >= rng_low:
-        return False
-    if min(bar["o"], bar["c"]) >= rng_low:
-        return False
-    if vm > 0 and bar["v"] < vm * _VOL_SPIKE_MULT:
-        return False
-    return True
-
-
-# ── Phase 3: Retest detection ───────────────────────────────────────────────
-
-def _is_retest_long(bar: dict, flip: float) -> bool:
-    return bar["l"] <= flip * 1.002 and bar["c"] > flip
-
-
-def _is_retest_short(bar: dict, flip: float) -> bool:
-    return bar["h"] >= flip * 0.998 and bar["c"] < flip
-
-
-# ── HTF confirmation (1H EMA20) ─────────────────────────────────────────────
-
-def _htf_bullish(symbol: str, cache) -> bool:
-    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
-    if not bars_1h or len(bars_1h) < 22:
-        return False
-    closes = [b["c"] for b in bars_1h]
-    return closes[-1] > _ema(closes, 20)
-
-
-def _htf_bearish(symbol: str, cache) -> bool:
-    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
-    if not bars_1h or len(bars_1h) < 22:
-        return False
-    closes = [b["c"] for b in bars_1h]
-    return closes[-1] < _ema(closes, 20)
-
-
-# ── Main scorer ──────────────────────────────────────────────────────────────
-
 async def score(symbol: str, cache) -> list[dict]:
-    """Score symbol for breakout-retest setups on 5M.
+    """Score symbol for breakout_retest setup on 5m bars.
 
-    Returns list with at most one dict.
-    Standard keys: symbol, regime, direction, score, signals, fire
-    Strategy keys: br_stop, br_tp
+    State machine:
+      IDLE             → check for range + breakout on current bar
+      AWAITING_RETEST  → check if price retested flip level
     """
-    st = _get_state(symbol)
-
-    # Reset daily trade counter
-    today = _today_utc()
-    if st["last_trade_day"] != today:
-        st["daily_trades"] = 0
-        st["last_trade_day"] = today
-
-    # Gate 1: time filter — block 14:00-15:00 UTC
-    hour = _utc_hour()
-    if 14 <= hour < 15:
+    # Time filter
+    if _SKIP_HOUR_S <= _utc_hour() < _SKIP_HOUR_E:
         return []
 
-    # Gate 2: ATR spike gate
+    # Cooldown
+    if _cd.is_active(symbol):
+        return []
+
+    # Daily trade limit
+    if _daily_count(symbol) >= _MAX_DAY_TRADES:
+        return []
+
+    # ATR spike gate
     if not atr_spike_ok(symbol, cache, tf="5m"):
         return []
 
-    # Gate 5: max trades per day
-    if st["daily_trades"] >= _MAX_TRADES_DAY:
+    bars_5m = cache.get_ohlcv(symbol, window=50, tf="5m")
+    if not bars_5m or len(bars_5m) < 30:
         return []
 
-    bars = cache.get_ohlcv(symbol, window=30, tf="5m")
-    if not bars or len(bars) < _RANGE_BARS + 5:
-        return []
+    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
 
-    cur = bars[-1]
+    # HTF EMA20 direction
+    htf_bull = True
+    htf_bear = True
+    if bars_1h and len(bars_1h) >= 21:
+        closes_1h = [b["c"] for b in bars_1h]
+        ema20 = _ema(closes_1h, 20)
+        htf_bull = closes_1h[-1] > ema20
+        htf_bear = closes_1h[-1] < ema20
 
-    # ── STATE: BREAKOUT — waiting for retest ─────────────────────────────────
-    if st["state"] == "BREAKOUT":
-        st["bars_waited"] += 1
+    st = _state.get(symbol, {"state": "IDLE"})
 
-        # Timeout — discard after RETEST_BARS
-        if st["bars_waited"] > _RETEST_BARS:
-            log.debug("Breakout retest timeout %s %s — discarding",
-                      symbol, st["direction"])
-            _reset_state(symbol)
+    # ── STATE: AWAITING_RETEST ──────────────────────────────────────────
+    if st["state"] == "AWAITING_RETEST":
+        bar = bars_5m[-1]
+        direction   = st["direction"]
+        flip        = st["flip_level"]
+        bars_waited = st.get("bars_waited", 0) + 1
+        st["bars_waited"] = bars_waited
+
+        # Timeout — discard after _RETEST_BARS
+        if bars_waited > _RETEST_BARS:
+            log.debug("BR %s %s — retest timeout, reset", symbol, direction)
+            _state[symbol] = {"state": "IDLE"}
             return []
 
-        # Skip blocked hours
-        if 14 <= hour < 15:
-            return []
-
-        flip = st["flip_level"]
-        direction = st["direction"]
-
-        # Check for invalidation
-        if direction == "LONG" and cur["c"] < flip * 0.997:
-            _reset_state(symbol)
-            return []
-        if direction == "SHORT" and cur["c"] > flip * 1.003:
-            _reset_state(symbol)
-            return []
-
-        # Check retest
-        retest_ok = False
+        retest_confirmed = False
         if direction == "LONG":
-            retest_ok = _is_retest_long(cur, flip)
+            touched   = bar["l"] <= flip * 1.002
+            confirmed = bar["c"] > flip
+            failed    = bar["c"] < flip * 0.997
+            if touched and confirmed:
+                retest_confirmed = True
+            elif failed:
+                _state[symbol] = {"state": "IDLE"}
+                return []
         else:
-            retest_ok = _is_retest_short(cur, flip)
+            touched   = bar["h"] >= flip * 0.998
+            confirmed = bar["c"] < flip
+            failed    = bar["c"] > flip * 1.003
+            if touched and confirmed:
+                retest_confirmed = True
+            elif failed:
+                _state[symbol] = {"state": "IDLE"}
+                return []
 
-        if not retest_ok:
-            return []
-
-        # ── Retest confirmed — build signal ──────────────────────────────────
-        # Gate 3: weekly trend
-        if direction == "LONG" and not weekly_allows_long("breakout_retest", cache):
-            _reset_state(symbol)
-            return []
-        if direction == "SHORT" and not weekly_allows_short("breakout_retest", cache):
-            _reset_state(symbol)
-            return []
-
-        # Gate 4: HTF 1H EMA20
-        if direction == "LONG" and not _htf_bullish(symbol, cache):
-            _reset_state(symbol)
-            return []
-        if direction == "SHORT" and not _htf_bearish(symbol, cache):
-            _reset_state(symbol)
+        if not retest_confirmed:
+            _state[symbol] = st
             return []
 
-        # Gate 6: cooldown
-        cool_ok = not _cd.is_active(symbol)
-        if not cool_ok:
-            _reset_state(symbol)
-            return []
-
-        # SL/TP
-        atr_val = _atr(bars, 14)
+        # ── RETEST CONFIRMED — build signal ──────────────────────────
+        atr_val = _atr(bars_5m)
         if atr_val <= 0:
-            _reset_state(symbol)
+            _state[symbol] = {"state": "IDLE"}
             return []
 
-        entry = flip
+        entry   = flip
         sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.001)
 
         if direction == "LONG":
             stop = entry - sl_dist
-            tp = entry + sl_dist * _RR_RATIO
+            tp   = entry + sl_dist * _RR_RATIO
         else:
             stop = entry + sl_dist
-            tp = entry - sl_dist * _RR_RATIO
+            tp   = entry - sl_dist * _RR_RATIO
 
         if stop <= 0 or tp <= 0:
-            _reset_state(symbol)
+            _state[symbol] = {"state": "IDLE"}
             return []
 
-        score_val = 0.85  # high confidence — all gates passed
+        score_val = 1.0  # all gates passed
 
-        fire = True
+        signals = {
+            "range_detected":     True,
+            "breakout_confirmed": True,
+            "retest_confirmed":   True,
+            "htf_aligned":        htf_bull if direction == "LONG" else htf_bear,
+            "weekly_ok":          True,
+            "atr_ok":             True,
+        }
+
+        _state[symbol] = {"state": "IDLE"}
+        _increment_daily(symbol)
         _cd.set(symbol, _COOLDOWN_SECS)
-        st["daily_trades"] += 1
-        _reset_state(symbol)
+
+        log.info("BR FIRE %s %s  entry=%.4f  sl=%.4f  tp=%.4f  atr=%.4f",
+                 symbol, direction, entry, stop, tp, atr_val)
 
         return [{
             "symbol":    symbol,
             "regime":    "BREAKOUT_RETEST",
             "direction": direction,
-            "score":     round(score_val, 4),
-            "signals":   {
-                "range_detected":  True,
-                "breakout":        True,
-                "retest":          True,
-                "flip_level":      round(flip, 8),
-                "range_high":      round(st.get("range_high", 0.0), 8),
-                "range_low":       round(st.get("range_low", 0.0), 8),
-                "htf_aligned":     True,
-                "weekly_ok":       True,
-                "cooldown_ok":     True,
-                "atr_5m":          round(atr_val, 8),
-            },
-            "fire":    fire,
-            "br_stop": round(stop, 8),
-            "br_tp":   round(tp, 8),
+            "score":     score_val,
+            "signals":   signals,
+            "fire":      True,
+            "br_stop":   round(stop, 6),
+            "br_tp":     round(tp,   6),
         }]
 
-    # ── STATE: IDLE — looking for range + breakout ───────────────────────────
-    ok, rng_high, rng_low = _detect_range(bars)
-    if not ok:
+    # ── STATE: IDLE — look for range + breakout ──────────────────────
+    range_ok, rng_high, rng_low = _detect_range(bars_5m)
+    if not range_ok:
         return []
 
-    vm = _vol_ma(bars[:-1], 20)
+    bar    = bars_5m[-1]
+    vm_val = _vol_ma(bars_5m)
+    vol_ok = bar["v"] >= vm_val * _VOL_MULT if vm_val > 0 else True
 
-    bl = _is_breakout_long(cur, rng_high, vm)
-    bs = _is_breakout_short(cur, rng_low, vm)
+    # Breakout detection
+    broke_long  = (bar["c"] > rng_high
+                   and max(bar["o"], bar["c"]) > rng_high
+                   and vol_ok
+                   and htf_bull
+                   and weekly_allows_long("breakout_retest", cache))
 
-    if not bl and not bs:
-        return []
+    broke_short = (bar["c"] < rng_low
+                   and min(bar["o"], bar["c"]) < rng_low
+                   and vol_ok
+                   and htf_bear
+                   and weekly_allows_short("breakout_retest", cache))
 
-    direction = "LONG" if bl else "SHORT"
+    if broke_long:
+        _state[symbol] = {
+            "state":       "AWAITING_RETEST",
+            "direction":   "LONG",
+            "flip_level":  rng_high,
+            "bars_waited": 0,
+        }
+        log.debug("BR %s LONG breakout above %.4f — waiting for retest",
+                  symbol, rng_high)
 
-    # Quick gate check before entering BREAKOUT state
-    if direction == "LONG" and not weekly_allows_long("breakout_retest", cache):
-        return []
-    if direction == "SHORT" and not weekly_allows_short("breakout_retest", cache):
-        return []
-    if direction == "LONG" and not _htf_bullish(symbol, cache):
-        return []
-    if direction == "SHORT" and not _htf_bearish(symbol, cache):
-        return []
+    elif broke_short:
+        _state[symbol] = {
+            "state":       "AWAITING_RETEST",
+            "direction":   "SHORT",
+            "flip_level":  rng_low,
+            "bars_waited": 0,
+        }
+        log.debug("BR %s SHORT breakout below %.4f — waiting for retest",
+                  symbol, rng_low)
 
-    # Transition to BREAKOUT state — wait for retest on next tick
-    st["state"] = "BREAKOUT"
-    st["direction"] = direction
-    st["flip_level"] = rng_high if bl else rng_low
-    st["breakout_bar_ts"] = cur.get("ts", 0)
-    st["bars_waited"] = 0
-    st["range_high"] = rng_high
-    st["range_low"] = rng_low
-
-    log.debug("Breakout detected %s %s flip=%.6f rng=[%.6f, %.6f]",
-              symbol, direction, st["flip_level"], rng_low, rng_high)
-
-    return []
+    return []   # no signal on breakout bar — wait for retest
