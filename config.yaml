@@ -452,7 +452,7 @@ breakout_retest:
   vol_spike_mult: 1.25
   retest_bars: 8
   sl_atr_mult: 1.3
-  rr_ratio: 1.5
+  rr_ratio: 2.2              # TP2 mode — 2.2R matches backtest result
   cooldown_mins: 15
   max_trades_per_day: 4
   max_positions: 3
