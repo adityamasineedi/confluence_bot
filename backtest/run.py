@@ -213,9 +213,9 @@ def print_dollar_report(stats: dict, symbol: str, strategy: str,
         print(f"  Profit/day  (est): {profit_sign}${profit_per_year / 365:>9,.2f}")
 
     if show_each_trade and trades:
-        print(f"\n  {'#':<4} {'Date':<12} {'Dir':<6} {'Outcome':<8}"
+        print(f"\n  {'#':<4} {'Date':<16} {'Dir':<6} {'Outcome':<8}"
               f" {'P&L':>10} {'Balance':>12}")
-        print(f"  {'-'*56}")
+        print(f"  {'-'*60}")
 
         sorted_trades = sorted(trades, key=lambda t: t.bar_idx)
         balance = s["starting_capital"]
@@ -229,7 +229,7 @@ def print_dollar_report(stats: dict, symbol: str, strategy: str,
             direction = getattr(trade, "direction", "?")
             date_str  = bar_date(data, symbol, trade.bar_idx) if data else str(trade.bar_idx)
 
-            print(f"  {i:<4} {date_str:<12} {direction:<6} {icon:<8}"
+            print(f"  {i:<4} {date_str:<16} {direction:<6} {icon:<8}"
                   f" {pnl_str:>10} ${balance:>11,.2f}")
 
     print(f"{'='*65}\n")
@@ -239,12 +239,13 @@ def print_dollar_report(stats: dict, symbol: str, strategy: str,
 
 def bar_date(data: dict, symbol: str, bar_idx: int) -> str:
     """Convert bar index to readable UTC date string."""
-    key  = f"{symbol}:1h"
-    bars = data.get(key)
+    bars = data.get(f"{symbol}:5m")
+    if bars is None:
+        bars = data.get(f"{symbol}:1h")
     if bars is None or bar_idx >= len(bars):
         return "???"
     ts = bars[bar_idx, 5]  # TS column
-    return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
 # -- Main ---------------------------------------------------------------------

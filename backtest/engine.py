@@ -8,6 +8,7 @@ is boolean array intersection — O(n) total not O(n²).
 import json
 import os
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import yaml
@@ -1464,7 +1465,9 @@ def run_breakout_retest(symbol, data, btc_data,
     b5m = data.get(f"{symbol}:5m")
     b1h = data.get(f"{symbol}:1h")
     _btc = btc_data or {}
-    b1w = _btc.get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+    b1w = _btc.get("BTCUSDT:1w")
+    if b1w is None:
+        b1w = data.get(f"{symbol}:1w")
     if b5m is None or len(b5m) < WARMUP + 20:
         return []
     n = len(b5m)
@@ -1560,6 +1563,8 @@ RUNNERS: dict = {
     "wyckoff_upthrust_v2":    run_wyckoff_upthrust_v2,
     "cme_gap":                run_cme_gap,
     "breakout_retest":        run_breakout_retest,
+    "breakout_retest_tp1":    partial(run_breakout_retest, rr_ratio=1.5),
+    "breakout_retest_tp2":    partial(run_breakout_retest, rr_ratio=3.0),
 }
 
 
@@ -1579,6 +1584,8 @@ _STRATEGY_CFG_KEY: dict[str, str] = {
     "wyckoff_upthrust_v2":    "wyckoff_spring",
     "cme_gap":                "fvg",          # no dedicated block — shares fvg default
     "breakout_retest":        "microrange",   # shares microrange config block
+    "breakout_retest_tp1":    "microrange",
+    "breakout_retest_tp2":    "microrange",
 }
 
 

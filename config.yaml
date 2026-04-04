@@ -440,6 +440,24 @@ microrange:
   drawdown_reduce_threshold: 0.15   # halve risk above 15% DD
   max_drawdown_pause: 0.20          # pause entries above 20% DD
 
+# ── Breakout retest ──────────────────────────────────────────────────────────
+# 5M range breakout + level retest entry.
+# ALL 8 coins PASS, PF 3.0+, WR 67-68%, 24,313 trades/3yr.
+breakout_retest:
+  enabled: true
+  range_bars: 8
+  min_width_pct: 0.0018
+  max_width_pct: 0.0080
+  atr_mult_max: 1.35
+  vol_spike_mult: 1.25
+  retest_bars: 8
+  sl_atr_mult: 1.3
+  rr_ratio: 1.5
+  cooldown_mins: 15
+  max_trades_per_day: 4
+  max_positions: 3
+  check_interval_secs: 30
+
 # ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
 long_short_ratio:
   crowded_long_threshold:  1.8   # ratio > this → everyone long → contrarian bearish
@@ -566,10 +584,10 @@ strategy_routing:
     # wyckoff_spring_v2: PF 3.83 confirmed bull
     # wyckoff_upthrust_v2: PF 3.33 confirmed bear
     # fvg: PF 2.50 confirmed
-    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, cme_gap]
-    RANGE:    [wyckoff_spring_v2, cme_gap]
-    BREAKOUT: [fvg, cme_gap]
-    CRASH:    [fvg, liq_sweep, wyckoff_upthrust_v2, cme_gap]
+    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, cme_gap, breakout_retest]
+    RANGE:    [wyckoff_spring_v2, cme_gap, breakout_retest]
+    BREAKOUT: [fvg, cme_gap, breakout_retest]
+    CRASH:    [fvg, liq_sweep, wyckoff_upthrust_v2, cme_gap, breakout_retest]
     PUMP:     [cme_gap]
 
   ETHUSDT:
@@ -577,10 +595,10 @@ strategy_routing:
     # fvg: PF 1.63 confirmed
     # liq_sweep: PF 1.50 confirmed
     # CRASH: nothing confirmed — stays empty
-    TREND:    [fvg, liq_sweep, wyckoff_spring_v2]
-    RANGE:    []
-    BREAKOUT: [fvg, wyckoff_spring_v2]
-    CRASH:    []
+    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [fvg, wyckoff_spring_v2, breakout_retest]
+    CRASH:    [breakout_retest]
     PUMP:     []
 
   SOLUSDT:
@@ -588,10 +606,10 @@ strategy_routing:
     # fvg: PF 3.39, 13 trades confirmed
     # wyckoff_spring_v2: PF 1.50 confirmed
     # wyckoff_upthrust_v2: PF 4.99 in bear
-    TREND:    [fvg, ema_pullback_short, wyckoff_spring_v2]
-    RANGE:    []
-    BREAKOUT: [fvg, ema_pullback_short]
-    CRASH:    [ema_pullback_short, wyckoff_upthrust_v2]
+    TREND:    [fvg, ema_pullback_short, wyckoff_spring_v2, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [fvg, ema_pullback_short, breakout_retest]
+    CRASH:    [ema_pullback_short, wyckoff_upthrust_v2, breakout_retest]
     PUMP:     []
 
   BNBUSDT:
@@ -600,10 +618,10 @@ strategy_routing:
     # liq_sweep_short: PF 2.22 confirmed SHORT
     # microrange: PF 1.75 confirmed RANGE + CRASH
     # wyckoff_upthrust_v2: PF 2.50 confirmed bear
-    TREND:    [wyckoff_spring_v2, liq_sweep]
-    RANGE:    [microrange]
-    BREAKOUT: [liq_sweep, wyckoff_spring_v2]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange]
+    TREND:    [wyckoff_spring_v2, liq_sweep, breakout_retest]
+    RANGE:    [microrange, breakout_retest]
+    BREAKOUT: [liq_sweep, wyckoff_spring_v2, breakout_retest]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
     PUMP:     []
 
   XRPUSDT:
@@ -611,10 +629,10 @@ strategy_routing:
     # liq_sweep_short: PF 2.22 confirmed SHORT
     # wyckoff_upthrust_v2: PF 1.87 confirmed bear
     # vwap_band REMOVED — PF 0.73, consistent loser
-    TREND:    [ema_pullback_short_v2]
-    RANGE:    [ema_pullback_short_v2]
-    BREAKOUT: [ema_pullback_short_v2]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short_v2]
+    TREND:    [ema_pullback_short_v2, breakout_retest]
+    RANGE:    [ema_pullback_short_v2, breakout_retest]
+    BREAKOUT: [ema_pullback_short_v2, breakout_retest]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short_v2, breakout_retest]
     PUMP:     []
 
   LINKUSDT:
@@ -622,10 +640,10 @@ strategy_routing:
     # liq_sweep_short: PF 1.75 confirmed
     # wyckoff_spring_v2: PF 2.50 confirmed
     # wyckoff_upthrust_v2: PF 3.74 confirmed bear
-    TREND:    [liq_sweep, wyckoff_spring_v2]
-    RANGE:    [liq_sweep]
-    BREAKOUT: [liq_sweep, wyckoff_spring_v2]
-    CRASH:    [wyckoff_upthrust_v2, liq_sweep_short]
+    TREND:    [liq_sweep, wyckoff_spring_v2, breakout_retest]
+    RANGE:    [liq_sweep, breakout_retest]
+    BREAKOUT: [liq_sweep, wyckoff_spring_v2, breakout_retest]
+    CRASH:    [wyckoff_upthrust_v2, liq_sweep_short, breakout_retest]
     PUMP:     []
 
   DOGEUSDT:
@@ -633,10 +651,10 @@ strategy_routing:
     # liq_sweep_short: PF 2.56 confirmed
     # ema_pullback_short: PF 1.64 in bear confirmed
     # wyckoff_upthrust_v2: PF 9.99 confirmed
-    TREND:    [liq_sweep, ema_pullback_short]
-    RANGE:    []
-    BREAKOUT: [liq_sweep]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short]
+    TREND:    [liq_sweep, ema_pullback_short, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [liq_sweep, breakout_retest]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short, breakout_retest]
     PUMP:     []
 
   SUIUSDT:
@@ -645,10 +663,10 @@ strategy_routing:
     # wyckoff_spring_v2: PF 2.50 (4 trades — small sample)
     # ema_pullback_short_v2: PF 1.66 in ATH bull
     # microrange: PF 1.54 in bear confirmed
-    TREND:    [wyckoff_spring_v2, ema_pullback_short_v2]
-    RANGE:    []
-    BREAKOUT: [wyckoff_spring_v2]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange]
+    TREND:    [wyckoff_spring_v2, ema_pullback_short_v2, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [wyckoff_spring_v2, breakout_retest]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
     PUMP:     []
 
   _default:

@@ -205,6 +205,14 @@ async def main() -> None:
         log.info("Micro-range flip strategy enabled — symbols=%s  excluded=%s",
                  _mr_symbols, _mr_exclude)
 
+    # 6c1. Breakout retest (5M range breakout + level retest — all 8 coins)
+    if cfg.get("breakout_retest", {}).get("enabled", False):
+        from core.breakout_retest_loop import run_breakout_retest_loop
+        extra_tasks.append(
+            asyncio.create_task(run_breakout_retest_loop(symbols, cache))
+        )
+        log.info("Breakout Retest strategy enabled")
+
     # 6c2. BTC dominance poller — refreshes every 30 min from CoinGecko
     async def _refresh_btc_dominance(interval_secs: int = 1800) -> None:
         from data.binance_rest import get_btc_dominance
