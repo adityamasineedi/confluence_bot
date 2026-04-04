@@ -11,6 +11,9 @@ Usage examples:
       --from-date 2025-01-01 --to-date 2026-04-01
   python backtest/run.py --symbol BTCUSDT --strategy fvg --mc-compare
   python backtest/run.py --symbol BTCUSDT --strategy fvg --mc-threshold 0.40
+  python backtest/run.py --symbol BTCUSDT --strategy liq_sweep --show-balance
+  python backtest/run.py --symbol BTCUSDT --strategy liq_sweep \
+      --capital 5000 --risk-usdt 50 --show-balance
 """
 import argparse
 import os
@@ -46,13 +49,14 @@ def verdict(pf: float) -> str:
     return FAIL_MARK
 
 
+# -- Vol-ratio comparison -----------------------------------------------------
+
 def print_comparison(raw: dict, mc: dict, symbol: str, strategy: str,
                      mc_thresh: float = 2.0) -> None:
     """Print side-by-side comparison of unfiltered vs vol-ratio filtered."""
     skipped  = raw["n"] - mc["n"]
     skip_pct = skipped / raw["n"] * 100 if raw["n"] > 0 else 0
 
-    # Compute total R (sum of pnl_r) from avg_r × n
     total_r_raw = raw["avg_r"] * raw["n"]
     total_r_mc  = mc["avg_r"]  * mc["n"]
 
@@ -81,6 +85,158 @@ def print_comparison(raw: dict, mc: dict, symbol: str, strategy: str,
     print(f"{'='*70}\n")
 
 
+# -- Dollar P&L ---------------------------------------------------------------
+
+def compute_dollar_stats(trades: list,
+                         capital: float,
+                         risk_usdt: float) -> dict:
+    """Convert R-based trade results to dollar P&L.
+
+    Each trade has pnl_r (R multiple).
+    Dollar P&L = pnl_r x risk_usdt
+    """
+    if not trades:
+        return {
+            "starting_capital": capital,
+            "final_balance":    capital,
+            "total_profit":     0.0,
+            "total_return_pct": 0.0,
+            "max_drawdown_usd": 0.0,
+            "max_drawdown_pct": 0.0,
+            "peak_balance":     capital,
+            "lowest_balance":   capital,
+            "best_trade_usd":   0.0,
+            "worst_trade_usd":  0.0,
+            "avg_win_usd":      0.0,
+            "avg_loss_usd":     0.0,
+            "max_consec_wins":  0,
+            "max_consec_loss":  0,
+            "balance_history":  [capital],
+            "trade_pnls":       [],
+        }
+
+    balance = capital
+    peak    = capital
+    balance_history = [capital]
+    trade_pnls      = []
+
+    max_dd_usd  = 0.0
+    max_dd_pct  = 0.0
+    consec_wins = consec_loss = 0
+    max_cw = max_cl = 0
+
+    for trade in sorted(trades, key=lambda t: t.bar_idx):
+        dollar_pnl = round(trade.pnl_r * risk_usdt, 2)
+        balance    = round(balance + dollar_pnl, 2)
+        trade_pnls.append(dollar_pnl)
+        balance_history.append(balance)
+
+        if balance > peak:
+            peak = balance
+
+        drawdown_usd = peak - balance
+        drawdown_pct = drawdown_usd / peak * 100 if peak > 0 else 0
+
+        if drawdown_usd > max_dd_usd:
+            max_dd_usd = drawdown_usd
+            max_dd_pct = drawdown_pct
+
+        if dollar_pnl > 0:
+            consec_wins += 1
+            consec_loss  = 0
+            max_cw = max(max_cw, consec_wins)
+        else:
+            consec_loss += 1
+            consec_wins  = 0
+            max_cl = max(max_cl, consec_loss)
+
+    wins   = [p for p in trade_pnls if p > 0]
+    losses = [p for p in trade_pnls if p < 0]
+
+    return {
+        "starting_capital": capital,
+        "final_balance":    balance,
+        "total_profit":     round(balance - capital, 2),
+        "total_return_pct": round((balance - capital) / capital * 100, 2),
+        "max_drawdown_usd": round(max_dd_usd, 2),
+        "max_drawdown_pct": round(max_dd_pct, 2),
+        "peak_balance":     round(peak, 2),
+        "lowest_balance":   round(min(balance_history), 2),
+        "best_trade_usd":   round(max(trade_pnls), 2) if trade_pnls else 0,
+        "worst_trade_usd":  round(min(trade_pnls), 2) if trade_pnls else 0,
+        "avg_win_usd":      round(sum(wins) / len(wins), 2) if wins else 0,
+        "avg_loss_usd":     round(sum(losses) / len(losses), 2) if losses else 0,
+        "max_consec_wins":  max_cw,
+        "max_consec_loss":  max_cl,
+        "balance_history":  balance_history,
+        "trade_pnls":       trade_pnls,
+    }
+
+
+def print_dollar_report(stats: dict, symbol: str, strategy: str,
+                        risk_usdt: float, trades: list,
+                        data: dict | None = None,
+                        show_each_trade: bool = False) -> None:
+    """Print full dollar-based P&L report."""
+    s = stats
+    profit_sign = "+" if s["total_profit"] >= 0 else ""
+
+    print(f"\n{'='*65}")
+    print(f"  DOLLAR REPORT: {symbol} {strategy}")
+    print(f"  Capital: ${s['starting_capital']:,.2f}  |  Risk/trade: ${risk_usdt:.2f}")
+    print(f"{'='*65}")
+    print(f"  Starting balance : ${s['starting_capital']:>10,.2f}")
+    print(f"  Final balance    : ${s['final_balance']:>10,.2f}")
+    print(f"  Total profit     : {profit_sign}${s['total_profit']:>9,.2f}"
+          f"  ({profit_sign}{s['total_return_pct']:.1f}%)")
+    print(f"  Peak balance     : ${s['peak_balance']:>10,.2f}")
+    print(f"  Lowest balance   : ${s['lowest_balance']:>10,.2f}")
+    print(f"  {'-'*61}")
+    print(f"  Max drawdown     : -${s['max_drawdown_usd']:>9,.2f}"
+          f"  (-{s['max_drawdown_pct']:.1f}%)")
+    print(f"  Best trade       : +${s['best_trade_usd']:>9,.2f}")
+    print(f"  Worst trade      : -${abs(s['worst_trade_usd']):>9,.2f}")
+    print(f"  Avg win          : +${s['avg_win_usd']:>9,.2f}")
+    print(f"  Avg loss         : -${abs(s['avg_loss_usd']):>9,.2f}")
+    print(f"  Max consec wins  : {s['max_consec_wins']:>10}")
+    print(f"  Max consec losses: {s['max_consec_loss']:>10}")
+
+    n_trades = len(trades)
+    if n_trades > 0:
+        # Estimate annualised figures from the backtest period
+        trades_per_year = n_trades / 3.0
+        profit_per_year = s["total_profit"] / 3.0
+        print(f"  {'-'*61}")
+        print(f"  Trades/year (est): {trades_per_year:>9.1f}")
+        print(f"  Profit/year (est): {profit_sign}${profit_per_year:>9,.2f}")
+        print(f"  Profit/month(est): {profit_sign}${profit_per_year / 12:>9,.2f}")
+        print(f"  Profit/day  (est): {profit_sign}${profit_per_year / 365:>9,.2f}")
+
+    if show_each_trade and trades:
+        print(f"\n  {'#':<4} {'Date':<12} {'Dir':<6} {'Outcome':<8}"
+              f" {'P&L':>10} {'Balance':>12}")
+        print(f"  {'-'*56}")
+
+        sorted_trades = sorted(trades, key=lambda t: t.bar_idx)
+        balance = s["starting_capital"]
+
+        for i, (trade, pnl) in enumerate(
+            zip(sorted_trades, s["trade_pnls"]), 1
+        ):
+            balance   = round(balance + pnl, 2)
+            pnl_str   = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+            icon      = "TP" if pnl > 0 else "SL" if trade.outcome == "SL" else "TO"
+            direction = getattr(trade, "direction", "?")
+            date_str  = bar_date(data, symbol, trade.bar_idx) if data else str(trade.bar_idx)
+
+            print(f"  {i:<4} {date_str:<12} {direction:<6} {icon:<8}"
+                  f" {pnl_str:>10} ${balance:>11,.2f}")
+
+    print(f"{'='*65}\n")
+
+
+# -- Helpers ------------------------------------------------------------------
+
 def bar_date(data: dict, symbol: str, bar_idx: int) -> str:
     """Convert bar index to readable UTC date string."""
     key  = f"{symbol}:1h"
@@ -90,6 +246,8 @@ def bar_date(data: dict, symbol: str, bar_idx: int) -> str:
     ts = bars[bar_idx, 5]  # TS column
     return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
+
+# -- Main ---------------------------------------------------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser(
@@ -112,6 +270,12 @@ def main() -> None:
     ap.add_argument("--mc-compare", action="store_true", default=False,
                     help="Run both unfiltered and vol-ratio filtered, "
                          "show side-by-side comparison")
+    ap.add_argument("--capital", type=float, default=5000.0,
+                    help="Starting capital in USDT (default: 5000)")
+    ap.add_argument("--risk-usdt", type=float, default=50.0,
+                    help="Fixed risk per trade in USDT (default: 50)")
+    ap.add_argument("--show-balance", action="store_true", default=False,
+                    help="Show dollar P&L report with running balance")
     args = ap.parse_args()
 
     from_ts = _ms(args.from_date)
@@ -140,14 +304,15 @@ def main() -> None:
     print(f"  Coins    : {', '.join(symbols)}")
     print(f"  Strategy : {', '.join(strategies)}")
     print(f"  Period   : {args.from_date}  ->  {args.to_date}")
+    if args.show_balance:
+        print(f"  Capital  : ${args.capital:,.2f}  |  Risk/trade: ${args.risk_usdt:.2f}")
     print(f"{'='*65}\n")
 
-    mc_threshold = args.mc_threshold
-    mc_compare   = args.mc_compare
-    # For compare mode: CLI override or 0.0 (= use per-strategy config defaults)
+    mc_threshold  = args.mc_threshold
+    mc_compare    = args.mc_compare
     mc_thresh_val = mc_threshold
 
-    all_trades: list  = []
+    all_trades:  list = []
     result_rows: list = []
 
     for symbol in symbols:
@@ -158,7 +323,7 @@ def main() -> None:
 
         for strategy in strategies:
             if mc_compare:
-                # ── Side-by-side MC comparison ────────────────────────────────
+                # -- Side-by-side MC comparison --------------------------------
                 t0 = time.time()
                 trades_raw = run_strategy(symbol, strategy, data, btc_data,
                                           from_ts, to_ts, mc_threshold=-1.0)
@@ -170,12 +335,10 @@ def main() -> None:
                 stats_mc   = compute_stats(trades_mc)
                 elapsed    = time.time() - t0
 
-                # Show the effective threshold used
                 eff_thresh = _resolve_mc_threshold(strategy, mc_thresh_val)
                 print_comparison(stats_raw, stats_mc, symbol, strategy,
                                  mc_thresh=eff_thresh)
 
-                # Show individual MC-filtered trades if requested
                 if args.show_trades and trades_mc:
                     for t in trades_mc:
                         date_str = bar_date(data, symbol, t.bar_idx)
@@ -196,11 +359,11 @@ def main() -> None:
 
                 all_trades.extend(trades_raw)
                 result_rows.append({"symbol": symbol, "strategy": strategy,
-                                    **stats_raw})
+                                    "_trades": trades_raw, **stats_raw})
                 print(f"  ({elapsed:.1f}s)")
 
             else:
-                # ── Normal single run ─────────────────────────────────────────
+                # -- Normal single run -----------------------------------------
                 t0      = time.time()
                 trades  = run_strategy(symbol, strategy, data, btc_data,
                                        from_ts, to_ts,
@@ -240,39 +403,52 @@ def main() -> None:
                         )
                     print()
 
+                # Dollar report (always computed, printed when --show-balance)
+                if args.show_balance and trades:
+                    ds = compute_dollar_stats(trades, args.capital, args.risk_usdt)
+                    print_dollar_report(ds, symbol, strategy, args.risk_usdt,
+                                        trades, data=data,
+                                        show_each_trade=True)
+
                 all_trades.extend(trades)
                 result_rows.append({"symbol": symbol, "strategy": strategy,
-                                    **s})
+                                    "_trades": trades, **s})
 
     if not result_rows:
         print("  No results — check that backtest/data/ files exist.\n")
         return
 
-    # Summary table sorted by PF descending
-    print(f"\n{'='*65}")
-    print(f"  {'SYMBOL':<10}  {'STRATEGY':<15}  {'N':>4}  "
-          f"{'WR':>6}  {'PF':>5}  VERDICT")
-    print(f"  {'-'*60}")
+    # -- Summary table ---------------------------------------------------------
+    capital   = args.capital
+    risk_usdt = args.risk_usdt
+
+    print(f"\n{'='*80}")
+    print(f"  {'SYMBOL':<10} {'STRATEGY':<20} {'N':>5} {'WR':>6}"
+          f" {'PF':>6} {'PROFIT$':>10} {'RETURN':>8}  VERDICT")
+    print(f"  {'-'*75}")
     for r in sorted(result_rows, key=lambda x: x["pf"], reverse=True):
+        ds    = compute_dollar_stats(r.get("_trades", []), capital, risk_usdt)
+        vrd   = verdict(r["pf"])
+        psign = "+" if ds["total_profit"] >= 0 else ""
         print(
-            f"  {r['symbol']:<10}  {r['strategy']:<15}  "
-            f"{r['n']:>4}  "
-            f"{r['wr']:>5.1f}%  "
-            f"{r['pf']:>5.2f}  "
-            f"{verdict(r['pf'])}"
+            f"  {r['symbol']:<10} {r['strategy']:<20} {r['n']:>5}"
+            f" {r['wr']:>5.1f}% {r['pf']:>6.2f}"
+            f" {psign}${ds['total_profit']:>8,.0f}"
+            f" {psign}{ds['total_return_pct']:>6.1f}%  {vrd}"
         )
 
     if all_trades:
-        t = compute_stats(all_trades)
-        print(f"  {'-'*60}")
+        t  = compute_stats(all_trades)
+        ds = compute_dollar_stats(all_trades, capital, risk_usdt)
+        psign = "+" if ds["total_profit"] >= 0 else ""
+        print(f"  {'-'*75}")
         print(
-            f"  {'OVERALL':<27}  "
-            f"{t['n']:>4}  "
-            f"{t['wr']:>5.1f}%  "
-            f"{t['pf']:>5.2f}  "
-            f"{verdict(t['pf'])}"
+            f"  {'OVERALL':<31} {t['n']:>5}"
+            f" {t['wr']:>5.1f}% {t['pf']:>6.2f}"
+            f" {psign}${ds['total_profit']:>8,.0f}"
+            f" {psign}{ds['total_return_pct']:>6.1f}%  {verdict(t['pf'])}"
         )
-    print(f"{'='*65}\n")
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":

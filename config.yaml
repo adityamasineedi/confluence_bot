@@ -557,61 +557,106 @@ volume_momentum:
 # Defines which strategies are active per symbol per regime.
 # Falls back to _default if symbol not listed.
 # Individual strategy enabled: false flags are still respected by the router.
+# Strategies without a live scorer yet will be skipped gracefully by the router.
 strategy_routing:
+
   BTCUSDT:
-    TREND:     [fvg, liq_sweep, wyckoff_spring_v2]
-    RANGE:     [wyckoff_spring_v2]
-    BREAKOUT:  [fvg]
-    CRASH:     [fvg, liq_sweep]
-    PUMP:      []
+    # cme_gap: 135 trades, PF 2.74 — highest frequency BTC strategy
+    # liq_sweep: PF 2.46 confirmed LONG + SHORT
+    # wyckoff_spring_v2: PF 3.83 confirmed bull
+    # wyckoff_upthrust_v2: PF 3.33 confirmed bear
+    # fvg: PF 2.50 confirmed
+    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, cme_gap]
+    RANGE:    [wyckoff_spring_v2, cme_gap]
+    BREAKOUT: [fvg, cme_gap]
+    CRASH:    [fvg, liq_sweep, wyckoff_upthrust_v2, cme_gap]
+    PUMP:     [cme_gap]
+
   ETHUSDT:
-    TREND:     [fvg, liq_sweep, wyckoff_spring_v2]
-    RANGE:     []
-    BREAKOUT:  [fvg, wyckoff_spring_v2]
-    CRASH:     []
-    PUMP:      []
+    # wyckoff_spring_v2: PF 2.50 bull only
+    # fvg: PF 1.63 confirmed
+    # liq_sweep: PF 1.50 confirmed
+    # CRASH: nothing confirmed — stays empty
+    TREND:    [fvg, liq_sweep, wyckoff_spring_v2]
+    RANGE:    []
+    BREAKOUT: [fvg, wyckoff_spring_v2]
+    CRASH:    []
+    PUMP:     []
+
   SOLUSDT:
-    TREND:     [fvg]
-    RANGE:     []
-    BREAKOUT:  [fvg]
-    CRASH:     [fvg]                       # added — fvg SHORT PF 3.14 in bear
-    PUMP:      []
+    # ema_pullback_short: PF 1.74, 174 trades — BEST SOL strategy
+    # fvg: PF 3.39, 13 trades confirmed
+    # wyckoff_spring_v2: PF 1.50 confirmed
+    # wyckoff_upthrust_v2: PF 4.99 in bear
+    TREND:    [fvg, ema_pullback_short, wyckoff_spring_v2]
+    RANGE:    []
+    BREAKOUT: [fvg, ema_pullback_short]
+    CRASH:    [ema_pullback_short, wyckoff_upthrust_v2]
+    PUMP:     []
+
   BNBUSDT:
-    TREND:     [wyckoff_spring_v2, liq_sweep]
-    RANGE:     [microrange]
-    BREAKOUT:  [fvg]
-    CRASH:     [liq_sweep_short, microrange]
-    PUMP:      []
+    # wyckoff_spring_v2: PF 5.33 — strongest BNB strategy
+    # liq_sweep: PF 2.81 confirmed LONG
+    # liq_sweep_short: PF 2.22 confirmed SHORT
+    # microrange: PF 1.75 confirmed RANGE + CRASH
+    # wyckoff_upthrust_v2: PF 2.50 confirmed bear
+    TREND:    [wyckoff_spring_v2, liq_sweep]
+    RANGE:    [microrange]
+    BREAKOUT: [liq_sweep, wyckoff_spring_v2]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange]
+    PUMP:     []
+
   XRPUSDT:
-    TREND:     [vwap_band]                 # removed ema_pullback (PF 1.28 marginal), keep vwap
-    RANGE:     [vwap_band]                 # removed microrange PF 1.32 — below fee break-even
-    BREAKOUT:  [vwap_band]
-    CRASH:     [liq_sweep_short]            # PF confirmed; fvg SHORT PF 5.03 removed — liq_sweep_short preferred
-    PUMP:      []
+    # ema_pullback_short_v2: PF 1.58, 233 trades — highest frequency
+    # liq_sweep_short: PF 2.22 confirmed SHORT
+    # wyckoff_upthrust_v2: PF 1.87 confirmed bear
+    # vwap_band REMOVED — PF 0.73, consistent loser
+    TREND:    [ema_pullback_short_v2]
+    RANGE:    [ema_pullback_short_v2]
+    BREAKOUT: [ema_pullback_short_v2]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short_v2]
+    PUMP:     []
+
   LINKUSDT:
-    TREND:     [liq_sweep, wyckoff_spring_v2]
-    RANGE:     [liq_sweep]
-    BREAKOUT:  [vwap_band]
-    CRASH:     [liq_sweep_short]
-    PUMP:      []
+    # liq_sweep: PF 3.74 confirmed
+    # liq_sweep_short: PF 1.75 confirmed
+    # wyckoff_spring_v2: PF 2.50 confirmed
+    # wyckoff_upthrust_v2: PF 3.74 confirmed bear
+    TREND:    [liq_sweep, wyckoff_spring_v2]
+    RANGE:    [liq_sweep]
+    BREAKOUT: [liq_sweep, wyckoff_spring_v2]
+    CRASH:    [wyckoff_upthrust_v2, liq_sweep_short]
+    PUMP:     []
+
   DOGEUSDT:
-    TREND:     [liq_sweep]
-    RANGE:     []                          # removed microrange — PF 1.19 below fee floor
-    BREAKOUT:  [fvg]
-    CRASH:     [liq_sweep_short]
-    PUMP:      []
+    # liq_sweep: PF 7.49 — strongest DOGE strategy
+    # liq_sweep_short: PF 2.56 confirmed
+    # ema_pullback_short: PF 1.64 in bear confirmed
+    # wyckoff_upthrust_v2: PF 9.99 confirmed
+    TREND:    [liq_sweep, ema_pullback_short]
+    RANGE:    []
+    BREAKOUT: [liq_sweep]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short]
+    PUMP:     []
+
   SUIUSDT:
-    TREND:     [ema_pullback, fvg]         # removed vwap_band — not confirmed
-    RANGE:     []                          # removed microrange — PF 1.17 below fee floor
-    BREAKOUT:  [ema_pullback, fvg]
-    CRASH:     [liq_sweep_short]
-    PUMP:      []
+    # liq_sweep_short: PF 2.44 confirmed
+    # wyckoff_upthrust_v2: PF 9.99 confirmed
+    # wyckoff_spring_v2: PF 2.50 (4 trades — small sample)
+    # ema_pullback_short_v2: PF 1.66 in ATH bull
+    # microrange: PF 1.54 in bear confirmed
+    TREND:    [wyckoff_spring_v2, ema_pullback_short_v2]
+    RANGE:    []
+    BREAKOUT: [wyckoff_spring_v2]
+    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange]
+    PUMP:     []
+
   _default:
-    TREND:     []
-    RANGE:     []
-    BREAKOUT:  []
-    CRASH:     []
-    PUMP:      []
+    TREND:    []
+    RANGE:    []
+    BREAKOUT: []
+    CRASH:    []
+    PUMP:     []
 
 # ── ATR spike gate ───────────────────────────────────────────────────────────
 # Blocks all scorer entries when current 1H bar ATR is > multiplier × 20-bar avg.

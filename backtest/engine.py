@@ -200,6 +200,50 @@ def vol_ma(bars: np.ndarray, period: int = 20) -> np.ndarray:
     return out
 
 
+def _utc_hour(ts_ms: int) -> int:
+    return (ts_ms // 3_600_000) % 24
+
+
+def _detect_range(bars, i, n_candles=8,
+                  min_width=0.0018, max_width=0.0080,
+                  atr_mult_max=1.35):
+    start = i - n_candles
+    if start < 1:
+        return False, 0.0, 0.0
+    window   = bars[start:i]
+    rng_high = window[:, H].max()
+    rng_low  = window[:, L].min()
+    if rng_low <= 0:
+        return False, 0.0, 0.0
+    mid   = (rng_high + rng_low) / 2.0
+    width = (rng_high - rng_low) / mid
+    if not (min_width <= width <= max_width):
+        return False, 0.0, 0.0
+    win  = bars[max(0, i-20):i]
+    trs  = [max(win[j,H]-win[j,L], abs(win[j,H]-win[j-1,C]),
+                abs(win[j,L]-win[j-1,C])) for j in range(1,len(win))]
+    if not trs:
+        return False, 0.0, 0.0
+    avg = sum(trs[:-1]) / max(len(trs)-1, 1)
+    if avg > 0 and trs[-1] > avg * atr_mult_max:
+        return False, 0.0, 0.0
+    return True, rng_high, rng_low
+
+
+def _is_breakout_long(bar, rng_high, vol_mult, vm_val):
+    if bar[C] <= rng_high: return False
+    if max(bar[O], bar[C]) <= rng_high: return False
+    if vm_val > 0 and bar[V] < vm_val * vol_mult: return False
+    return True
+
+
+def _is_breakout_short(bar, rng_low, vol_mult, vm_val):
+    if bar[C] >= rng_low: return False
+    if min(bar[O], bar[C]) >= rng_low: return False
+    if vm_val > 0 and bar[V] < vm_val * vol_mult: return False
+    return True
+
+
 def map_series(src_bars: np.ndarray, src_vals: np.ndarray,
                tgt_bars: np.ndarray) -> np.ndarray:
     """Map src_vals (aligned with src_bars) onto tgt_bars via timestamp.
@@ -1415,6 +1459,92 @@ def compute_stats(trades: list[Trade]) -> dict:
     )
 
 
+def run_breakout_retest(symbol, data, btc_data,
+                        from_ts, to_ts, rr_ratio=2.2, **_kw):
+    b5m = data.get(f"{symbol}:5m")
+    b1h = data.get(f"{symbol}:1h")
+    _btc = btc_data or {}
+    b1w = _btc.get("BTCUSDT:1w") or data.get(f"{symbol}:1w")
+    if b5m is None or len(b5m) < WARMUP + 20:
+        return []
+    n = len(b5m)
+    pm = (b5m[:, TS] >= from_ts) & (b5m[:, TS] <= to_ts)
+    wm = np.zeros(n, bool); wm[WARMUP:] = True
+    valid = pm & wm
+    wk_l = mask_weekly_long(b1w, b5m)
+    wk_s = mask_weekly_short(b1w, b5m)
+    hbull = np.ones(n, bool); hbear = np.ones(n, bool)
+    if b1h is not None and len(b1h) > 20:
+        e20 = ema(b1h[:, C], 20)
+        for idx in range(n):
+            j = int(np.searchsorted(b1h[:, TS],
+                    int(b5m[idx, TS]), side='right')) - 1
+            if 0 <= j < len(b1h) and j < len(e20):
+                hbull[idx] = b1h[j, C] > e20[j]
+                hbear[idx] = b1h[j, C] < e20[j]
+    vm5 = vol_ma(b5m, 20)
+    at5 = atr(b5m)
+    trades = []; last_exit = -1
+    i = WARMUP
+    while i < n - 10:
+        if not valid[i] or i <= last_exit:
+            i += 1; continue
+        if 14 <= _utc_hour(int(b5m[i, TS])) < 15:
+            i += 1; continue
+        ok, rh, rl = _detect_range(b5m, i)
+        if not ok:
+            i += 1; continue
+        vm = float(vm5[i]) if i < len(vm5) else 0.0
+        bl = _is_breakout_long(b5m[i],  rh, 1.25, vm) and valid[i] and wk_l[i] and hbull[i]
+        bs = _is_breakout_short(b5m[i], rl, 1.25, vm) and valid[i] and wk_s[i] and hbear[i]
+        if not bl and not bs:
+            i += 1; continue
+        direction = "LONG" if bl else "SHORT"
+        flip = rh if bl else rl
+        rf = False; eb = -1
+        for j in range(i+1, min(i+9, n)):
+            bj = b5m[j]
+            if 14 <= _utc_hour(int(bj[TS])) < 15: continue
+            if direction == "LONG":
+                if bj[L] <= flip*1.002 and bj[C] > flip:
+                    rf=True; eb=j; break
+                if bj[C] < flip*0.997: break
+            else:
+                if bj[H] >= flip*0.998 and bj[C] < flip:
+                    rf=True; eb=j; break
+                if bj[C] > flip*1.003: break
+        if not rf or eb < 0:
+            i += 1; continue
+        av = float(at5[eb]) if eb < len(at5) else 0.0
+        if av <= 0:
+            i += 1; continue
+        sd = max(av*1.3, flip*0.001)
+        if direction == "LONG":
+            stop = flip - sd; tp = flip + sd*rr_ratio
+        else:
+            stop = flip + sd; tp = flip - sd*rr_ratio
+        if stop <= 0 or tp <= 0:
+            i += 1; continue
+        fut = b5m[eb+1: eb+49]
+        outcome="TIMEOUT"; pnl=0.0; xb=eb+48
+        for k, f in enumerate(fut):
+            if direction == "LONG":
+                if f[L] <= stop: outcome="SL"; pnl=-1.0-FEE_RT; xb=eb+1+k; break
+                if f[H] >= tp:   outcome="TP"; pnl=rr_ratio-FEE_RT; xb=eb+1+k; break
+            else:
+                if f[H] >= stop: outcome="SL"; pnl=-1.0-FEE_RT; xb=eb+1+k; break
+                if f[L] <= tp:   outcome="TP"; pnl=rr_ratio-FEE_RT; xb=eb+1+k; break
+        if outcome == "TIMEOUT":
+            lp = fut[-1,C] if len(fut) > 0 else flip
+            pnl = ((lp-flip)/sd if direction=="LONG" else (flip-lp)/sd) - FEE_RT
+        trades.append(Trade(symbol=symbol, strategy="breakout_retest",
+                            direction=direction, bar_idx=eb,
+                            entry=flip, stop=stop, tp=tp,
+                            outcome=outcome, pnl_r=round(pnl,4)))
+        last_exit = xb; i = xb + 1
+    return trades
+
+
 RUNNERS: dict = {
     "fvg":                    run_fvg,
     "ema_pullback":           run_ema_pullback,
@@ -1429,6 +1559,7 @@ RUNNERS: dict = {
     "wyckoff_spring_v2":      run_wyckoff_spring_v2,
     "wyckoff_upthrust_v2":    run_wyckoff_upthrust_v2,
     "cme_gap":                run_cme_gap,
+    "breakout_retest":        run_breakout_retest,
 }
 
 
@@ -1447,6 +1578,7 @@ _STRATEGY_CFG_KEY: dict[str, str] = {
     "wyckoff_spring_v2":      "wyckoff_spring",
     "wyckoff_upthrust_v2":    "wyckoff_spring",
     "cme_gap":                "fvg",          # no dedicated block — shares fvg default
+    "breakout_retest":        "microrange",   # shares microrange config block
 }
 
 
