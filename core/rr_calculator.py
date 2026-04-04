@@ -15,7 +15,7 @@ _STOP_ATR_MULT     = 1.5   # stop = entry ± ATR × multiplier
 # stop on a $1 coin gets taken out by normal spread noise.  Enforce a minimum
 # stop distance of 0.5 % of entry price so we always stay outside the noise band.
 _MIN_STOP_PCT      = 0.005  # 0.5 % minimum stop distance
-_PAPER_DEFAULT_BAL = 10_000.0  # default paper balance when no API key is set
+_PAPER_DEFAULT_BAL = 4_743.0  # default paper balance when no API key is set
 
 # Binance Futures lot-size step sizes (decimal places for quantity)
 # stepSize=0.001 → 3 dp, stepSize=1 → 0 dp, etc.

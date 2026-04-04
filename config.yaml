@@ -137,7 +137,7 @@ weights:
 risk:
   risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
   max_risk_usdt: 5000              # high cap so compounding is never blocked
-  max_position_size_usdt: 15000    # allow full risk sizing as account grows
+  max_position_size_usdt: 4000     # keep notional within demo account margin (bal×lev×0.85)
   max_open_positions: 3
   max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
   rr_ratio: 2.5                    # TP = entry ± stop_dist × 2.5
