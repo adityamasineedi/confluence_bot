@@ -6,12 +6,12 @@ from collections import defaultdict, deque
 # ── Per-timeframe candle retention limits ─────────────────────────────────────
 _TF_MAXLEN: dict[str, int] = {
     "1m":  500,
-    "5m":  300,
-    "15m": 200,
+    "5m":  500,    # breakout_retest needs 200+ bars
+    "15m": 500,
     "1h":  500,
-    "4h":  200,
-    "1d":  100,
-    "1w":  52,
+    "4h":  300,
+    "1d":  200,
+    "1w":  100,
 }
 _DEFAULT_TF_MAXLEN = 200
 

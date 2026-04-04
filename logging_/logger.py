@@ -76,8 +76,13 @@ class TradeLogger:
     def _insert_signal(self, d: dict) -> None:
         try:
             with sqlite3.connect(self.db_path) as conn:
+                # Prune old signals first (keep last 24h only)
                 conn.execute(
-                    "INSERT INTO signals (ts, symbol, regime, direction, score, signals, fire) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "DELETE FROM signals WHERE ts < datetime('now', '-1 day')"
+                )
+                conn.execute(
+                    "INSERT INTO signals (ts, symbol, regime, direction, score, signals, fire) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (_utcnow(), d.get("symbol",""), d.get("regime",""), d.get("direction",""),
                      d.get("score", 0.0), json.dumps(d.get("signals", {})), 1 if d.get("fire") else 0),
                 )

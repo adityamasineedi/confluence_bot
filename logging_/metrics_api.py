@@ -705,6 +705,12 @@ async def dashboard() -> HTMLResponse:
     </div>
   </div>
   <section style="padding-top:0">
+    <h2>Signal Readiness <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— how close each coin is to firing</span></h2>
+    <div id="readiness-body">
+      <div style="color:#4b5563;padding:12px">loading…</div>
+    </div>
+  </section>
+  <section style="padding-top:0">
     <h2>Live Signal Snapshot <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— Binance live data</span></h2>
     <div style="overflow-x:auto">
     <table>
@@ -1752,11 +1758,12 @@ function badge(cls, text) { return `<span class="badge badge-${text}">${text}</s
 
 // ── SIGNALS / TRADES / REGIMES (shared refresh) ───────────────────────────────
 async function refreshTradelog() {
-  const [stats, liveSignals, firedSignals, trades] = await Promise.all([
+  const [stats, liveSignals, firedSignals, trades, readiness] = await Promise.all([
     fetchJSON('/stats/summary'),
     fetchJSON('/signals/live'),
     fetchJSON('/signals/recent?limit=20'),
     fetchJSON('/trades/recent?limit=20'),
+    fetchJSON('/signals/readiness'),
   ]);
   document.getElementById('stat-trades').textContent  = stats.total_trades;
   document.getElementById('stat-winrate').textContent = (stats.win_rate * 100).toFixed(1) + '%';
@@ -1764,6 +1771,31 @@ async function refreshTradelog() {
   pnlEl.textContent = (stats.total_pnl_usdt >= 0 ? '+' : '') + stats.total_pnl_usdt.toFixed(2);
   pnlEl.className = 'val ' + (stats.total_pnl_usdt >= 0 ? 'green' : 'red');
   document.getElementById('stat-fired').textContent = stats.fired_today;
+
+  // Signal Readiness panel
+  if (readiness && readiness.length) {
+    document.getElementById('readiness-body').innerHTML =
+      readiness.map(r => {
+        const pct   = r.readiness_pct || 0;
+        const color = pct >= 80 ? '#22c55e'
+                    : pct >= 55 ? '#fbbf24'
+                    : '#6b7280';
+        const bar   = `<div style="background:#12141e;border-radius:3px;
+                         height:8px;width:100%;margin:4px 0">
+          <div style="width:${pct}%;background:${color};
+                      height:8px;border-radius:3px;
+                      transition:width 0.5s"></div></div>`;
+        return `<div style="display:grid;
+                  grid-template-columns:90px 60px 1fr 200px;
+                  gap:8px;align-items:center;padding:6px 0;
+                  border-bottom:1px solid #1e2130;font-size:0.82rem">
+          <span style="font-weight:600">${r.symbol}</span>
+          <span style="color:${color};font-weight:700">${pct}%</span>
+          <div>${bar}</div>
+          <span style="color:#4b5563;font-size:0.75rem">${r.reason}</span>
+        </div>`;
+      }).join('');
+  }
 
   // Circuit Breaker status
   fetchCB();
@@ -3266,6 +3298,113 @@ def market_data() -> JSONResponse:
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
+    return JSONResponse(result)
+
+
+@app.get("/signals/readiness")
+async def signal_readiness() -> JSONResponse:
+    """Return how close each symbol is to firing a breakout_retest signal."""
+    if _cache is None:
+        return JSONResponse([])
+
+    symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT',
+               'XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT']
+    result = []
+
+    for sym in symbols:
+        try:
+            bars_5m = _cache.get_ohlcv(sym, window=50, tf="5m")
+            bars_4h = _cache.get_ohlcv(sym, window=25, tf="4h")
+
+            if not bars_5m or len(bars_5m) < 30:
+                result.append({
+                    "symbol": sym, "readiness_pct": 0,
+                    "range_valid": False, "vol_ready": False,
+                    "htf_bear": False, "htf_bull": False,
+                    "state": "NO_DATA", "width_pct": 0,
+                    "vol_ratio": 0, "proximity_pct": 0,
+                    "reason": "Insufficient 5m bars",
+                })
+                continue
+
+            # Range check
+            RANGE_BARS = 8
+            window = bars_5m[-(RANGE_BARS + 1):-1]
+            rng_high = max(b["h"] for b in window)
+            rng_low  = min(b["l"] for b in window)
+            mid      = (rng_high + rng_low) / 2.0
+            width    = (rng_high - rng_low) / mid if mid > 0 else 0
+            range_valid = 0.0010 <= width <= 0.0200
+
+            # Volume check
+            vols = [b["v"] for b in bars_5m[-20:] if b.get("v", 0) > 0]
+            vol_ma = sum(vols) / len(vols) if vols else 0
+            cur_vol = bars_5m[-1].get("v", 0)
+            vol_ratio = (cur_vol / vol_ma) if vol_ma > 0 else 0
+            vol_ready = vol_ratio >= 1.25
+
+            # HTF direction
+            htf_bear = htf_bull = True
+            if bars_4h and len(bars_4h) >= 21:
+                closes_4h = [b["c"] for b in bars_4h]
+                k = 2.0 / 22
+                ema = sum(closes_4h[:21]) / 21
+                for c in closes_4h[21:]:
+                    ema = c * k + ema * (1 - k)
+                htf_bull = closes_4h[-1] > ema
+                htf_bear = closes_4h[-1] < ema
+
+            # Proximity to breakout
+            bar_close = bars_5m[-1]["c"]
+            dist_to_low  = abs(bar_close - rng_low)  / mid * 100
+            dist_to_high = abs(bar_close - rng_high) / mid * 100
+            nearest_dist = min(dist_to_low, dist_to_high)
+            half_width = width / 2 * 100
+            proximity_pct = max(0, 100 - (nearest_dist / half_width * 100)) if half_width > 0 else 0
+            direction = "SHORT" if dist_to_low < dist_to_high else "LONG"
+
+            # Composite readiness score
+            score = 0
+            if range_valid:       score += 35
+            if htf_bear:          score += 20
+            if vol_ratio >= 0.80: score += 15
+            if vol_ready:         score += 15
+            score += min(15, int(proximity_pct * 0.15))
+
+            if not range_valid:
+                reason = f"Range too tight/wide ({width*100:.3f}%)"
+            elif not htf_bear and not htf_bull:
+                reason = "No HTF direction"
+            elif not vol_ready:
+                reason = f"Low volume ({vol_ratio:.2f}x, need 1.25x)"
+            else:
+                reason = f"Ready — watching for {direction} breakout"
+
+            result.append({
+                "symbol":        sym,
+                "readiness_pct": min(score, 100),
+                "range_valid":   range_valid,
+                "width_pct":     round(width * 100, 4),
+                "vol_ready":     vol_ready,
+                "vol_ratio":     round(vol_ratio, 2),
+                "htf_bear":      htf_bear,
+                "htf_bull":      htf_bull,
+                "state":         "IDLE",
+                "proximity_pct": round(proximity_pct, 1),
+                "direction":     direction,
+                "rng_low":       round(rng_low, 6),
+                "rng_high":      round(rng_high, 6),
+                "bar_close":     round(bar_close, 6),
+                "reason":        reason,
+            })
+
+        except Exception as exc:
+            result.append({
+                "symbol": sym, "readiness_pct": 0,
+                "reason": str(exc), "state": "ERROR",
+            })
+
+    result.sort(key=lambda x: x["readiness_pct"], reverse=True)
     return JSONResponse(result)
 
 

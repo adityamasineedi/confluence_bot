@@ -106,7 +106,7 @@ def _detect_range(bars_5m: list[dict],
     Logs reason for failure at DEBUG level for diagnostics.
     """
     if len(bars_5m) < _RANGE_BARS + 20:
-        log.debug("BR %s: not enough bars (%d < %d)",
+        log.info("BR %s: not enough bars (%d < %d)",
                   symbol, len(bars_5m), _RANGE_BARS + 20)
         return False, 0.0, 0.0
 
@@ -121,7 +121,7 @@ def _detect_range(bars_5m: list[dict],
     width = (rng_high - rng_low) / mid
 
     if not (_MIN_WIDTH <= width <= _MAX_WIDTH):
-        log.debug("BR %s: range width %.4f%% outside [%.4f%%, %.4f%%]",
+        log.info("BR %s: range width %.4f%% outside [%.4f%%, %.4f%%]",
                   symbol, width*100, _MIN_WIDTH*100, _MAX_WIDTH*100)
         return False, 0.0, 0.0
 
@@ -138,11 +138,11 @@ def _detect_range(bars_5m: list[dict],
         avg_atr     = sum(trs[:-1]) / len(trs[:-1])
         current_atr = trs[-1]
         if avg_atr > 0 and current_atr > avg_atr * _ATR_MULT_MAX:
-            log.debug("BR %s: ATR spike %.4f > %.1f× avg %.4f",
+            log.info("BR %s: ATR spike %.4f > %.1f× avg %.4f",
                       symbol, current_atr, _ATR_MULT_MAX, avg_atr)
             return False, 0.0, 0.0
 
-    log.debug("BR %s: range valid [%.4f, %.4f] width=%.3f%%",
+    log.info("BR %s: range valid [%.4f, %.4f] width=%.3f%%",
               symbol, rng_low, rng_high, width*100)
     return True, rng_high, rng_low
 
@@ -168,7 +168,7 @@ async def score(symbol: str, cache) -> list[dict]:
 
     bars_5m = cache.get_ohlcv(symbol, window=50, tf="5m")
     if not bars_5m or len(bars_5m) < 30:
-        log.debug("BR %s: insufficient 5m bars (%d)",
+        log.info("BR %s: insufficient 5m bars (%d)",
                   symbol, len(bars_5m) if bars_5m else 0)
         return []
 
@@ -200,7 +200,7 @@ async def score(symbol: str, cache) -> list[dict]:
 
         # Timeout — discard after _RETEST_BARS
         if bars_waited > _RETEST_BARS:
-            log.debug("BR %s %s — retest timeout, reset", symbol, direction)
+            log.info("BR %s %s — retest timeout, reset", symbol, direction)
             _state[symbol] = {"state": "IDLE"}
             return []
 
@@ -300,7 +300,7 @@ async def score(symbol: str, cache) -> list[dict]:
                    and weekly_allows_short("breakout_retest", cache))
 
     if not broke_long and not broke_short:
-        log.debug("BR %s: range valid but no breakout  "
+        log.info("BR %s: range valid but no breakout  "
                   "bar_close=%.4f  rng=[%.4f, %.4f]  "
                   "vol_ok=%s  htf_bull=%s  htf_bear=%s",
                   symbol, bar["c"],
@@ -315,7 +315,7 @@ async def score(symbol: str, cache) -> list[dict]:
             "flip_level":  rng_high,
             "bars_waited": 0,
         }
-        log.debug("BR %s LONG breakout above %.4f — waiting for retest",
+        log.info("BR %s LONG breakout above %.4f — waiting for retest",
                   symbol, rng_high)
 
     elif broke_short:
@@ -325,7 +325,7 @@ async def score(symbol: str, cache) -> list[dict]:
             "flip_level":  rng_low,
             "bars_waited": 0,
         }
-        log.debug("BR %s SHORT breakout below %.4f — waiting for retest",
+        log.info("BR %s SHORT breakout below %.4f — waiting for retest",
                   symbol, rng_low)
 
     return []   # no signal on breakout bar — wait for retest
