@@ -777,7 +777,7 @@ async def place_trailing_stop(
     Returns the Binance order dict, or {} on rejection/failure.
     """
     headers = {"X-MBX-APIKEY": _API_KEY}
-    qty = int(quantity) if quantity == int(quantity) else quantity
+    qty = _round_qty(symbol, quantity)
     params = _sign({
         "symbol":       symbol,
         "side":         side,
