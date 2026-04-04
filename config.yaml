@@ -135,18 +135,18 @@ weights:
 
 # ── Risk management ──────────────────────────────────────────────────────────
 risk:
-  max_risk_usdt: 5                # max $5 loss per trade (5% of $100 margin)
-  max_position_size_usdt: 300    # $300 notional = $100 margin at 3x leverage
-  max_open_positions: 5          # 5 × $100 margin = $500 total (10% of balance)
+  risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
+  max_risk_usdt: 5000              # high cap so compounding is never blocked
+  max_position_size_usdt: 5000     # allow larger positions as account grows
+  max_open_positions: 3
   max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
-  rr_ratio: 2.5                   # TP = entry ± stop_dist × 2.5
+  rr_ratio: 2.5                    # TP = entry ± stop_dist × 2.5
   leverage: 3
   margin_type: ISOLATED
   # ── Circuit breaker ───────────────────────────────────────────────────────
-  max_daily_loss_pct: 3.0         # halt if daily loss > 3% of balance (~$144)
-  max_daily_loss_usdt: 150        # or > $150 in one day (30 losing trades × $5)
-  max_consecutive_losses: 6       # halt after 6 consecutive losses
-  post_trade_cooldown_mins: 30    # 30 min cooldown per symbol after any close
+  max_daily_loss_pct: 3.0          # halt if daily loss > 3% of growing balance
+  max_consecutive_losses: 4        # halt after 4 consecutive losses
+  post_trade_cooldown_mins: 15     # 15 min cooldown per symbol after any close
   # ── Extreme volatility gate ──────────────────────────────────────────────
   # Halts all new entries when 4H ATR spikes 3× above median (flash crash events).
   # Catches: COVID March 2020, LUNA May 2022, FTX November 2022.

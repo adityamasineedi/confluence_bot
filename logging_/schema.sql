@@ -12,20 +12,25 @@ CREATE TABLE IF NOT EXISTS signals (
 );
 
 CREATE TABLE IF NOT EXISTS trades (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT    NOT NULL,           -- ISO-8601 UTC timestamp
-    symbol      TEXT    NOT NULL,
-    direction   TEXT    NOT NULL,           -- LONG | SHORT
-    regime      TEXT    NOT NULL,
-    entry       REAL    NOT NULL,
-    stop_loss   REAL    NOT NULL,
-    take_profit REAL    NOT NULL,
-    size        REAL    NOT NULL,           -- base currency units
-    order_id    TEXT,                       -- Binance order ID
-    status      TEXT    DEFAULT 'OPEN',    -- OPEN | FILLED | CANCELLED
-    exit_price  REAL,
-    pnl_usdt    REAL,
-    closed_ts   TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT    NOT NULL,           -- ISO-8601 UTC open timestamp
+    symbol        TEXT    NOT NULL,
+    direction     TEXT    NOT NULL,           -- LONG | SHORT
+    regime        TEXT    NOT NULL,
+    entry         REAL    NOT NULL,
+    stop_loss     REAL    NOT NULL,
+    take_profit   REAL    NOT NULL,
+    size          REAL    NOT NULL,           -- base currency units
+    order_id      TEXT,                       -- Binance order ID
+    status        TEXT    DEFAULT 'OPEN',     -- OPEN | CLOSED | CANCELLED
+    exit_price    REAL,
+    pnl_usdt      REAL,
+    closed_ts     TEXT,
+    entry_time    TEXT,                       -- HH:MM UTC
+    exit_time     TEXT,                       -- HH:MM UTC
+    duration_min  INTEGER,                   -- minutes held
+    risk_usdt     REAL,                      -- $ risked on this trade
+    equity_after  REAL                       -- running equity after close
 );
 
 CREATE TABLE IF NOT EXISTS regimes (
