@@ -23,14 +23,25 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — rely on shell env vars
 
+from logging.handlers import RotatingFileHandler
+
 os.makedirs("logs", exist_ok=True)
+
+_rotating_handler = RotatingFileHandler(
+    "logs/bot.log",
+    maxBytes=10 * 1024 * 1024,   # 10 MB per file
+    backupCount=5,
+    encoding="utf-8",
+)
+_rotating_handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+))
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("logs/bot.log", mode="a", encoding="utf-8"),
+        _rotating_handler,
     ],
 )
 log = logging.getLogger("confluence_bot")
@@ -246,6 +257,28 @@ async def main() -> None:
 
     _dom_interval = int(cfg.get("btc_dominance", {}).get("fetch_interval_mins", 30)) * 60
     asyncio.create_task(_refresh_btc_dominance(_dom_interval))
+
+    # 6c3. Hourly DB pruning — keeps signals table from growing unbounded
+    async def _prune_db_periodic() -> None:
+        import sqlite3
+        db = os.environ.get("DB_PATH", "confluence_bot.db")
+        while True:
+            await asyncio.sleep(3600)  # every hour
+            try:
+                with sqlite3.connect(db) as conn:
+                    deleted_s = conn.execute(
+                        "DELETE FROM signals WHERE ts < datetime('now', '-1 day')"
+                    ).rowcount
+                    deleted_r = conn.execute(
+                        "DELETE FROM regimes WHERE ts < datetime('now', '-30 days')"
+                    ).rowcount
+                    conn.execute("VACUUM")
+                log.info("DB prune: removed %d signals, %d regimes",
+                         deleted_s, deleted_r)
+            except Exception as exc:
+                log.warning("DB prune failed: %s", exc)
+
+    asyncio.create_task(_prune_db_periodic())
 
     # 6d. Trade monitor — closes positions when TP/SL is hit
     from core.trade_monitor import monitor_trades

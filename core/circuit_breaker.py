@@ -30,6 +30,8 @@ _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
 _tripped:          bool  = False
 _trip_reason:      str   = ""
 _last_reset_date:  str   = ""   # "YYYY-MM-DD"
+_reset_override:   bool  = False  # manual reset suppresses re-evaluation
+_consec_at_reset:  int   = 0     # consecutive losses when reset was pressed
 
 
 def _today_utc() -> str:
@@ -55,14 +57,14 @@ def _query_daily_stats() -> tuple[float, int]:
             # Daily PnL: sum of all closed trades today
             row = conn.execute(
                 "SELECT COALESCE(SUM(pnl_usdt), 0.0) FROM trades "
-                "WHERE status='FILLED' AND DATE(closed_ts) = ?",
+                "WHERE status IN ('FILLED','CLOSED') AND DATE(closed_ts) = ?",
                 (today,)
             ).fetchone()
             daily_pnl = float(row[0]) if row else 0.0
 
             # Consecutive losses: walk back from most recent closed trade
             rows = conn.execute(
-                "SELECT pnl_usdt FROM trades WHERE status='FILLED' "
+                "SELECT pnl_usdt FROM trades WHERE status IN ('FILLED','CLOSED') "
                 "ORDER BY closed_ts DESC LIMIT 20"
             ).fetchall()
             consec = 0
@@ -88,9 +90,16 @@ def is_tripped() -> bool:
 
 def _evaluate() -> bool:
     """Query DB stats and trip breaker if limits exceeded. Returns True if tripped."""
-    global _tripped, _trip_reason
+    global _tripped, _trip_reason, _reset_override, _consec_at_reset
 
     daily_pnl, consec = _query_daily_stats()
+
+    # If manually reset, only re-trip if NEW losses occurred since reset
+    if _reset_override:
+        if consec > _consec_at_reset:
+            _reset_override = False  # new loss — allow re-evaluation
+        else:
+            return False  # still within the reset grace period
 
     # Need balance for % check
     balance = _get_balance()
@@ -101,7 +110,7 @@ def _evaluate() -> bool:
             _trip_reason = (f"Daily loss ${loss:.2f} = "
                             f"{loss/balance*100:.1f}% >= {_MAX_LOSS_PCT}% limit")
             _tripped = True
-        elif loss >= _MAX_LOSS_USDT:
+        elif _MAX_LOSS_USDT > 0 and loss >= _MAX_LOSS_USDT:
             _trip_reason = f"Daily loss ${loss:.2f} >= ${_MAX_LOSS_USDT} hard cap"
             _tripped = True
 
@@ -127,13 +136,14 @@ def _get_balance() -> float:
 
 
 def reset() -> dict:
-    """Manually clear the circuit breaker. Re-evaluates from DB immediately."""
-    global _tripped, _trip_reason
-    _tripped     = False
-    _trip_reason = ""
-    log.warning("Circuit breaker manually reset via API")
-    # Re-evaluate so state reflects current DB
-    _evaluate()
+    """Manually clear the circuit breaker. Stays cleared until next trip condition."""
+    global _tripped, _trip_reason, _reset_override, _consec_at_reset
+    _, consec = _query_daily_stats()
+    _tripped          = False
+    _trip_reason      = ""
+    _reset_override   = True   # suppress re-evaluation until a new loss occurs
+    _consec_at_reset  = consec  # remember current loss count
+    log.warning("Circuit breaker manually reset via API (consec=%d)", consec)
     return status()
 
 

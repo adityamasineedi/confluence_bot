@@ -776,15 +776,17 @@ async def dashboard() -> HTMLResponse:
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Symbol</label>
       <select id="bt-sym" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:130px">
+        <option value="ALL">ALL (8 coins)</option>
         <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
         <option>BNBUSDT</option><option>XRPUSDT</option><option>LINKUSDT</option>
         <option>DOGEUSDT</option><option>SUIUSDT</option>
-        <option value="ALL">ALL (8 symbols)</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Strategy</label>
       <select id="bt-strat" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:145px">
+        <option value="breakout_retest_tp1" selected>Breakout Retest TP1 (1.5R) — CONFIRMED PF 4.16</option>
+        <option value="breakout_retest_tp2">Breakout Retest TP2 (2.2R) — CONFIRMED PF 3.61 +166%</option>
         <option value="main">Main Trend/Range</option>
         <option value="microrange">MicroRange</option>
         <option value="ema_pullback">EMA Pullback</option>
@@ -798,7 +800,7 @@ async def dashboard() -> HTMLResponse:
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">From Date</label>
-      <input id="bt-from" type="date" value="2024-01-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem">
+      <input id="bt-from" type="date" value="2023-01-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem">
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">To Date</label>
@@ -806,11 +808,11 @@ async def dashboard() -> HTMLResponse:
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Capital ($)</label>
-      <input id="bt-capital" type="number" value="1000" min="100" step="100" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:100px">
+      <input id="bt-capital" type="number" value="4744" min="100" step="100" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:100px">
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Risk %</label>
-      <input id="bt-risk" type="number" value="2" min="0.5" max="10" step="0.5" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:72px">
+      <input id="bt-risk" type="number" value="1" min="0.5" max="10" step="0.5" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:72px">
     </div>
     <button id="bt-run-btn" onclick="runBacktest()" style="padding:7px 20px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;white-space:nowrap;align-self:flex-end">&#9654; Run</button>
     <span id="bt-status" style="font-size:0.75rem;color:#6b7280;align-self:center"></span>
@@ -1881,7 +1883,9 @@ async function refreshTradelog() {
           <td class="${adxCls}">${s.adx}</td>
           <td class="gray">${s.vol_24h_m}M</td>
           <td>${badge('regime', s.regime)}</td>
-          <td>${badge('dir', s.direction)}</td>
+          <td>${(+s.score >= 0.30) ?
+            badge('dir', s.direction)
+            : '<span style="color:#4b5563">—</span>'}</td>
           <td style="max-width:300px">${livePills(s.signals)}</td>
         </tr>`;
       }).join('')
@@ -2340,8 +2344,33 @@ async function runBacktest() {
   btn.disabled = false; btn.textContent = '▶ Run';
   status.textContent = `Done in ${new Date().toLocaleTimeString()}`;
 
+  // Guard against missing stats structure
+  if (!d.stats || !d.stats.total) {
+    app.innerHTML = `<div style="padding:40px;color:#ef4444;text-align:center">
+      Backtest completed but returned no results.<br>
+      Strategy: ${d.strategy}<br>
+      Trades found: ${(d.trades||[]).length}<br>
+      <small style="color:#6b7280">Check that strategy is in config routing table.</small>
+    </div>`;
+    status.textContent = '';
+    return;
+  }
+
   const sc = d.capital || 1000;
   const t  = d.stats.total;
+
+  if (!t.trades || t.trades === 0) {
+    app.innerHTML = `<div style="padding:40px;color:#fbbf24;text-align:center">
+      No trades found for ${d.strategy} on ${(d.symbols||[]).join(', ')}<br>
+      Period: ${fromDate} to ${toDate}<br>
+      <small style="color:#6b7280">
+        Try a longer date range (2023-01-01 to today) or check strategy routing.
+      </small>
+    </div>`;
+    status.textContent = '';
+    return;
+  }
+
   const monthly = d.stats.monthly || [];
   const byReg   = d.stats.by_regime || {};
   const bySym   = d.stats.by_symbol || {};
@@ -2585,12 +2614,89 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         elif strategy == "oi_spike":
             from backtest.oi_spike_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, oi=oi, starting_capital=capital, risk_pct=risk_pct)
+        elif strategy in ("breakout_retest", "breakout_retest_tp1", "breakout_retest_tp2"):
+            from backtest.engine import load as _bt_load, run_strategy as _bt_run
+
+            all_trades = []
+            btc_data = _bt_load("BTCUSDT")
+            for sym in symbols:
+                data = btc_data if sym == "BTCUSDT" else _bt_load(sym)
+                sym_trades = _bt_run(sym, strategy, data, btc_data,
+                                     from_ms, to_ms)
+                all_trades.extend(sym_trades)
+            trades = all_trades
+
         else:
             trades = []
 
-        stats = compute_stats(trades, starting_capital=capital)
-        return {"stats": stats, "trades": trades, "symbols": symbols,
-                "capital": capital, "risk_pct": risk_pct, "strategy": strategy}
+        try:
+            stats = compute_stats(trades, starting_capital=capital)
+        except Exception:
+            # Fallback for engine Trade namedtuples (breakout_retest etc.)
+            from backtest.engine import compute_stats as _eng_stats
+            from backtest.run import compute_dollar_stats as _dol_stats
+            raw = _eng_stats(trades)
+            ds  = _dol_stats(trades, capital, risk_pct=risk_pct)
+            stats = {
+                "total": {
+                    "trades":            raw.get("n", 0),
+                    "wins":              raw.get("wins", 0),
+                    "losses":            raw.get("losses", 0),
+                    "timeouts":          raw.get("timeouts", 0),
+                    "win_rate":          raw.get("wr", 0) / 100,
+                    "pf":                raw.get("pf", 0),
+                    "avg_r":             raw.get("avg_r", 0),
+                    "final_equity":      ds["final_balance"],
+                    "total_return_pct":  ds["total_return_pct"],
+                    "max_drawdown_usd":  ds["max_drawdown_usd"],
+                    "max_drawdown_pct":  ds["max_drawdown_pct"],
+                    "avg_win":           ds["avg_win_usd"],
+                    "avg_loss":          ds["avg_loss_usd"],
+                    "longest_win_streak":  ds["max_consec_wins"],
+                    "longest_loss_streak": ds["max_consec_loss"],
+                },
+                "monthly":   [],
+                "by_regime": {},
+                "by_symbol": {},
+            }
+        # Convert trades to JS-compatible dicts with dollar PnL
+        from backtest.run import compute_dollar_stats as _ds_fn
+        ds_for_trades = _ds_fn(trades, capital, risk_pct=risk_pct)
+        pnl_pairs = ds_for_trades.get("trade_pnls", [])
+        sorted_trades = sorted(trades or [], key=lambda t: getattr(t, 'bar_idx', 0))
+        equity = capital
+        trades_serializable = []
+        for i, t in enumerate(sorted_trades):
+            pnl_val, risk_val = pnl_pairs[i] if i < len(pnl_pairs) else (0.0, 0.0)
+            equity = round(equity + pnl_val, 2)
+            d_raw = t.__dict__ if hasattr(t, "__dict__") else (
+                    t._asdict() if hasattr(t, "_asdict") else
+                    dict(t) if isinstance(t, dict) else {})
+            trades_serializable.append({
+                "symbol":       d_raw.get("symbol", ""),
+                "direction":    d_raw.get("direction", ""),
+                "regime":       d_raw.get("strategy", d_raw.get("regime", "")),
+                "outcome":      d_raw.get("outcome", ""),
+                "score":        d_raw.get("pnl_r", 0),
+                "pnl_r":        d_raw.get("pnl_r", 0),
+                "pnl":          round(pnl_val, 2),
+                "risk_amount":  round(risk_val, 2),
+                "equity_after": equity,
+                "entry":        d_raw.get("entry", 0),
+                "stop":         d_raw.get("stop", 0),
+                "tp":           d_raw.get("tp", 0),
+                "bar_idx":      d_raw.get("bar_idx", 0),
+                "exit_ts":      "",
+            })
+
+        return {
+            "stats":    stats,
+            "trades":   trades_serializable,
+            "symbols":  symbols,
+            "capital":  capital,
+            "risk_pct": risk_pct,
+            "strategy": strategy,
+        }
 
     try:
         result = await _asyncio.to_thread(_run_sync)
@@ -2702,6 +2808,14 @@ async function load() {
   } catch(e) {
     document.getElementById('app').innerHTML =
       `<div style="padding:40px;color:#ef4444;text-align:center">${e.message}</div>`;
+    return;
+  }
+
+  if (!d.stats || !d.stats.total) {
+    document.getElementById('app').innerHTML =
+      `<div style="padding:40px;color:#ef4444;text-align:center">
+        Backtest returned no results. Run a backtest first.
+      </div>`;
     return;
   }
 

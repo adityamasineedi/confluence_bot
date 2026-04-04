@@ -4,8 +4,11 @@ Reads strategy_routing from config.yaml.
 Falls back to _default if symbol not found.
 Respects individual strategy enabled: false flags.
 """
+import logging
 import os
 import yaml
+
+log = logging.getLogger(__name__)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
@@ -41,6 +44,14 @@ def get_active_strategies(symbol: str, regime: str) -> list[str]:
 
     # Get symbol-specific routing, fall back to _default
     symbol_routes  = routing.get(symbol.upper(), routing.get("_default", {}))
+
+    # Handle unknown/invalid regimes
+    _VALID = {"TREND", "RANGE", "CRASH", "PUMP", "BREAKOUT"}
+    if regime.upper() not in _VALID:
+        log.warning("Unknown regime '%s' for %s — falling back to RANGE",
+                    regime, symbol)
+        regime = "RANGE"
+
     regime_strats  = symbol_routes.get(regime.upper(), [])
 
     # Filter out disabled strategies
