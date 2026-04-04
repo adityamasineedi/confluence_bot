@@ -99,12 +99,18 @@ def _ema(closes: list[float], period: int) -> float:
     return e
 
 
-def _detect_range(bars_5m: list[dict]) -> tuple[bool, float, float]:
-    """Check last _RANGE_BARS form a valid tight range."""
+def _detect_range(bars_5m: list[dict],
+                  symbol: str = "") -> tuple[bool, float, float]:
+    """Check last _RANGE_BARS form a valid tight range.
+    Returns (valid, range_high, range_low).
+    Logs reason for failure at DEBUG level for diagnostics.
+    """
     if len(bars_5m) < _RANGE_BARS + 20:
+        log.debug("BR %s: not enough bars (%d < %d)",
+                  symbol, len(bars_5m), _RANGE_BARS + 20)
         return False, 0.0, 0.0
 
-    window   = bars_5m[-(_RANGE_BARS + 1):-1]  # exclude current bar
+    window   = bars_5m[-(_RANGE_BARS + 1):-1]
     rng_high = max(b["h"] for b in window)
     rng_low  = min(b["l"] for b in window)
 
@@ -115,6 +121,8 @@ def _detect_range(bars_5m: list[dict]) -> tuple[bool, float, float]:
     width = (rng_high - rng_low) / mid
 
     if not (_MIN_WIDTH <= width <= _MAX_WIDTH):
+        log.debug("BR %s: range width %.4f%% outside [%.4f%%, %.4f%%]",
+                  symbol, width*100, _MIN_WIDTH*100, _MAX_WIDTH*100)
         return False, 0.0, 0.0
 
     # ATR regime check
@@ -130,8 +138,12 @@ def _detect_range(bars_5m: list[dict]) -> tuple[bool, float, float]:
         avg_atr     = sum(trs[:-1]) / len(trs[:-1])
         current_atr = trs[-1]
         if avg_atr > 0 and current_atr > avg_atr * _ATR_MULT_MAX:
+            log.debug("BR %s: ATR spike %.4f > %.1f× avg %.4f",
+                      symbol, current_atr, _ATR_MULT_MAX, avg_atr)
             return False, 0.0, 0.0
 
+    log.debug("BR %s: range valid [%.4f, %.4f] width=%.3f%%",
+              symbol, rng_low, rng_high, width*100)
     return True, rng_high, rng_low
 
 
@@ -156,7 +168,14 @@ async def score(symbol: str, cache) -> list[dict]:
 
     bars_5m = cache.get_ohlcv(symbol, window=50, tf="5m")
     if not bars_5m or len(bars_5m) < 30:
+        log.debug("BR %s: insufficient 5m bars (%d)",
+                  symbol, len(bars_5m) if bars_5m else 0)
         return []
+
+    # Heartbeat — shows the scorer is running each tick
+    log.info("BR eval %s  bars=%d  state=%s",
+             symbol, len(bars_5m),
+             _state.get(symbol, {}).get("state", "IDLE"))
 
     bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
 
@@ -259,7 +278,7 @@ async def score(symbol: str, cache) -> list[dict]:
         }]
 
     # ── STATE: IDLE — look for range + breakout ──────────────────────
-    range_ok, rng_high, rng_low = _detect_range(bars_5m)
+    range_ok, rng_high, rng_low = _detect_range(bars_5m, symbol)
     if not range_ok:
         return []
 
@@ -279,6 +298,15 @@ async def score(symbol: str, cache) -> list[dict]:
                    and vol_ok
                    and htf_bear
                    and weekly_allows_short("breakout_retest", cache))
+
+    if not broke_long and not broke_short:
+        log.debug("BR %s: range valid but no breakout  "
+                  "bar_close=%.4f  rng=[%.4f, %.4f]  "
+                  "vol_ok=%s  htf_bull=%s  htf_bear=%s",
+                  symbol, bar["c"],
+                  rng_low, rng_high,
+                  vol_ok, htf_bull, htf_bear)
+        return []
 
     if broke_long:
         _state[symbol] = {

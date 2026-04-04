@@ -297,6 +297,13 @@ async def main() -> None:
     else:
         log.warning("Cache not fully populated after %ds — starting anyway", _CACHE_WAIT_MAX)
 
+    for sym in symbols:
+        bars_5m = cache.get_ohlcv(sym, window=50, tf="5m")
+        bars_1h = cache.get_ohlcv(sym, window=50, tf="1h")
+        log.info("Cache check %s: 5m bars=%d  1h bars=%d",
+                 sym, len(bars_5m) if bars_5m else 0,
+                 len(bars_1h) if bars_1h else 0)
+
     # 8. Main evaluation loop
     prev_regimes: dict[str, str] = {}
     _regime_alert_ts: dict[str, float] = {}   # symbol → last Telegram alert timestamp

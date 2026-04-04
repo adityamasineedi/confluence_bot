@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import urllib.parse
+from datetime import datetime
 
 import aiohttp
 
@@ -166,15 +167,31 @@ class BinanceRestPoller:
             self._fetch_oi(session, symbol),
             self._fetch_funding(session, symbol),
             self._fetch_klines(session, symbol, "1w", 15),
-            self._fetch_klines(session, symbol, "1d", 60 if load_history else 2),
-            # 4H: need 210 bars for EMA200 + ADX warmup on startup; 2 bars to stay current
+            self._fetch_klines(session, symbol, "1d", 90 if load_history else 2),
             self._fetch_klines(session, symbol, "4h", 210 if load_history else 2),
-            self._fetch_klines(session, symbol, "1h", 100 if load_history else 2),
-            self._fetch_klines(session, symbol, "15m", 30 if load_history else 2),
+            self._fetch_klines(session, symbol, "1h", 200 if load_history else 2),
+            self._fetch_klines(session, symbol, "15m", 200 if load_history else 2),
+            self._fetch_klines(session, symbol, "5m", 200 if load_history else 2),
+            self._fetch_klines(session, symbol, "1m", 200 if load_history else 2),
             self._fetch_bybit_oi(session, symbol),
             self._fetch_okx_oi(session, symbol),
             return_exceptions=True,
         )
+
+        if load_history:
+            # Gap fill — catches any bars missed since last startup
+            for tf in ("5m", "15m", "1h", "4h"):
+                await self._fill_gap(session, symbol, tf)
+
+            log.info(
+                "History loaded %s: 5m=%d  15m=%d  1h=%d  4h=%d",
+                symbol,
+                len(self._cache.get_ohlcv(symbol, 200, "5m") or []),
+                len(self._cache.get_ohlcv(symbol, 200, "15m") or []),
+                len(self._cache.get_ohlcv(symbol, 200, "1h") or []),
+                len(self._cache.get_ohlcv(symbol, 100, "4h") or []),
+            )
+
         # Compute synthetic liq clusters from OHLCV swing pivots (free alternative
         # to CoinGlass paid-tier liquidation heatmap). This enables check_liq_sweep()
         # and provides approximate stop-cluster levels for signal scoring.
@@ -209,20 +226,65 @@ class BinanceRestPoller:
         except Exception as exc:
             log.warning("_fetch_funding(%s) failed: %s", symbol, exc)
 
+    async def _fill_gap(
+        self,
+        session: aiohttp.ClientSession,
+        symbol: str,
+        tf: str,
+    ) -> None:
+        """Fetch bars from the last cached bar up to now.
+
+        Ensures no gap exists after a restart regardless of how long
+        the bot was offline.
+        """
+        bars = self._cache.get_ohlcv(symbol, window=5, tf=tf)
+        if not bars:
+            return  # nothing loaded yet — initial load covers this
+
+        last_ts_ms = bars[-1]["ts"]
+        now_ms = int(time.time() * 1000)
+
+        _TF_MS = {
+            "1m":  60_000,
+            "5m":  300_000,
+            "15m": 900_000,
+            "1h":  3_600_000,
+            "4h":  14_400_000,
+            "1d":  86_400_000,
+            "1w":  604_800_000,
+        }
+        ms_per_bar = _TF_MS.get(tf, 60_000)
+
+        bars_missing = int((now_ms - last_ts_ms) / ms_per_bar)
+        if bars_missing <= 1:
+            return  # already up to date
+
+        bars_missing = min(bars_missing + 5, 500)  # cap at 500, add 5 buffer
+        log.info("Gap fill %s %s: fetching %d bars since %s",
+                 symbol, tf, bars_missing,
+                 datetime.fromtimestamp(last_ts_ms / 1000).strftime("%H:%M"))
+
+        await self._fetch_klines(
+            session, symbol, tf,
+            limit=bars_missing,
+            start_ms=last_ts_ms,
+        )
+
     async def _fetch_klines(
         self,
         session: aiohttp.ClientSession,
         symbol: str,
         interval: str,
         limit: int,
+        start_ms: int | None = None,
     ) -> None:
         """GET /fapi/v1/klines → cache.push_candle() for each row."""
         url = f"{_BINANCE_DATA_BASE}/fapi/v1/klines"
+        params: dict = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start_ms is not None:
+            params["startTime"] = start_ms
         try:
-            async with session.get(
-                url,
-                params={"symbol": symbol, "interval": interval, "limit": limit},
-            ) as resp:
+            async with session.get(url, params=params) as resp:
                 resp.raise_for_status()
                 rows = await resp.json()
             for row in rows:

@@ -446,15 +446,15 @@ microrange:
 breakout_retest:
   enabled: true
   range_bars: 8
-  min_width_pct: 0.0018
-  max_width_pct: 0.0150         # was 0.0080 — allow wider ranges in volatile market
-  atr_mult_max: 2.0             # was 1.35 — allow higher ATR in bear crash
-  vol_spike_mult: 1.25
-  retest_bars: 8
+  min_width_pct: 0.0010          # was 0.0018 — lower minimum (0.10%)
+  max_width_pct: 0.0200          # was 0.0080 — wider range allowed (2.0%)
+  atr_mult_max: 3.0              # was 1.35 — allow higher ATR in crash
+  vol_spike_mult: 1.10           # was 1.25 — easier volume confirmation
+  retest_bars: 12                # was 8 — give more time for retest
   sl_atr_mult: 1.3
-  rr_ratio: 2.2              # TP2 mode — 2.2R matches backtest result
+  rr_ratio: 2.2                  # TP2 mode — 2.2R matches backtest result
   cooldown_mins: 15
-  max_trades_per_day: 4
+  max_trades_per_day: 6          # was 4 — more trades per day
   max_positions: 3
   check_interval_secs: 30
 
