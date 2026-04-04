@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 import yaml
 
 from core.cooldown_store import CooldownStore
-from core.filter import atr_spike_ok
 from core.weekly_trend_gate import weekly_allows_long, weekly_allows_short
 
 log = logging.getLogger(__name__)
@@ -155,24 +154,20 @@ async def score(symbol: str, cache) -> list[dict]:
     if _daily_count(symbol) >= _MAX_DAY_TRADES:
         return []
 
-    # ATR spike gate
-    if not atr_spike_ok(symbol, cache, tf="5m"):
-        return []
-
     bars_5m = cache.get_ohlcv(symbol, window=50, tf="5m")
     if not bars_5m or len(bars_5m) < 30:
         return []
 
-    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
+    bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
 
-    # HTF EMA20 direction
+    # HTF EMA20 direction (4H — more stable than 1H)
     htf_bull = True
     htf_bear = True
-    if bars_1h and len(bars_1h) >= 21:
-        closes_1h = [b["c"] for b in bars_1h]
-        ema20 = _ema(closes_1h, 20)
-        htf_bull = closes_1h[-1] > ema20
-        htf_bear = closes_1h[-1] < ema20
+    if bars_4h and len(bars_4h) >= 21:
+        closes_4h = [b["c"] for b in bars_4h]
+        ema20_4h  = _ema(closes_4h, 20)
+        htf_bull  = closes_4h[-1] > ema20_4h
+        htf_bear  = closes_4h[-1] < ema20_4h
 
     st = _state.get(symbol, {"state": "IDLE"})
 

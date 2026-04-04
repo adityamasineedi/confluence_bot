@@ -137,7 +137,7 @@ weights:
 risk:
   risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
   max_risk_usdt: 5000              # high cap so compounding is never blocked
-  max_position_size_usdt: 5000     # allow larger positions as account grows
+  max_position_size_usdt: 15000    # allow full risk sizing as account grows
   max_open_positions: 3
   max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
   rr_ratio: 2.5                    # TP = entry ± stop_dist × 2.5
@@ -447,8 +447,8 @@ breakout_retest:
   enabled: true
   range_bars: 8
   min_width_pct: 0.0018
-  max_width_pct: 0.0080
-  atr_mult_max: 1.35
+  max_width_pct: 0.0150         # was 0.0080 — allow wider ranges in volatile market
+  atr_mult_max: 2.0             # was 1.35 — allow higher ATR in bear crash
   vol_spike_mult: 1.25
   retest_bars: 8
   sl_atr_mult: 1.3
@@ -713,7 +713,7 @@ btc_dominance:
 weekly_trend_gate:
   enabled: true
   ema_period: 10      # 10-week EMA (~50-day)
-  apply_to: [ema_pullback, fvg, vwap_band, liq_sweep]
+  apply_to: [ema_pullback, fvg, vwap_band, liq_sweep, breakout_retest]
 
 # ── Backtest cost simulation ──────────────────────────────────────────────────
 # Applied to every round-trip trade: fees (entry + exit), slippage (entry + exit),
