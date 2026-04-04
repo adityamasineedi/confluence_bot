@@ -27,6 +27,7 @@ import yaml
 
 from core.cooldown_store import CooldownStore
 from core.filter import passes_trend_long_filters, passes_trend_short_filters, atr_spike_ok
+from core.vol_ratio import compute_vol_ratio
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ _RSI_LONG_MAX   = 45.0          # RSI ≤ 45 for LONG (oversold pullback into ga
 _RSI_SHORT_MIN  = 55.0          # RSI ≥ 55 for SHORT (overbought fill from above)
 _RSI_PERIOD     = 14
 _EMA_PERIOD     = 21            # 4H EMA period for HTF alignment
+
+_MC_VOL_MAX     = float(_FVG_CFG.get("mc_vol_ratio_max", 0.0))
 
 _cd = CooldownStore("FVG")
 
@@ -153,6 +156,16 @@ async def score(symbol: str, cache) -> list[dict]:
                               spike_mult=float(_ev_cfg.get("spike_multiplier", 3.0))):
             log.info("FVG blocked — extreme volatility on %s (flash crash protection)", symbol)
             return []
+
+    # Vol ratio gate — block during vol spikes beyond threshold
+    if _MC_VOL_MAX > 0:
+        bars_vr = cache.get_ohlcv(symbol, window=60, tf="1h")
+        if bars_vr and len(bars_vr) >= 54:
+            vr = compute_vol_ratio(bars_vr)
+            if vr > _MC_VOL_MAX:
+                log.debug("FVG blocked — vol ratio %.2f > %.1f on %s",
+                          vr, _MC_VOL_MAX, symbol)
+                return []
 
     cool_ok   = not is_on_cooldown(symbol)
 

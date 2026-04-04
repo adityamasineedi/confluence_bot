@@ -10,8 +10,12 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
+import yaml
 
 DATA_DIR  = os.path.join(os.path.dirname(__file__), "data")
+_CFG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+with open(_CFG_PATH) as _f:
+    _CFG = yaml.safe_load(_f)
 WARMUP    = 210      # bars skipped for indicator warmup
 MAX_HOLD  = 48       # 1H bars max — force close after 2 days
 RR        = 2.5      # reward:risk ratio
@@ -21,6 +25,48 @@ FEE_RT    = 0.001    # 0.10% round-trip taker fee
 
 # numpy column indices
 O, H, L, C, V, TS = 0, 1, 2, 3, 4, 5
+
+# ── Volatility ratio gate ─────────────────────────────────────────────────────
+
+def _mc_vol_ratio(bars_1h: np.ndarray, cursor: int,
+                  short_window: int = 6,
+                  long_window: int  = 48) -> float:
+    """Returns ratio of recent volatility to baseline volatility.
+
+    ratio > 1.0 = current market more volatile than normal
+    ratio < 1.0 = current market calmer than normal
+
+    Uses 1H bars:
+      short_window = 6H  (recent vol)
+      long_window  = 48H (baseline vol = 2-day average)
+    """
+    if cursor < long_window + 2:
+        return 1.0   # insufficient data — treat as normal
+
+    # Recent volatility (last 6 bars = 6H)
+    recent_start  = max(0, cursor - short_window)
+    recent_closes = bars_1h[recent_start:cursor, C]
+    recent_closes = recent_closes[recent_closes > 0]
+    if len(recent_closes) < 3:
+        return 1.0
+
+    recent_log_rets = np.diff(np.log(recent_closes))
+    recent_vol = float(np.std(recent_log_rets)) if len(recent_log_rets) > 0 else 0.0
+
+    # Baseline volatility (48H window ending before the recent window)
+    base_start  = max(0, cursor - long_window)
+    base_closes = bars_1h[base_start:cursor - short_window, C]
+    base_closes = base_closes[base_closes > 0]
+    if len(base_closes) < 10:
+        return 1.0
+
+    base_log_rets = np.diff(np.log(base_closes))
+    base_vol = float(np.std(base_log_rets)) if len(base_log_rets) > 0 else 0.0
+
+    if base_vol < 1e-10:
+        return 1.0
+
+    return round(recent_vol / base_vol, 3)
 
 
 # ─── Data loading ─────────────────────────────────────────────────────────────
@@ -384,71 +430,57 @@ def sig_wyckoff_upthrust(bars: np.ndarray,
 
 def sig_liq_sweep_long(bars: np.ndarray,
                         lookback: int = 20) -> np.ndarray:
-    """Liquidity sweep LONG with RSI divergence + volume confirmation.
+    """Liquidity sweep LONG: price sweeps equal lows (stop hunt) then reverses up.
 
-    Added filters vs previous version:
-    1. RSI divergence: price makes lower low at sweep but RSI is higher
-       than it was at previous swing low (seller exhaustion)
-    2. Confirmation bar: the bar AFTER the sweep must close above sweep close
-       (momentum confirming reversal)
-    3. Volume on sweep bar must be > 2.0× average (raised from 1.5×)
+    Equal lows = previous swing low within 0.2% of another swing low.
+    Sweep = wick goes below both lows, close comes back above them.
+
+    Conditions:
+    1. Find two recent swing lows within 0.2% of each other (equal lows)
+    2. Current bar wicks below both
+    3. Current bar closes above the lower of the two
+    4. Volume ≥ 1.5× average (institutional participation)
     """
-    n     = len(bars)
-    vm    = vol_ma(bars, 20)
-    rsi_  = rsi(bars[:, C])
-    sig   = np.zeros(n, bool)
+    n   = len(bars)
+    vm  = vol_ma(bars, 20)
+    sig = np.zeros(n, bool)
 
-    for i in range(lookback + 25, n - 1):
+    for i in range(lookback + 20, n):
         window = bars[i - lookback: i]
         lows   = window[:, L]
 
-        # Find equal lows
+        # Find swing lows (local minima)
         swing_lows = []
         for j in range(2, len(lows) - 2):
             if lows[j] == lows[max(0,j-2):j+3].min():
-                swing_lows.append((j, lows[j]))
+                swing_lows.append(lows[j])
 
         if len(swing_lows) < 2:
             continue
 
-        eq_low_val = None
-        prev_low_idx = None
+        # Check for equal lows (within 0.2%)
+        eq_low = None
         for a in range(len(swing_lows)):
             for b in range(a+1, len(swing_lows)):
-                idx_a, val_a = swing_lows[a]
-                idx_b, val_b = swing_lows[b]
-                if val_a > 0 and abs(val_a - val_b) / val_a <= 0.002:
-                    eq_low_val    = min(val_a, val_b)
-                    prev_low_idx  = i - lookback + max(idx_a, idx_b)
-                    break
-            if eq_low_val:
+                if swing_lows[a] > 0:
+                    diff = abs(swing_lows[a] - swing_lows[b]) / swing_lows[a]
+                    if diff <= 0.002:
+                        eq_low = min(swing_lows[a], swing_lows[b])
+                        break
+            if eq_low:
                 break
 
-        if eq_low_val is None or prev_low_idx is None:
+        if eq_low is None:
             continue
 
-        # Current bar sweeps below equal lows
-        if bars[i, L] >= eq_low_val:
+        # Current bar sweeps below equal lows then closes above
+        if bars[i, L] >= eq_low:
             continue
-        # Current bar closes ABOVE the equal low (reversal body)
-        if bars[i, C] <= eq_low_val:
+        if bars[i, C] <= eq_low:
             continue
-
-        # Volume must be strong (2× not 1.5×)
-        if vm[i] > 0 and bars[i, V] < vm[i] * 2.0:
+        # Volume confirmation
+        if vm[i] > 0 and bars[i, V] < vm[i] * 1.5:
             continue
-
-        # RSI divergence — current sweep RSI > previous swing RSI
-        if (prev_low_idx >= 0 and prev_low_idx < len(rsi_) and i < len(rsi_)):
-            prev_rsi = rsi_[prev_low_idx]
-            curr_rsi = rsi_[i]
-            # Price made lower low (sweep) but RSI higher = bullish divergence
-            if curr_rsi <= prev_rsi:
-                continue  # no divergence — skip
-
-        # Next bar must confirm (close above sweep bar close)
-        if i + 1 < n and bars[i+1, C] < bars[i, C]:
-            continue  # no follow-through
 
         sig[i] = True
     return sig
@@ -456,57 +488,44 @@ def sig_liq_sweep_long(bars: np.ndarray,
 
 def sig_liq_sweep_short(bars: np.ndarray,
                          lookback: int = 20) -> np.ndarray:
-    """Liquidity sweep SHORT with RSI divergence + volume + confirmation bar."""
-    n     = len(bars)
-    vm    = vol_ma(bars, 20)
-    rsi_  = rsi(bars[:, C])
-    sig   = np.zeros(n, bool)
+    """Liquidity sweep SHORT: price sweeps equal highs (stop hunt) then reverses down.
+    Mirror of sig_liq_sweep_long — sweeps above equal highs, closes back below.
+    """
+    n   = len(bars)
+    vm  = vol_ma(bars, 20)
+    sig = np.zeros(n, bool)
 
-    for i in range(lookback + 25, n - 1):
+    for i in range(lookback + 20, n):
         window = bars[i - lookback: i]
         highs  = window[:, H]
 
         swing_highs = []
         for j in range(2, len(highs) - 2):
             if highs[j] == highs[max(0,j-2):j+3].max():
-                swing_highs.append((j, highs[j]))
+                swing_highs.append(highs[j])
 
         if len(swing_highs) < 2:
             continue
 
-        eq_high_val   = None
-        prev_high_idx = None
+        eq_high = None
         for a in range(len(swing_highs)):
             for b in range(a+1, len(swing_highs)):
-                idx_a, val_a = swing_highs[a]
-                idx_b, val_b = swing_highs[b]
-                if val_a > 0 and abs(val_a - val_b) / val_a <= 0.002:
-                    eq_high_val   = max(val_a, val_b)
-                    prev_high_idx = i - lookback + max(idx_a, idx_b)
-                    break
-            if eq_high_val:
+                if swing_highs[a] > 0:
+                    diff = abs(swing_highs[a] - swing_highs[b]) / swing_highs[a]
+                    if diff <= 0.002:
+                        eq_high = max(swing_highs[a], swing_highs[b])
+                        break
+            if eq_high:
                 break
 
-        if eq_high_val is None or prev_high_idx is None:
+        if eq_high is None:
             continue
 
-        if bars[i, H] <= eq_high_val:
+        if bars[i, H] <= eq_high:
             continue
-        if bars[i, C] >= eq_high_val:
+        if bars[i, C] >= eq_high:
             continue
-
-        if vm[i] > 0 and bars[i, V] < vm[i] * 2.0:
-            continue
-
-        # RSI bearish divergence: price made higher high but RSI lower
-        if (prev_high_idx >= 0 and prev_high_idx < len(rsi_) and i < len(rsi_)):
-            prev_rsi = rsi_[prev_high_idx]
-            curr_rsi = rsi_[i]
-            if curr_rsi >= prev_rsi:
-                continue  # no bearish divergence
-
-        # Confirmation bar: next bar closes below sweep bar close
-        if i + 1 < n and bars[i+1, C] > bars[i, C]:
+        if vm[i] > 0 and bars[i, V] < vm[i] * 1.5:
             continue
 
         sig[i] = True
@@ -560,21 +579,23 @@ def mask_htf_bear(b4h: np.ndarray | None, ref: np.ndarray) -> np.ndarray:
 
 @dataclass
 class Trade:
-    symbol:    str
-    strategy:  str
-    direction: str
-    bar_idx:   int
-    entry:     float
-    stop:      float
-    tp:        float
-    outcome:   str   = "TIMEOUT"
-    pnl_r:     float = 0.0
+    symbol:         str
+    strategy:       str
+    direction:      str
+    bar_idx:        int
+    entry:          float
+    stop:           float
+    tp:             float
+    outcome:        str   = "TIMEOUT"
+    pnl_r:          float = 0.0
+    vol_ratio:      float = 0.0
 
 
 def simulate(entry_idx: np.ndarray, bars: np.ndarray,
              atr_: np.ndarray, direction: str,
              symbol: str, strategy: str,
-             max_hold: int = MAX_HOLD) -> list[Trade]:
+             max_hold: int = MAX_HOLD,
+             mc_threshold: float = 0.0) -> list[Trade]:
     """Walk forward from each entry to find TP/SL hit. Prevents overlapping."""
     trades, last_exit = [], -1
 
@@ -594,6 +615,14 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
             stop, tp = entry - sl_dist, entry + sl_dist * RR
         else:
             stop, tp = entry + sl_dist, entry - sl_dist * RR
+
+        # ── Volatility ratio gate ─────────────────────────────────────────────
+        vr = 0.0
+        if mc_threshold > 0.0:
+            vr = _mc_vol_ratio(bars, idx)
+            if vr > mc_threshold:
+                continue
+        # ─────────────────────────────────────────────────────────────────────
 
         outcome, pnl_r, exit_i = "TIMEOUT", 0.0, idx + max_hold
 
@@ -625,8 +654,90 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
 
         trades.append(Trade(
             symbol, strategy, direction, idx,
-            entry, stop, tp, outcome, round(pnl_r, 4)
+            entry, stop, tp, outcome, round(pnl_r, 4),
+            vr,
         ))
+        last_exit = exit_i
+
+    return trades
+
+
+def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
+                   direction: str, symbol: str,
+                   rr: float = 2.5,
+                   sl_buffer: float = 0.001,
+                   mc_threshold: float = 0.0) -> list[Trade]:
+    """Simulate liq_sweep trades with wick-based SL.
+
+    SL is placed just beyond the sweep wick — not ATR-based.
+    This is the correct SL for sweep reversal trades:
+      LONG: SL = sweep_bar.low × (1 - 0.001)   ← 0.1% below wick
+      SHORT: SL = sweep_bar.high × (1 + 0.001) ← 0.1% above wick
+    TP = entry ± |entry - SL| × rr
+    """
+    trades, last_exit = [], -1
+
+    for idx in entry_idx:
+        idx = int(idx)
+        if idx <= last_exit or idx + MAX_HOLD >= len(bars):
+            continue
+
+        entry = bars[idx, C]
+        if entry == 0.0:
+            continue
+
+        # Wick-based SL — not ATR
+        if direction == "LONG":
+            stop = bars[idx, L] * (1.0 - sl_buffer)
+            sl_dist = entry - stop
+        else:
+            stop = bars[idx, H] * (1.0 + sl_buffer)
+            sl_dist = stop - entry
+
+        # Minimum SL distance — never tighter than 0.2%
+        sl_dist = max(sl_dist, entry * 0.002)
+
+        if direction == "LONG":
+            stop = entry - sl_dist
+            tp   = entry + sl_dist * rr
+        else:
+            stop = entry + sl_dist
+            tp   = entry - sl_dist * rr
+
+        # ── Volatility ratio gate ─────────────────────────────────────────────
+        vr = 0.0
+        if mc_threshold > 0.0:
+            vr = _mc_vol_ratio(bars, idx)
+            if vr > mc_threshold:
+                continue
+        # ─────────────────────────────────────────────────────────────────────
+
+        outcome, pnl_r, exit_i = "TIMEOUT", 0.0, idx + MAX_HOLD
+
+        for j in range(1, MAX_HOLD + 1):
+            bi = idx + j
+            if bi >= len(bars):
+                break
+            bar = bars[bi]
+            if direction == "LONG":
+                if bar[L] <= stop:
+                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi; break
+                if bar[H] >= tp:
+                    outcome, pnl_r, exit_i = "TP", rr - FEE_RT, bi; break
+            else:
+                if bar[H] >= stop:
+                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi; break
+                if bar[L] <= tp:
+                    outcome, pnl_r, exit_i = "TP", rr - FEE_RT, bi; break
+
+        if outcome == "TIMEOUT":
+            ep    = bars[min(idx + MAX_HOLD, len(bars) - 1), C]
+            pnl_r = ((ep - entry) / sl_dist if direction == "LONG"
+                     else (entry - ep) / sl_dist) - FEE_RT
+
+        trades.append(Trade(symbol, "liq_sweep", direction,
+                            idx, entry, stop, tp, outcome, round(pnl_r, 4),
+                            vr))
         last_exit = exit_i
 
     return trades
@@ -635,8 +746,10 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
 # ─── Strategy runners ─────────────────────────────────────────────────────────
 
 def run_fvg(symbol: str, data: dict, btc_data: dict | None,
-            from_ts: int, to_ts: int) -> list[Trade]:
+            from_ts: int, to_ts: int,
+            mc_threshold: float = 0.0) -> list[Trade]:
     b1h = data.get(f"{symbol}:1h")
+
     b4h = data.get(f"{symbol}:4h")
     b1d = data.get(f"{symbol}:1d")
     _btc = btc_data if btc_data is not None else {}
@@ -664,13 +777,17 @@ def run_fvg(symbol: str, data: dict, btc_data: dict | None,
     long_entries  = np.where(fvg_l & wk_l  & htf_l & (rsi1h < 45) & trend & valid)[0]
     short_entries = np.where(fvg_s & wk_s  & htf_s & (rsi1h > 55) & (trend | crash) & valid)[0]
 
-    return (simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "fvg") +
-            simulate(short_entries, b1h, atr1h, "SHORT", symbol, "fvg"))
+    return (simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "fvg",
+                     mc_threshold=mc_threshold) +
+            simulate(short_entries, b1h, atr1h, "SHORT", symbol, "fvg",
+                     mc_threshold=mc_threshold))
 
 
 def run_ema_pullback(symbol: str, data: dict, btc_data: dict | None,
-                     from_ts: int, to_ts: int) -> list[Trade]:
+                     from_ts: int, to_ts: int,
+                     mc_threshold: float = 0.0) -> list[Trade]:
     b15m = data.get(f"{symbol}:15m")
+
     b4h  = data.get(f"{symbol}:4h")
     _btc = btc_data if btc_data is not None else {}
     b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
@@ -699,13 +816,110 @@ def run_ema_pullback(symbol: str, data: dict, btc_data: dict | None,
         sig_ema_pullback_short(b15m, e21, e50) & wk_s & htf_s
         & (rsi15m >= 50) & (rsi15m <= 70) & valid)[0]
 
-    return (simulate(long_entries,  b15m, atr15m, "LONG",  symbol, "ema_pullback") +
-            simulate(short_entries, b15m, atr15m, "SHORT", symbol, "ema_pullback"))
+    return (simulate(long_entries,  b15m, atr15m, "LONG",  symbol, "ema_pullback",
+                     mc_threshold=mc_threshold) +
+            simulate(short_entries, b15m, atr15m, "SHORT", symbol, "ema_pullback",
+                     mc_threshold=mc_threshold))
+
+
+def run_ema_pullback_short_only(symbol: str, data: dict,
+                                 btc_data: dict | None,
+                                 from_ts: int, to_ts: int,
+                                 mc_threshold: float = 0.0) -> list[Trade]:
+    """EMA pullback SHORT only — for bear/crash market testing.
+
+    LONG entries removed entirely.
+    Tests: is the SHORT ema_pullback profitable in bear conditions?
+    Used to evaluate ETH SHORT strategy in 2025 bear market.
+    """
+    b15m = data.get(f"{symbol}:15m")
+    b4h  = data.get(f"{symbol}:4h")
+
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc \
+           else data.get(f"{symbol}:1w")
+
+    if b15m is None or len(b15m) < WARMUP + 10:
+        return []
+
+    period_mask = (b15m[:, TS] >= from_ts) & (b15m[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b15m), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr15m  = atr(b15m)
+    rsi15m  = rsi(b15m[:, C])
+    e21     = ema(b15m[:, C], 21)
+    e50     = ema(b15m[:, C], 50)
+    wk_s    = mask_weekly_short(b1w, b15m)
+    htf_s   = mask_htf_bear(b4h, b15m) if b4h is not None \
+               else np.ones(len(b15m), bool)
+
+    short_entries = np.where(
+        sig_ema_pullback_short(b15m, e21, e50)
+        & wk_s & htf_s
+        & (rsi15m >= 50) & (rsi15m <= 70)
+        & valid
+    )[0]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    return simulate(short_entries, b15m, atr15m, "SHORT",
+                    symbol, "ema_pullback_short",
+                    mc_threshold=mc_threshold)
+
+
+def run_ema_pullback_short_v2(symbol: str, data: dict,
+                               btc_data: dict | None,
+                               from_ts: int, to_ts: int,
+                               mc_threshold: float = 0.0) -> list[Trade]:
+    """EMA pullback SHORT with wick-based SL — improved version.
+
+    SL = just above the pullback bar high (natural invalidation).
+    If price goes above the pullback bar high after we short,
+    the EMA rejection failed — exit immediately.
+    Tighter SL = closer TP = higher WR.
+    """
+    b15m = data.get(f"{symbol}:15m")
+    b4h  = data.get(f"{symbol}:4h")
+
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc \
+           else data.get(f"{symbol}:1w")
+
+    if b15m is None or len(b15m) < WARMUP + 10:
+        return []
+
+    period_mask = (b15m[:, TS] >= from_ts) & (b15m[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b15m), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    rsi15m  = rsi(b15m[:, C])
+    e21     = ema(b15m[:, C], 21)
+    e50     = ema(b15m[:, C], 50)
+    wk_s    = mask_weekly_short(b1w, b15m)
+    htf_s   = mask_htf_bear(b4h, b15m) if b4h is not None \
+               else np.ones(len(b15m), bool)
+
+    short_entries = np.where(
+        sig_ema_pullback_short(b15m, e21, e50)
+        & wk_s & htf_s
+        & (rsi15m >= 50) & (rsi15m <= 70)
+        & valid
+    )[0]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    # Wick-based SL: SL = pullback bar high × 1.001
+    return simulate_sweep(short_entries, b15m, "SHORT",
+                          symbol, rr=2.5, sl_buffer=0.001,
+                          mc_threshold=mc_threshold)
 
 
 def run_vwap_band(symbol: str, data: dict, btc_data: dict | None,
-                  from_ts: int, to_ts: int) -> list[Trade]:
+                  from_ts: int, to_ts: int,
+                  mc_threshold: float = 0.0) -> list[Trade]:
     b15m = data.get(f"{symbol}:15m")
+
     b4h  = data.get(f"{symbol}:4h")
 
     if b15m is None or len(b15m) < WARMUP + 10:
@@ -720,12 +934,15 @@ def run_vwap_band(symbol: str, data: dict, btc_data: dict | None,
     range_m = mask_range(b4h, b15m) if b4h is not None else np.ones(len(b15m), bool)
 
     long_entries = np.where(sig_vwap_long(b15m) & range_m & valid)[0]
-    return simulate(long_entries, b15m, atr15m, "LONG", symbol, "vwap_band")
+    return simulate(long_entries, b15m, atr15m, "LONG", symbol, "vwap_band",
+                    mc_threshold=mc_threshold)
 
 
 def run_microrange(symbol: str, data: dict, btc_data: dict | None,
-                   from_ts: int, to_ts: int) -> list[Trade]:
+                   from_ts: int, to_ts: int,
+                   mc_threshold: float = 0.0) -> list[Trade]:
     b5m = data.get(f"{symbol}:5m")
+
     b1d = data.get(f"{symbol}:1d")
 
     if b5m is None or len(b5m) < WARMUP + 10:
@@ -741,12 +958,13 @@ def run_microrange(symbol: str, data: dict, btc_data: dict | None,
 
     short_entries = np.where(sig_microrange_short(b5m) & crash_m & valid)[0]
     return simulate(short_entries, b5m, atr5m, "SHORT", symbol, "microrange",
-                    max_hold=24)
+                    max_hold=24, mc_threshold=mc_threshold)
 
 
 def run_wyckoff_range(symbol: str, data: dict,
                       btc_data: dict | None,
-                      from_ts: int, to_ts: int) -> list[Trade]:
+                      from_ts: int, to_ts: int,
+                      mc_threshold: float = 0.0) -> list[Trade]:
     """Wyckoff spring + upthrust range trading.
     Spring = LONG at range support. Upthrust = SHORT at range resistance.
     Works on any coin in RANGE regime.
@@ -754,6 +972,7 @@ def run_wyckoff_range(symbol: str, data: dict,
     """
     b1h = data.get(f"{symbol}:1h")
     b4h = data.get(f"{symbol}:4h")
+
 
     if b1h is None or len(b1h) < WARMUP + 10:
         return []
@@ -778,23 +997,73 @@ def run_wyckoff_range(symbol: str, data: dict,
     long_entries  = long_entries[long_entries >= WARMUP]
     short_entries = short_entries[short_entries >= WARMUP]
 
-    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "wyckoff_range")
-    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "wyckoff_range")
+    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "wyckoff_range",
+                       mc_threshold=mc_threshold)
+    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "wyckoff_range",
+                       mc_threshold=mc_threshold)
     return trades
+
+
+def _near_key_level_vec(bars_1d: np.ndarray, bars_1w: np.ndarray,
+                         ref_bars: np.ndarray, tol: float = 0.005) -> np.ndarray:
+    """Returns boolean array: True at ref_bar[i] if price is within tol
+    of any PDH/PDL/PWH/PWL level at that point in time.
+    Uses 0.5% tolerance (wider than live 0.3% to account for sweep depth).
+    """
+    n   = len(ref_bars)
+    out = np.zeros(n, bool)
+
+    for i in range(WARMUP, n):
+        price = ref_bars[i, C]
+        if price == 0:
+            continue
+
+        levels = []
+
+        # PDH/PDL — prior day high/low
+        if bars_1d is not None and len(bars_1d) >= 2:
+            # Find daily bar before current time
+            ts   = ref_bars[i, TS]
+            didx = np.searchsorted(bars_1d[:, TS], ts, side="right") - 1
+            if didx >= 2:
+                levels.append(bars_1d[didx - 1, H])  # PDH
+                levels.append(bars_1d[didx - 1, L])  # PDL
+
+        # PWH/PWL — prior week high/low
+        if bars_1w is not None and len(bars_1w) >= 2:
+            ts   = ref_bars[i, TS]
+            widx = np.searchsorted(bars_1w[:, TS], ts, side="right") - 1
+            if widx >= 2:
+                levels.append(bars_1w[widx - 1, H])  # PWH
+                levels.append(bars_1w[widx - 1, L])  # PWL
+
+        for lvl in levels:
+            if lvl > 0 and abs(price - lvl) / lvl <= tol:
+                out[i] = True
+                break
+
+    return out
 
 
 def run_liq_sweep(symbol: str, data: dict,
                   btc_data: dict | None,
-                  from_ts: int, to_ts: int) -> list[Trade]:
-    """Liquidity sweep reversal — equal highs/lows stop hunt then reverse.
-    The #1 institutional entry pattern on BTC, ETH, and high-liquidity alts.
-    Works on 1H bars across all market conditions.
+                  from_ts: int, to_ts: int,
+                  mc_threshold: float = 0.0) -> list[Trade]:
+    """Liquidity sweep reversal — improved institutional version.
+
+    Changes vs previous:
+    - Wick-based SL (not ATR) — natural invalidation level
+    - Key level proximity filter — only sweeps near PDH/PDL/PWH/PWL
+    - Improved equal lows: stricter tolerance + min separation + depth
     """
     b1h = data.get(f"{symbol}:1h")
     b4h = data.get(f"{symbol}:4h")
     b1d = data.get(f"{symbol}:1d")
+
+    b1w = data.get(f"{symbol}:1w")
     _btc = btc_data if btc_data is not None else {}
-    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
+    if "BTCUSDT:1w" in _btc:
+        b1w = _btc["BTCUSDT:1w"]
 
     if b1h is None or len(b1h) < WARMUP + 10:
         return []
@@ -804,7 +1073,6 @@ def run_liq_sweep(symbol: str, data: dict,
     warmup_mask[WARMUP:] = True
     valid = period_mask & warmup_mask
 
-    atr1h  = atr(b1h)
     rsi1h  = rsi(b1h[:, C])
     wk_l   = mask_weekly_long(b1w, b1h)
     wk_s   = mask_weekly_short(b1w, b1h)
@@ -812,30 +1080,43 @@ def run_liq_sweep(symbol: str, data: dict,
     htf_s  = mask_htf_bear(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
     crash  = mask_crash(b1d, b1h)    if b1d is not None else np.zeros(len(b1h), bool)
 
+    # Key level proximity filter — only sweeps near institutional levels
+    key_lvl = _near_key_level_vec(b1d, b1w, b1h, tol=0.005)
+
     sweep_l = sig_liq_sweep_long(b1h)
     sweep_s = sig_liq_sweep_short(b1h)
 
-    # LONG sweep: macro bull allowed + HTF bullish + RSI not overbought
-    long_entries  = np.where(sweep_l & wk_l & htf_l & (rsi1h < 55) & valid)[0]
-    # SHORT sweep: macro bear + HTF bearish OR crash + RSI not oversold
-    short_entries = np.where(sweep_s & wk_s & (htf_s | crash) & (rsi1h > 45) & valid)[0]
+    # LONG: sweep + near key level + macro bull + HTF bull + not overbought
+    long_entries  = np.where(
+        sweep_l & key_lvl & wk_l & htf_l & (rsi1h < 55) & valid
+    )[0]
+
+    # SHORT: sweep + near key level + macro bear + HTF bear + not oversold
+    short_entries = np.where(
+        sweep_s & key_lvl & wk_s & (htf_s | crash) & (rsi1h > 45) & valid
+    )[0]
 
     long_entries  = long_entries[long_entries >= WARMUP]
     short_entries = short_entries[short_entries >= WARMUP]
 
-    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "liq_sweep")
-    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "liq_sweep")
+    # Use wick-based SL simulation
+    trades  = simulate_sweep(long_entries,  b1h, "LONG",  symbol,
+                             mc_threshold=mc_threshold)
+    trades += simulate_sweep(short_entries, b1h, "SHORT", symbol,
+                             mc_threshold=mc_threshold)
     return trades
 
 
 def run_wyckoff_spring_only(symbol: str, data: dict,
                              btc_data: dict | None,
-                             from_ts: int, to_ts: int) -> list[Trade]:
+                             from_ts: int, to_ts: int,
+                             mc_threshold: float = 0.0) -> list[Trade]:
     """Pure Wyckoff spring LONG — works in RANGE and at crash bottoms.
     Best for BTC and ETH during consolidation and accumulation phases.
     """
     b1h = data.get(f"{symbol}:1h")
     b4h = data.get(f"{symbol}:4h")
+
     _btc = btc_data if btc_data is not None else {}
     b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc else data.get(f"{symbol}:1w")
 
@@ -858,7 +1139,259 @@ def run_wyckoff_spring_only(symbol: str, data: dict,
     long_entries = np.where(spring & wk_l & (rsi1h < 50) & valid)[0]
     long_entries = long_entries[long_entries >= WARMUP]
 
-    return simulate(long_entries, b1h, atr1h, "LONG", symbol, "wyckoff_spring")
+    return simulate(long_entries, b1h, atr1h, "LONG", symbol, "wyckoff_spring",
+                    mc_threshold=mc_threshold)
+
+
+def run_wyckoff_spring_v2(symbol: str, data: dict,
+                           btc_data: dict | None,
+                           from_ts: int, to_ts: int,
+                           mc_threshold: float = 0.0) -> list[Trade]:
+    """Wyckoff spring LONG with wick-based SL — improved version.
+
+    Uses simulate_sweep() which places SL just below the spring wick
+    instead of ATR-based SL. Natural invalidation: if price goes below
+    the wick that was supposed to be the spring, the setup is invalid.
+
+    TP = entry + SL_distance × 2.5 (closer target = more hits).
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc \
+           else data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    rsi1h   = rsi(b1h[:, C])
+    wk_l    = mask_weekly_long(b1w, b1h)
+    htf_l   = mask_htf_bull(b4h, b1h) if b4h is not None \
+               else np.ones(len(b1h), bool)
+
+    spring = sig_wyckoff_spring(b1h)
+
+    # Spring LONG: weekly gate + HTF bull + RSI < 50
+    long_entries = np.where(
+        spring & wk_l & htf_l & (rsi1h < 50) & valid
+    )[0]
+    long_entries = long_entries[long_entries >= WARMUP]
+
+    # Use wick-based SL simulation (same as liq_sweep)
+    return simulate_sweep(long_entries, b1h, "LONG", symbol, rr=2.5, sl_buffer=0.001,
+                          mc_threshold=mc_threshold)
+
+
+def run_wyckoff_upthrust_v2(symbol: str, data: dict,
+                              btc_data: dict | None,
+                              from_ts: int, to_ts: int,
+                              mc_threshold: float = 0.0) -> list[Trade]:
+    """Wyckoff upthrust SHORT with wick-based SL.
+    Mirror of spring_v2 — wick above range_high, close back inside.
+    SL just above the wick high (natural invalidation).
+    Works in RANGE and CRASH regimes for SHORT entries.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    b1d = data.get(f"{symbol}:1d")
+
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc \
+           else data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    rsi1h  = rsi(b1h[:, C])
+    wk_s   = mask_weekly_short(b1w, b1h)
+    htf_s  = mask_htf_bear(b4h, b1h) if b4h is not None \
+              else np.ones(len(b1h), bool)
+    crash  = mask_crash(b1d, b1h)    if b1d is not None \
+              else np.zeros(len(b1h), bool)
+
+    upthrust = sig_wyckoff_upthrust(b1h)
+
+    short_entries = np.where(
+        upthrust & wk_s & (htf_s | crash) & (rsi1h > 50) & valid
+    )[0]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    return simulate_sweep(short_entries, b1h, "SHORT", symbol, rr=2.5, sl_buffer=0.001,
+                          mc_threshold=mc_threshold)
+
+
+def sig_cme_gap(bars_1h: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Detect CME gap fill opportunities.
+
+    CME gap = difference between Friday 22:00 UTC close
+    and Sunday 23:00 UTC open.
+
+    Bullish CME gap: Sunday open ABOVE Friday close
+      → price tends to fill DOWN to Friday close
+      → SHORT entry when price is still above Friday close level
+
+    Bearish CME gap: Sunday open BELOW Friday close
+      → price tends to fill UP to Friday close
+      → LONG entry when price is still below Friday close level
+
+    Returns (long_signal_array, short_signal_array)
+    Both are 1H bar boolean arrays.
+    """
+    n         = len(bars_1h)
+    long_sig  = np.zeros(n, bool)
+    short_sig = np.zeros(n, bool)
+
+    from datetime import datetime, timezone
+
+    friday_closes: list[tuple[int, float]] = []  # (bar_idx, price)
+
+    for i in range(n):
+        ts  = int(bars_1h[i, TS]) / 1000
+        dt  = datetime.fromtimestamp(ts, tz=timezone.utc)
+        # Friday = weekday 4, hour 21-22 UTC (CME closes ~22:00)
+        if dt.weekday() == 4 and 20 <= dt.hour <= 22:
+            friday_closes.append((i, bars_1h[i, C]))
+
+    for fri_idx, fri_close in friday_closes:
+        # Find the Sunday open — next Sunday bar after Friday
+        # Sunday = weekday 6
+        for j in range(fri_idx + 1, min(fri_idx + 72, n)):
+            ts = int(bars_1h[j, TS]) / 1000
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            if dt.weekday() == 6 and dt.hour >= 22:
+                sun_open = bars_1h[j, O]
+                if sun_open == 0:
+                    break
+
+                gap_pct = (sun_open - fri_close) / fri_close
+
+                # Only trade gaps > 0.3% (meaningful gap)
+                if abs(gap_pct) < 0.003:
+                    break
+
+                # For the next 48 bars after Sunday open,
+                # signal when price hasn't filled the gap yet
+                for k in range(j, min(j + 48, n)):
+                    current_price = bars_1h[k, C]
+                    if current_price == 0:
+                        continue
+
+                    if gap_pct > 0:
+                        # Bullish gap (open above Friday close)
+                        # SHORT signal when price still above Friday close
+                        if current_price > fri_close:
+                            short_sig[k] = True
+                        else:
+                            break  # gap filled
+                    else:
+                        # Bearish gap (open below Friday close)
+                        # LONG signal when price still below Friday close
+                        if current_price < fri_close:
+                            long_sig[k] = True
+                        else:
+                            break  # gap filled
+                break
+
+    return long_sig, short_sig
+
+
+def run_cme_gap(symbol: str, data: dict,
+                _btc_data: dict | None,
+                from_ts: int, to_ts: int,
+                mc_threshold: float = 0.0) -> list[Trade]:
+    """CME gap fill — BTC-specific strategy.
+    Only valid for BTCUSDT (CME futures tracks BTC).
+    """
+    if symbol != "BTCUSDT":
+        return []
+
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr1h = atr(b1h)
+    rsi1h = rsi(b1h[:, C])
+    htf_l = mask_htf_bull(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+    htf_s = mask_htf_bear(b4h, b1h) if b4h is not None else np.ones(len(b1h), bool)
+
+    long_gap, short_gap = sig_cme_gap(b1h)
+
+    # Long gap fill: price below Friday close + HTF bullish
+    long_entries  = np.where(long_gap  & htf_l & (rsi1h < 60) & valid)[0]
+    # Short gap fill: price above Friday close + HTF bearish
+    short_entries = np.where(short_gap & htf_s & (rsi1h > 40) & valid)[0]
+
+    long_entries  = long_entries[long_entries >= WARMUP]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    trades  = simulate(long_entries,  b1h, atr1h, "LONG",  symbol, "cme_gap",
+                       mc_threshold=mc_threshold)
+    trades += simulate(short_entries, b1h, atr1h, "SHORT", symbol, "cme_gap",
+                       mc_threshold=mc_threshold)
+    return trades
+
+
+def run_liq_sweep_short(symbol: str, data: dict,
+                         btc_data: dict | None,
+                         from_ts: int, to_ts: int,
+                         mc_threshold: float = 0.0) -> list[Trade]:
+    """Liquidity sweep SHORT only — confirmed edge in bear/crash.
+    Used for BTC and ETH during CRASH regime.
+    Does NOT include LONG entries — LONG sweeps have no edge on BTC/ETH.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    b1d = data.get(f"{symbol}:1d")
+
+    _btc = btc_data if btc_data is not None else {}
+    b1w  = _btc.get("BTCUSDT:1w") if "BTCUSDT:1w" in _btc \
+           else data.get(f"{symbol}:1w")
+
+    if b1h is None or len(b1h) < WARMUP + 10:
+        return []
+
+    period_mask = (b1h[:, TS] >= from_ts) & (b1h[:, TS] <= to_ts)
+    warmup_mask = np.zeros(len(b1h), bool)
+    warmup_mask[WARMUP:] = True
+    valid = period_mask & warmup_mask
+
+    atr1h  = atr(b1h)
+    rsi1h  = rsi(b1h[:, C])
+    wk_s   = mask_weekly_short(b1w, b1h)
+    htf_s  = mask_htf_bear(b4h, b1h) if b4h is not None \
+              else np.ones(len(b1h), bool)
+    crash  = mask_crash(b1d, b1h)    if b1d is not None \
+              else np.zeros(len(b1h), bool)
+
+    sweep_s = sig_liq_sweep_short(b1h)
+
+    # SHORT only: macro bear + (HTF bear OR crash) + RSI not oversold
+    short_entries = np.where(
+        sweep_s & wk_s & (htf_s | crash) & (rsi1h > 45) & valid
+    )[0]
+    short_entries = short_entries[short_entries >= WARMUP]
+
+    return simulate(short_entries, b1h, atr1h, "SHORT", symbol, "liq_sweep_short",
+                    mc_threshold=mc_threshold)
 
 
 # ─── Stats ────────────────────────────────────────────────────────────────────
@@ -883,11 +1416,68 @@ def compute_stats(trades: list[Trade]) -> dict:
 
 
 RUNNERS: dict = {
-    "fvg":             run_fvg,
-    "ema_pullback":    run_ema_pullback,
-    "vwap_band":       run_vwap_band,
-    "microrange":      run_microrange,
-    "wyckoff_range":   run_wyckoff_range,
-    "liq_sweep":       run_liq_sweep,
-    "wyckoff_spring":  run_wyckoff_spring_only,
+    "fvg":                    run_fvg,
+    "ema_pullback":           run_ema_pullback,
+    "ema_pullback_short":     run_ema_pullback_short_only,
+    "ema_pullback_short_v2":  run_ema_pullback_short_v2,
+    "vwap_band":              run_vwap_band,
+    "microrange":             run_microrange,
+    "wyckoff_range":          run_wyckoff_range,
+    "liq_sweep":              run_liq_sweep,
+    "liq_sweep_short":        run_liq_sweep_short,
+    "wyckoff_spring":         run_wyckoff_spring_only,
+    "wyckoff_spring_v2":      run_wyckoff_spring_v2,
+    "wyckoff_upthrust_v2":    run_wyckoff_upthrust_v2,
+    "cme_gap":                run_cme_gap,
 }
+
+
+# Strategy name → config block name mapping (handles aliases)
+_STRATEGY_CFG_KEY: dict[str, str] = {
+    "fvg":                    "fvg",
+    "ema_pullback":           "ema_pullback",
+    "ema_pullback_short":     "ema_pullback",
+    "ema_pullback_short_v2":  "ema_pullback",
+    "vwap_band":              "vwap_band",
+    "microrange":             "microrange",
+    "wyckoff_range":          "wyckoff_spring",
+    "liq_sweep":              "liq_sweep",
+    "liq_sweep_short":        "liq_sweep",
+    "wyckoff_spring":         "wyckoff_spring",
+    "wyckoff_spring_v2":      "wyckoff_spring",
+    "wyckoff_upthrust_v2":    "wyckoff_spring",
+    "cme_gap":                "fvg",          # no dedicated block — shares fvg default
+}
+
+
+def _resolve_mc_threshold(strategy: str,
+                          cli_override: float = 0.0) -> float:
+    """Return effective vol-ratio threshold for a strategy.
+
+    Priority: CLI override > per-strategy config > 0.0 (disabled).
+    """
+    if cli_override > 0.0:
+        return cli_override
+    cfg_key = _STRATEGY_CFG_KEY.get(strategy, strategy)
+    return float(_CFG.get(cfg_key, {}).get("mc_vol_ratio_max", 0.0))
+
+
+def run_strategy(symbol: str, strategy: str, data: dict,
+                 btc_data: dict | None,
+                 from_ts: int, to_ts: int,
+                 mc_threshold: float = 0.0) -> list[Trade]:
+    """Dispatch to the named runner, passing mc_threshold through.
+
+    mc_threshold= 0.0 → use per-strategy config (config.yaml mc_vol_ratio_max).
+    mc_threshold> 0.0 → CLI override, applied to all strategies.
+    mc_threshold=-1.0 → force disabled (no vol gate, ignores config).
+    """
+    runner = RUNNERS.get(strategy)
+    if runner is None:
+        return []
+    if mc_threshold < 0:
+        effective = 0.0   # explicitly disabled
+    else:
+        effective = _resolve_mc_threshold(strategy, mc_threshold)
+    return runner(symbol, data, btc_data, from_ts, to_ts,
+                  mc_threshold=effective)

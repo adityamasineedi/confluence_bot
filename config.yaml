@@ -256,6 +256,7 @@ ema_pullback:
   min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
   min_ema_dist_pct: 0.002       # separate key for scorer _MIN_EMA_DIST (fixes duplicate key bug)
   rr_ratio: 1.5                 # revert BTC back to 1.5
+  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
   sl_atr_mult:                  # ATR multiplier per tier — replaces fixed EMA-distance SL
     tier1: 1.5                  # BTC: cleanest trend, tightest ok
     tier2: 2.0                  # XRP, LINK, ETH, SOL: moderate noise
@@ -332,6 +333,7 @@ vwap_band:
     base:  1.5
   min_sl_pct: 0.003           # absolute floor — SL never < 0.3% regardless of ATR
   max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — VWAP reversion should happen within 1h)
+  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
   long_only: true    # backtest confirmed SHORT direction: WR 0.5%, PF 0.01, 196 SL/197 trades
   exclude_symbols:
     - BTCUSDT    # TREND PF1.07 weak, not worth enabling
@@ -342,6 +344,32 @@ vwap_band:
     # XRPUSDT removed — TREND PF1.40 WR31%, RANGE PF1.48 WR30% ✅
     # LINKUSDT removed — TREND PF1.50 WR40%, RANGE PF2.25 WR36% ✅
     # SUIUSDT removed — TREND PF1.52 WR27% ✅
+
+# ── Wyckoff spring strategy ───────────────────────────────────────────────────
+wyckoff_spring:
+  enabled: true
+  cooldown_mins: 60
+  rr_ratio: 2.5
+  sl_buffer_pct: 0.001
+  fire_threshold: 0.67
+  check_interval_secs: 60
+  max_positions: 2
+  mc_vol_ratio_max: 2.0    # block when recent 6H vol > 2.0× baseline (backtest: PF 3.99)
+
+# ── Liquidity sweep strategy ─────────────────────────────────────────────────
+liq_sweep:
+  enabled: true
+  cooldown_mins: 60
+  rr_ratio: 2.5
+  sl_buffer_pct: 0.001
+  lookback_bars: 30
+  eq_level_tol: 0.002
+  min_separation_bars: 10
+  vol_spike_mult: 1.5
+  fire_threshold: 0.75
+  check_interval_secs: 60
+  max_positions: 2
+  mc_vol_ratio_max: 2.5    # block when recent 6H vol > 2.5× baseline (backtest: PF 2.62)
 
 # ── Session filter ────────────────────────────────────────────────────────────
 session_filter:
@@ -373,6 +401,7 @@ fvg:
   rr_ratio: 2.0               # TP = entry ± dist × 2.0
   sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
   lookback_bars: 50           # scan last 50 1H candles for FVGs
+  mc_vol_ratio_max: 2.0    # block when recent 6H vol > 2.0× baseline (backtest: PF 2.80)
   macro_filter_enabled: true  # 1D EMA200 gate — LONG only above, SHORT only below
   macro_ema_period: 200       # EMA period for macro direction gate
   exclude_symbols:
@@ -382,6 +411,7 @@ fvg:
 # ── Micro Range Flip strategy ────────────────────────────────────────────────
 microrange:
   enabled: true
+  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
   exclude_symbols:
     - ETHUSDT    # TREND PF0.89 BAD, RANGE PF0.80 BAD
     - SOLUSDT    # TREND PF1.01 marginal, RANGE PF0.94 BAD
@@ -529,15 +559,15 @@ volume_momentum:
 # Individual strategy enabled: false flags are still respected by the router.
 strategy_routing:
   BTCUSDT:
-    TREND:     [microrange, fvg]           # removed ema_pullback — PF 0.28 confirmed loser
-    RANGE:     [microrange]                # removed ema_pullback — negative PF in range
+    TREND:     [fvg, liq_sweep, wyckoff_spring_v2]
+    RANGE:     [wyckoff_spring_v2]
     BREAKOUT:  [fvg]
-    CRASH:     []
+    CRASH:     [fvg, liq_sweep]
     PUMP:      []
   ETHUSDT:
-    TREND:     []                          # removed ema_pullback — PF 0.35 confirmed loser
+    TREND:     [fvg, liq_sweep, wyckoff_spring_v2]
     RANGE:     []
-    BREAKOUT:  []                          # removed ema_pullback
+    BREAKOUT:  [fvg, wyckoff_spring_v2]
     CRASH:     []
     PUMP:      []
   SOLUSDT:
@@ -547,34 +577,34 @@ strategy_routing:
     CRASH:     [fvg]                       # added — fvg SHORT PF 3.14 in bear
     PUMP:      []
   BNBUSDT:
-    TREND:     [fvg]
-    RANGE:     []
+    TREND:     [wyckoff_spring_v2, liq_sweep]
+    RANGE:     [microrange]
     BREAKOUT:  [fvg]
-    CRASH:     [fvg]                       # added — fvg SHORT PF 3.86 in bear
+    CRASH:     [liq_sweep_short, microrange]
     PUMP:      []
   XRPUSDT:
     TREND:     [vwap_band]                 # removed ema_pullback (PF 1.28 marginal), keep vwap
     RANGE:     [vwap_band]                 # removed microrange PF 1.32 — below fee break-even
     BREAKOUT:  [vwap_band]
-    CRASH:     [fvg]                       # added — fvg SHORT PF 5.03 WR 67%
+    CRASH:     [liq_sweep_short]            # PF confirmed; fvg SHORT PF 5.03 removed — liq_sweep_short preferred
     PUMP:      []
   LINKUSDT:
-    TREND:     [vwap_band]                 # removed ema_pullback — not significant edge
-    RANGE:     [vwap_band]                 # removed microrange PF 1.26 — below break-even
+    TREND:     [liq_sweep, wyckoff_spring_v2]
+    RANGE:     [liq_sweep]
     BREAKOUT:  [vwap_band]
-    CRASH:     []
+    CRASH:     [liq_sweep_short]
     PUMP:      []
   DOGEUSDT:
-    TREND:     [fvg]
+    TREND:     [liq_sweep]
     RANGE:     []                          # removed microrange — PF 1.19 below fee floor
     BREAKOUT:  [fvg]
-    CRASH:     [microrange]
+    CRASH:     [liq_sweep_short]
     PUMP:      []
   SUIUSDT:
     TREND:     [ema_pullback, fvg]         # removed vwap_band — not confirmed
     RANGE:     []                          # removed microrange — PF 1.17 below fee floor
     BREAKOUT:  [ema_pullback, fvg]
-    CRASH:     [microrange]
+    CRASH:     [liq_sweep_short]
     PUMP:      []
   _default:
     TREND:     []
@@ -620,7 +650,7 @@ btc_dominance:
 weekly_trend_gate:
   enabled: true
   ema_period: 10      # 10-week EMA (~50-day)
-  apply_to: [ema_pullback, fvg, vwap_band]
+  apply_to: [ema_pullback, fvg, vwap_band, liq_sweep]
 
 # ── Backtest cost simulation ──────────────────────────────────────────────────
 # Applied to every round-trip trade: fees (entry + exit), slippage (entry + exit),

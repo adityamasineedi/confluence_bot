@@ -195,6 +195,8 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "FVG":         ("fvg_stop", "fvg_tp"),
         "VWAPBAND":    ("vb_stop",  "vb_tp"),
         "OISPIKE":     ("os_stop",  "os_tp"),
+        "WYCKOFF":     ("ws_stop",  "ws_tp"),
+        "LIQSWEEP":   ("ls_stop",  "ls_tp"),
     }
 
     # Minimum RR requirement per strategy (scalps operate at lower RR)
@@ -207,6 +209,8 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "FVG":          2.0,
         "VWAPBAND":     1.5,
         "OISPIKE":      2.0,
+        "WYCKOFF":      float(_cfg.get("wyckoff_spring", {}).get("rr_ratio", 2.5)),
+        "LIQSWEEP":    float(_cfg.get("liq_sweep",       {}).get("rr_ratio", 2.5)),
     }
 
     stop_key, tp_key = _PRESET_LEVELS.get(regime, (None, None))
@@ -358,6 +362,11 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     elif regime == "OISPIKE":
         from .oi_spike_scorer import set_cooldown
         set_cooldown(symbol)
+    elif regime == "WYCKOFF":
+        from .wyckoff_scorer import set_cooldown
+        set_cooldown(symbol)
+    elif regime == "LIQSWEEP":
+        pass   # liq_sweep cooldown is managed inside liq_sweep_scorer.score()
 
     return order
 

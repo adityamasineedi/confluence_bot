@@ -9,6 +9,8 @@ Usage examples:
   python backtest/run.py --symbol BTCUSDT --strategy fvg --show-trades
   python backtest/run.py --symbol BTCUSDT --strategy fvg \
       --from-date 2025-01-01 --to-date 2026-04-01
+  python backtest/run.py --symbol BTCUSDT --strategy fvg --mc-compare
+  python backtest/run.py --symbol BTCUSDT --strategy fvg --mc-threshold 0.40
 """
 import argparse
 import os
@@ -18,7 +20,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from backtest.engine import load, compute_stats, RUNNERS
+from backtest.engine import (load, compute_stats, RUNNERS, run_strategy,
+                             _resolve_mc_threshold)
 
 PASS_MARK = "PASS"
 WARN_MARK = "WARN"
@@ -41,6 +44,41 @@ def verdict(pf: float) -> str:
     if pf >= WARN_PF:
         return WARN_MARK
     return FAIL_MARK
+
+
+def print_comparison(raw: dict, mc: dict, symbol: str, strategy: str,
+                     mc_thresh: float = 2.0) -> None:
+    """Print side-by-side comparison of unfiltered vs vol-ratio filtered."""
+    skipped  = raw["n"] - mc["n"]
+    skip_pct = skipped / raw["n"] * 100 if raw["n"] > 0 else 0
+
+    # Compute total R (sum of pnl_r) from avg_r × n
+    total_r_raw = raw["avg_r"] * raw["n"]
+    total_r_mc  = mc["avg_r"]  * mc["n"]
+
+    thresh_label = f"vol<={mc_thresh:.1f}x"
+
+    print(f"\n{'='*70}")
+    print(f"  VOL-RATIO COMPARISON: {symbol} {strategy}")
+    print(f"{'='*70}")
+    print(f"  {'Metric':<20} {'Unfiltered':>15} {thresh_label:>15} {'Change':>12}")
+    print(f"  {'-'*62}")
+    print(f"  {'Trades':<20} {raw['n']:>15} {mc['n']:>15}"
+          f"   {skipped:>+5} skip ({skip_pct:.0f}%)")
+    print(f"  {'Win Rate':<20} {raw['wr']:>14.1f}% {mc['wr']:>14.1f}%"
+          f"   {mc['wr'] - raw['wr']:>+9.1f}%")
+    print(f"  {'Profit Factor':<20} {raw['pf']:>15.2f} {mc['pf']:>15.2f}"
+          f"   {mc['pf'] - raw['pf']:>+9.2f}")
+    print(f"  {'Avg R':<20} {raw['avg_r']:>+15.3f} {mc['avg_r']:>+15.3f}"
+          f"   {mc['avg_r'] - raw['avg_r']:>+9.3f}")
+    print(f"  {'Total R':<20} {total_r_raw:>+15.2f} {total_r_mc:>+15.2f}"
+          f"   {total_r_mc - total_r_raw:>+9.2f}")
+
+    if raw["pf"] > 0 and mc["pf"] > 0:
+        improved = mc["pf"] > raw["pf"]
+        tag = "IMPROVES" if improved else "HURTS"
+        print(f"\n  Verdict: vol gate {tag} (PF {raw['pf']:.2f} -> {mc['pf']:.2f})")
+    print(f"{'='*70}\n")
 
 
 def bar_date(data: dict, symbol: str, bar_idx: int) -> str:
@@ -68,6 +106,12 @@ def main() -> None:
                     help="End date YYYY-MM-DD")
     ap.add_argument("--show-trades", action="store_true",
                     help="Print every individual trade entry/exit")
+    ap.add_argument("--mc-threshold", type=float, default=0.0,
+                    help="Max vol ratio threshold "
+                         "(0.0 = disabled, 2.0 = block when 6H vol > 2x baseline)")
+    ap.add_argument("--mc-compare", action="store_true", default=False,
+                    help="Run both unfiltered and vol-ratio filtered, "
+                         "show side-by-side comparison")
     args = ap.parse_args()
 
     from_ts = _ms(args.from_date)
@@ -98,6 +142,11 @@ def main() -> None:
     print(f"  Period   : {args.from_date}  ->  {args.to_date}")
     print(f"{'='*65}\n")
 
+    mc_threshold = args.mc_threshold
+    mc_compare   = args.mc_compare
+    # For compare mode: CLI override or 0.0 (= use per-strategy config defaults)
+    mc_thresh_val = mc_threshold
+
     all_trades: list  = []
     result_rows: list = []
 
@@ -108,42 +157,92 @@ def main() -> None:
             continue
 
         for strategy in strategies:
-            t0      = time.time()
-            runner  = RUNNERS[strategy]
-            trades  = runner(symbol, data, btc_data, from_ts, to_ts)
-            s       = compute_stats(trades)
-            elapsed = time.time() - t0
+            if mc_compare:
+                # ── Side-by-side MC comparison ────────────────────────────────
+                t0 = time.time()
+                trades_raw = run_strategy(symbol, strategy, data, btc_data,
+                                          from_ts, to_ts, mc_threshold=-1.0)
+                stats_raw  = compute_stats(trades_raw)
 
-            vrd = verdict(s["pf"])
-            print(
-                f"  [{vrd}]  {symbol:<10}  {strategy:<15}  "
-                f"n:{s['n']:>4}  "
-                f"W:{s['wins']:>3}  L:{s['losses']:>3}  TO:{s['timeouts']:>3}  "
-                f"WR:{s['wr']:>5.1f}%  "
-                f"PF:{s['pf']:>5.2f}  "
-                f"avgR:{s['avg_r']:>+.3f}  "
-                f"({elapsed:.1f}s)"
-            )
+                trades_mc  = run_strategy(symbol, strategy, data, btc_data,
+                                          from_ts, to_ts,
+                                          mc_threshold=mc_thresh_val)
+                stats_mc   = compute_stats(trades_mc)
+                elapsed    = time.time() - t0
 
-            if args.show_trades and trades:
-                for t in trades:
-                    date_str = bar_date(data, symbol, t.bar_idx)
-                    icon = ("TP" if t.outcome == "TP"
-                            else "SL" if t.outcome == "SL"
-                            else "TO")
-                    print(
-                        f"       [{icon}]  {date_str}  "
-                        f"{t.direction:<5}  "
-                        f"entry:{t.entry:>10.4f}  "
-                        f"sl:{t.stop:>10.4f}  "
-                        f"tp:{t.tp:>10.4f}  "
-                        f"{t.outcome:<7}  "
-                        f"R:{t.pnl_r:>+.2f}"
-                    )
-                print()
+                # Show the effective threshold used
+                eff_thresh = _resolve_mc_threshold(strategy, mc_thresh_val)
+                print_comparison(stats_raw, stats_mc, symbol, strategy,
+                                 mc_thresh=eff_thresh)
 
-            all_trades.extend(trades)
-            result_rows.append({"symbol": symbol, "strategy": strategy, **s})
+                # Show individual MC-filtered trades if requested
+                if args.show_trades and trades_mc:
+                    for t in trades_mc:
+                        date_str = bar_date(data, symbol, t.bar_idx)
+                        icon = ("TP" if t.outcome == "TP"
+                                else "SL" if t.outcome == "SL"
+                                else "TO")
+                        print(
+                            f"       [{icon}]  {date_str}  "
+                            f"{t.direction:<5}  "
+                            f"entry:{t.entry:>10.4f}  "
+                            f"sl:{t.stop:>10.4f}  "
+                            f"tp:{t.tp:>10.4f}  "
+                            f"{t.outcome:<7}  "
+                            f"R:{t.pnl_r:>+.2f}  "
+                            f"vr:{t.vol_ratio:.2f}"
+                        )
+                    print()
+
+                all_trades.extend(trades_raw)
+                result_rows.append({"symbol": symbol, "strategy": strategy,
+                                    **stats_raw})
+                print(f"  ({elapsed:.1f}s)")
+
+            else:
+                # ── Normal single run ─────────────────────────────────────────
+                t0      = time.time()
+                trades  = run_strategy(symbol, strategy, data, btc_data,
+                                       from_ts, to_ts,
+                                       mc_threshold=mc_threshold)
+                s       = compute_stats(trades)
+                elapsed = time.time() - t0
+
+                mc_label = f"  [vol<={mc_threshold:.1f}x]" if mc_threshold > 0 else ""
+                vrd = verdict(s["pf"])
+                print(
+                    f"  [{vrd}]  {symbol:<10}  {strategy:<15}  "
+                    f"n:{s['n']:>4}  "
+                    f"W:{s['wins']:>3}  L:{s['losses']:>3}  "
+                    f"TO:{s['timeouts']:>3}  "
+                    f"WR:{s['wr']:>5.1f}%  "
+                    f"PF:{s['pf']:>5.2f}  "
+                    f"avgR:{s['avg_r']:>+.3f}  "
+                    f"({elapsed:.1f}s){mc_label}"
+                )
+
+                if args.show_trades and trades:
+                    for t in trades:
+                        date_str = bar_date(data, symbol, t.bar_idx)
+                        icon = ("TP" if t.outcome == "TP"
+                                else "SL" if t.outcome == "SL"
+                                else "TO")
+                        mc_str = (f"  vr:{t.vol_ratio:.2f}"
+                                  if t.vol_ratio > 0 else "")
+                        print(
+                            f"       [{icon}]  {date_str}  "
+                            f"{t.direction:<5}  "
+                            f"entry:{t.entry:>10.4f}  "
+                            f"sl:{t.stop:>10.4f}  "
+                            f"tp:{t.tp:>10.4f}  "
+                            f"{t.outcome:<7}  "
+                            f"R:{t.pnl_r:>+.2f}{mc_str}"
+                        )
+                    print()
+
+                all_trades.extend(trades)
+                result_rows.append({"symbol": symbol, "strategy": strategy,
+                                    **s})
 
     if not result_rows:
         print("  No results — check that backtest/data/ files exist.\n")

@@ -170,6 +170,22 @@ async def main() -> None:
         )
         log.info("EMA Pullback strategy enabled")
 
+    # 6b6. Wyckoff spring (range low spring + absorption — mean reversion long)
+    if cfg.get("wyckoff_spring", {}).get("enabled", False):
+        from core.wyckoff_loop import run_wyckoff_loop
+        extra_tasks.append(
+            asyncio.create_task(run_wyckoff_loop(symbols, cache))
+        )
+        log.info("Wyckoff Spring strategy enabled")
+
+    # 6b8. Liquidity sweep (equal highs/lows stop hunt — long + short)
+    if cfg.get("liq_sweep", {}).get("enabled", False):
+        from core.liq_sweep_loop import run_liq_sweep_loop
+        extra_tasks.append(
+            asyncio.create_task(run_liq_sweep_loop(symbols, cache))
+        )
+        log.info("Liquidity Sweep strategy enabled")
+
     # 6b7. HTF Demand/Supply Zone (4H zone retests with 1H confirmation)
     if cfg.get("zone", {}).get("enabled", False):
         from core.zone_loop import run_zone_loop
