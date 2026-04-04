@@ -28,16 +28,34 @@ _PRICE_DECIMALS: dict[str, int] = {
     "ETHUSDT":  2,
     "SOLUSDT":  2,
     "BNBUSDT":  2,
-    "AVAXUSDT": 3,
-    "ADAUSDT":  4,
-    "DOTUSDT":  3,
+    "XRPUSDT":  4,
+    "LINKUSDT": 3,
     "DOGEUSDT": 5,
     "SUIUSDT":  4,
 }
 
+# Binance Futures quantity step decimals (from LOT_SIZE stepSize)
+_QTY_DECIMALS: dict[str, int] = {
+    "BTCUSDT":  3,
+    "ETHUSDT":  3,
+    "SOLUSDT":  1,
+    "BNBUSDT":  2,
+    "XRPUSDT":  0,   # whole numbers only
+    "LINKUSDT": 1,
+    "DOGEUSDT": 0,   # whole numbers only
+    "SUIUSDT":  0,   # whole numbers only
+}
+
+
 def _round_price(symbol: str, price: float) -> float:
     dp = _PRICE_DECIMALS.get(symbol.upper(), 2)
     return round(price, dp)
+
+
+def _round_qty(symbol: str, qty: float) -> float:
+    dp = _QTY_DECIMALS.get(symbol.upper(), 3)
+    rounded = round(qty, dp)
+    return int(rounded) if dp == 0 else rounded
 
 _POLL_INTERVAL_S = 60
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -179,6 +197,13 @@ class BinanceRestPoller:
         )
 
         if load_history:
+            # Skip full reload if cache already has data (e.g. after internet blip)
+            existing = self._cache.get_ohlcv(symbol, window=5, tf="5m")
+            if existing and len(existing) >= 10:
+                log.info("Cache intact for %s (%d bars) — skipping history reload",
+                         symbol, len(existing))
+                return
+
             # Gap fill — catches any bars missed since last startup
             for tf in ("5m", "15m", "1h", "4h"):
                 await self._fill_gap(session, symbol, tf)
@@ -513,8 +538,10 @@ async def place_order(
     headers = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if side == "BUY" else "BUY"
 
-    # Ensure quantity has no spurious .0 suffix (Binance rejects "18295.0" for step=1 symbols)
-    quantity = int(quantity) if quantity == int(quantity) else quantity
+    # Round quantity and prices to Binance-required precision
+    quantity = _round_qty(symbol, quantity)
+    if entry > 0.0:
+        entry = _round_price(symbol, entry)
 
     entry_params: dict = {
         "symbol":   symbol,
@@ -622,7 +649,7 @@ async def place_limit_then_market(
     """
     headers   = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if side == "BUY" else "BUY"
-    quantity   = int(quantity) if quantity == int(quantity) else quantity
+    quantity   = _round_qty(symbol, quantity)
 
     entry_params: dict = {
         "symbol":      symbol,

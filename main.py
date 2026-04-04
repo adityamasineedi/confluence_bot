@@ -272,7 +272,11 @@ async def main() -> None:
                     deleted_r = conn.execute(
                         "DELETE FROM regimes WHERE ts < datetime('now', '-30 days')"
                     ).rowcount
-                    conn.execute("VACUUM")
+                    conn.commit()
+                # VACUUM must run outside a transaction
+                v_conn = sqlite3.connect(db)
+                v_conn.execute("VACUUM")
+                v_conn.close()
                 log.info("DB prune: removed %d signals, %d regimes",
                          deleted_s, deleted_r)
             except Exception as exc:

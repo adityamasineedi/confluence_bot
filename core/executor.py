@@ -27,6 +27,27 @@ _PAPER_MODE = os.environ.get("PAPER_MODE", "0") == "1"
 
 log = logging.getLogger(__name__)
 
+_QTY_PRECISION = {
+    "BTCUSDT":  3,
+    "ETHUSDT":  3,
+    "SOLUSDT":  1,
+    "BNBUSDT":  2,
+    "XRPUSDT":  0,
+    "LINKUSDT": 1,
+    "DOGEUSDT": 0,
+    "SUIUSDT":  0,
+}
+_PRICE_PRECISION = {
+    "BTCUSDT":  1,
+    "ETHUSDT":  2,
+    "SOLUSDT":  2,
+    "BNBUSDT":  2,
+    "XRPUSDT":  4,
+    "LINKUSDT": 3,
+    "DOGEUSDT": 5,
+    "SUIUSDT":  4,
+}
+
 # Active deal tracking: set of (symbol, direction) tuples
 _active_deals: set[tuple[str, str]] = set()
 
@@ -212,7 +233,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "OISPIKE":      2.0,
         "WYCKOFF":      float(_cfg.get("wyckoff_spring", {}).get("rr_ratio", 2.5)),
         "LIQSWEEP":        float(_cfg.get("liq_sweep",       {}).get("rr_ratio", 2.5)),
-        "BREAKOUT_RETEST": float(_cfg.get("breakout_retest",  {}).get("rr_ratio", 1.5)),
+        "BREAKOUT_RETEST": 1.3,   # scorer validates 2.2R from flip level; allow slippage
     }
 
     stop_key, tp_key = _PRESET_LEVELS.get(regime, (None, None))
@@ -256,6 +277,16 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     )
     raw_balance = cache.get_account_balance()
     qty = position_size(entry, stop, cache, symbol, risk_pct=signal_risk_pct, slip_pct=est_slip)
+
+    # Round qty and prices to exchange-required precision
+    q_dp = _QTY_PRECISION.get(symbol, 3)
+    qty   = round(qty, q_dp)
+    if q_dp == 0:
+        qty = int(qty)
+    entry = round(entry, _PRICE_PRECISION.get(symbol, 4))
+    stop  = round(stop,  _PRICE_PRECISION.get(symbol, 4))
+    tp    = round(tp,    _PRICE_PRECISION.get(symbol, 4))
+
     log.debug("Position sizing %s %s: raw_bal=%.2f entry=%.4f stop=%.4f qty=%.4f",
               direction, symbol, raw_balance, entry, stop, qty)
     if qty <= 0.0:

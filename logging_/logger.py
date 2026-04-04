@@ -47,8 +47,9 @@ class TradeLogger:
                     (f"-{days} days",),
                 ).rowcount
                 conn.commit()
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("VACUUM")
+            v_conn = sqlite3.connect(self.db_path)
+            v_conn.execute("VACUUM")
+            v_conn.close()
             _log.info("DB pruned: %d signals, %d regimes older than %d days removed",
                       sig_del, reg_del, days)
         except sqlite3.OperationalError as exc:

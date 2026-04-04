@@ -22,13 +22,12 @@ _PAPER_DEFAULT_BAL = 10_000.0  # default paper balance when no API key is set
 _STEP_DECIMALS: dict[str, int] = {
     "BTCUSDT":  3,
     "ETHUSDT":  3,
-    "SOLUSDT":  2,
+    "SOLUSDT":  1,
     "BNBUSDT":  2,
-    "AVAXUSDT": 0,
-    "ADAUSDT":  0,
-    "DOTUSDT":  1,
+    "XRPUSDT":  0,
+    "LINKUSDT": 1,
     "DOGEUSDT": 0,
-    "SUIUSDT":  1,
+    "SUIUSDT":  0,
 }
 
 
