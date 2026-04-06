@@ -25,7 +25,9 @@ log = logging.getLogger(__name__)
 _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
 _PAPER_MODE      = os.environ.get("PAPER_MODE", "0") == "1"
 _POLL_INTERVAL_S = 30
+_STALE_PRICE_S   = 120   # if cached price is older than 2 min, fetch via REST
 _BINANCE_BASE    = os.environ.get("BINANCE_BASE_URL", "https://fapi.binance.com")
+_BINANCE_DATA_BASE = os.environ.get("BINANCE_DATA_URL", "https://fapi.binance.com")
 _API_KEY         = os.environ.get("BINANCE_API_KEY", "")
 _SECRET          = os.environ.get("BINANCE_SECRET", "")
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
@@ -42,6 +44,45 @@ def _sign(params: dict) -> dict:
     sig = hmac.new(_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
     params["signature"] = sig
     return params
+
+
+# ── Price with staleness guard ────────────────────────────────────────────────
+
+async def _get_fresh_price(symbol: str, cache) -> float:
+    """Return current price, falling back to REST if WebSocket data is stale.
+
+    Checks whether the most recent 1m candle timestamp is within _STALE_PRICE_S.
+    If stale (WebSocket disconnected), fetches price via Binance REST ticker.
+    This prevents the monitor from sitting on an old price while the market moves.
+    """
+    # Try cache first
+    price = cache.get_last_price(symbol)
+    if price and price > 0:
+        # Check freshness — 1m candle timestamp should be within _STALE_PRICE_S
+        bars_1m = cache.get_ohlcv(symbol, window=1, tf="1m")
+        if bars_1m:
+            last_ts_s = bars_1m[-1]["ts"] / 1000.0
+            age = time.time() - last_ts_s
+            if age <= _STALE_PRICE_S:
+                return price
+            log.warning("Stale price for %s (%.0fs old) — fetching via REST", symbol, age)
+
+    # REST fallback
+    try:
+        url = f"{_BINANCE_DATA_BASE}/fapi/v1/ticker/price"
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as session:
+            async with session.get(url, params={"symbol": symbol}) as resp:
+                data = await resp.json()
+            rest_price = float(data.get("price", 0))
+            if rest_price > 0:
+                log.info("REST price for %s: %.6f", symbol, rest_price)
+                return rest_price
+    except Exception as exc:
+        log.warning("REST price fallback failed for %s: %s", symbol, exc)
+
+    return price or 0.0
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -342,7 +383,7 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
         ) as r:
             open_orders = await r.json()
         for o in open_orders:
-            if (o.get("type") == "STOP_MARKET" and
+            if (o.get("type") in ("STOP_MARKET", "STOP") and
                     o.get("reduceOnly") and
                     o.get("side") == close_side):
                 sl_order_id = o.get("orderId")
@@ -368,14 +409,17 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
             return False
 
     # Step 3: place new SL at entry (breakeven)
+    # Use STOP (limit) — demo API rejects STOP_MARKET (-4120)
+    _be_limit = _round_price(symbol, entry * (0.995 if close_side == "SELL" else 1.005))
     new_sl_params = _sign({
         "symbol":      symbol,
         "side":        close_side,
-        "type":        "STOP_MARKET",
+        "type":        "STOP",
         "quantity":    float(trade["size"]),
         "stopPrice":   _round_price(symbol, entry),
+        "price":       _be_limit,
+        "timeInForce": "GTC",
         "reduceOnly":  "true",
-        "workingType": "MARK_PRICE",
     })
     try:
         async with session.post(
@@ -384,8 +428,17 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
         ) as r:
             res = await r.json()
         if isinstance(res.get("code"), int) and res["code"] < 0:
-            log.warning("Breakeven: new SL rejected %s: %s", symbol, res)
-            return False
+            log.warning("Breakeven: new SL rejected %s: %s (updating DB only)", symbol, res)
+            # Demo API doesn't support STOP_MARKET — update DB so software monitor
+            # tracks the breakeven SL and we don't retry every tick.
+            with sqlite3.connect(_DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE trades SET stop_loss=? WHERE id=?",
+                    (_round_price(symbol, entry), trade["id"]),
+                )
+            log.info("Breakeven: SL updated in DB to entry %.6f for %s %s (software SL active)",
+                     entry, direction, symbol)
+            return True
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute(
                 "UPDATE trades SET stop_loss=? WHERE id=?",
