@@ -29,6 +29,7 @@ Config (from fvg: section in config.yaml):
     min_gap_pct   : minimum gap width as fraction    (default 0.003 = 0.3%)
 """
 import os
+import time as _time
 import yaml
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
@@ -41,9 +42,24 @@ _MIN_GAP_PCT = float(_FVG_CFG.get("min_gap_pct", 0.003))
 _MACRO_FILTER_ENABLED = bool(_FVG_CFG.get("macro_filter_enabled", True))
 _MACRO_EMA_PERIOD     = int(_FVG_CFG.get("macro_ema_period", 200))
 
-# Module-level set of touched FVG keys: (symbol, direction, gap_low, gap_high).
-# Records the first time price enters a gap — prevents re-signalling the same zone.
-_touched: set[tuple] = set()
+_TTL_SECONDS = 7 * 24 * 3600   # 7 days — gap resets after this
+
+# (symbol, direction, gap_low, gap_high) → unix timestamp when first touched
+_touched: dict[tuple, float] = {}
+
+
+def _is_touched(key: tuple) -> bool:
+    """Return True if gap was touched recently (within TTL)."""
+    if key not in _touched:
+        return False
+    if _time.time() - _touched[key] > _TTL_SECONDS:
+        del _touched[key]   # expired — remove and allow re-entry
+        return False
+    return True
+
+
+def _mark_touched(key: tuple) -> None:
+    _touched[key] = _time.time()
 
 
 def clear_symbol_touched(symbol: str) -> None:
@@ -51,8 +67,9 @@ def clear_symbol_touched(symbol: str) -> None:
 
     Called by backtest engine before each bar to prevent cross-bar contamination.
     """
-    global _touched
-    _touched = {k for k in _touched if k[0] != symbol}
+    for k in list(_touched.keys()):
+        if k[0] == symbol:
+            del _touched[k]
 
 
 def _macro_allows_long(candles_1d: list[dict]) -> bool:
@@ -175,14 +192,14 @@ def check_fvg_bullish(symbol: str, cache) -> bool:
         return False  # price not yet inside the gap
 
     key = (symbol, "LONG", round(gap_low, 8), round(gap_high, 8))
-    if key in _touched:
+    if _is_touched(key):
         return False  # already fired on this gap — only one entry per virgin gap
 
     candles_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
     if not _macro_allows_long(candles_1d):
         return False   # bear market — don't buy into old bullish gaps
 
-    _touched.add(key)
+    _mark_touched(key)
     return True
 
 
@@ -206,14 +223,14 @@ def check_fvg_bearish(symbol: str, cache) -> bool:
         return False
 
     key = (symbol, "SHORT", round(gap_low, 8), round(gap_high, 8))
-    if key in _touched:
+    if _is_touched(key):
         return False
 
     candles_1d = cache.get_ohlcv(symbol, window=_MACRO_EMA_PERIOD + 10, tf="1d")
     if not _macro_allows_short(candles_1d):
         return False   # bull market — don't short into old bearish gaps
 
-    _touched.add(key)
+    _mark_touched(key)
     return True
 
 

@@ -796,6 +796,9 @@ async def dashboard() -> HTMLResponse:
         <option value="fvg">FVG Fill</option>
         <option value="vwap_band">VWAP Band Reversion</option>
         <option value="oi_spike">OI Spike Fade</option>
+        <option value="liq_sweep">Liquidity Sweep</option>
+        <option value="wyckoff_spring">Wyckoff Spring</option>
+        <option value="cme_gap">CME Gap (BTC only)</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
@@ -2571,7 +2574,10 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT"]
         symbols   = _ALL_SYMS if symbol == "ALL" else [symbol]
 
-        data    = fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+        # Always fetch BTCUSDT for strategies that need it as a reference
+        # (weekly trend gate, lead-lag, breakout_retest BTC:1w)
+        fetch_symbols = list(set(symbols + ["BTCUSDT"]))
+        data    = fetch_period_sync(fetch_symbols, from_ms, to_ms, warmup_days=45)
         ohlcv   = data["ohlcv"]
         oi      = data["oi"]
         funding = data["funding"]
@@ -2615,16 +2621,42 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             from backtest.oi_spike_engine import run as _run
             trades = _run(symbols=symbols, ohlcv=ohlcv, oi=oi, starting_capital=capital, risk_pct=risk_pct)
         elif strategy in ("breakout_retest", "breakout_retest_tp1", "breakout_retest_tp2"):
-            from backtest.engine import load as _bt_load, run_strategy as _bt_run
+            from backtest.engine import run_strategy as _bt_run
+            import numpy as _np
+
+            # Convert fetched ohlcv (list[dict]) to numpy arrays for engine
+            np_data: dict = {}
+            for ohlcv_key, bars_list in ohlcv.items():
+                if bars_list and isinstance(bars_list, list) and isinstance(bars_list[0], dict):
+                    np_data[ohlcv_key] = _np.array(
+                        [[b["o"], b["h"], b["l"], b["c"], b["v"], b["ts"]]
+                         for b in bars_list], dtype=_np.float64)
+                elif bars_list is not None and hasattr(bars_list, '__len__') and len(bars_list) > 0:
+                    np_data[ohlcv_key] = _np.asarray(bars_list, dtype=_np.float64)
 
             all_trades = []
-            btc_data = _bt_load("BTCUSDT")
+            btc_keys = {k for k in np_data if k.startswith("BTCUSDT:")}
+            btc_data = {k: np_data[k] for k in btc_keys} if btc_keys else None
             for sym in symbols:
-                data = btc_data if sym == "BTCUSDT" else _bt_load(sym)
-                sym_trades = _bt_run(sym, strategy, data, btc_data,
+                sym_data = {k: v for k, v in np_data.items() if k.startswith(f"{sym}:")}
+                if not sym_data:
+                    continue
+                sym_trades = _bt_run(sym, strategy, sym_data, btc_data,
                                      from_ms, to_ms)
                 all_trades.extend(sym_trades)
             trades = all_trades
+
+        elif strategy == "liq_sweep":
+            from backtest.liq_sweep_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+
+        elif strategy == "wyckoff_spring":
+            from backtest.wyckoff_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
+
+        elif strategy == "cme_gap":
+            from backtest.cme_gap_engine import run as _run
+            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
 
         else:
             trades = []
@@ -2659,6 +2691,22 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 "by_regime": {},
                 "by_symbol": {},
             }
+        # Resolve bar_idx → Unix ms timestamp using ohlcv bar data
+        def _bar_ts(sym: str, bar_idx: int) -> int:
+            """Return Unix ms timestamp for bar_idx, or 0 if unavailable."""
+            for tf in ("5m", "15m", "1h"):
+                bars = ohlcv.get(f"{sym}:{tf}")
+                if bars is None or not hasattr(bars, '__len__') or bar_idx >= len(bars):
+                    continue
+                try:
+                    row = bars[bar_idx]
+                    # numpy array: row[5]; dict: row["ts"]
+                    ts = row["ts"] if isinstance(row, dict) else row[5]
+                    return int(ts)
+                except (IndexError, TypeError, KeyError):
+                    continue
+            return 0
+
         # Convert trades to JS-compatible dicts with dollar PnL
         from backtest.run import compute_dollar_stats as _ds_fn
         ds_for_trades = _ds_fn(trades, capital, risk_pct=risk_pct)
@@ -2686,7 +2734,7 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 "stop":         d_raw.get("stop", 0),
                 "tp":           d_raw.get("tp", 0),
                 "bar_idx":      d_raw.get("bar_idx", 0),
-                "exit_ts":      "",
+                "exit_ts":      _bar_ts(d_raw.get("symbol", ""), d_raw.get("bar_idx", 0)),
             })
 
         return {

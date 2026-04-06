@@ -213,7 +213,7 @@ logging:
 # Fires alt entries when BTC breaks its rolling 1h VWAP with a volume spike.
 # Alts lag BTC by 5-15 min — we capture that catch-up move.
 leadlag:
-  enabled: true  # validated: profitable in backtest
+  enabled: false   # logic sound, live trade count unconfirmed
   vwap_window_bars: 12          # 12 × 5m bars = 1h rolling VWAP anchor
   min_vwap_break_pct: 0.006     # BTC close must be ≥0.6% beyond VWAP  [tuned: was 0.003]
   vol_spike_mult: 2.0           # current 5m vol / 20-bar avg must exceed this [tuned: was 1.5]
@@ -279,7 +279,7 @@ ema_pullback:
 # 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
 # Highest quality, lowest frequency: 1-3x per symbol per day.
 zone:
-  enabled: true
+  enabled: false   # too few backtest trades for statistical significance
   check_interval_secs: 60       # check every 60s (aligned with 1H bar closes)
   max_positions: 2              # conservative — these are higher-size entries
   cooldown_mins: 120            # 2h cooldown — zone retests are rare
@@ -315,7 +315,7 @@ oi_spike:
 # and closes back inside.  Blocked in strong trends (ADX > 30) where bands
 # expand continuously and reversion fails.  Target = VWAP midline (TP dynamic).
 vwap_band:
-  enabled: true   # confirmed: XRP RANGE PF1.24 WR34%, LINK RANGE PF1.38 WR29%
+  enabled: false   # marginal PF, needs walk-forward optimization first
   window_bars: 20             # 20 × 15m = 5h rolling VWAP window
   band_mult: 2.0              # ±2σ standard deviation bands
   rsi_long_max: 35            # RSI must be ≤ this for LONG entry (oversold)
@@ -370,6 +370,7 @@ liq_sweep:
   check_interval_secs: 60
   max_positions: 2
   mc_vol_ratio_max: 2.5    # block when recent 6H vol > 2.5× baseline (backtest: PF 2.62)
+  max_entry_drift_pct: 0.003   # skip if price moved > 0.3% from sweep bar close
 
 # ── Session filter ────────────────────────────────────────────────────────────
 session_filter:
@@ -626,18 +627,19 @@ strategy_routing:
 
   XRPUSDT:
     # XRP: strong trend-following, institutional ETF narrative
-    # Only strategies confirmed via backtest. Others excluded pending results.
-    TREND:    [fvg, breakout_retest]
+    # fvg REMOVED — PF 0.17 WR 7%, confirmed loser
+    TREND:    [breakout_retest]
     RANGE:    [breakout_retest]
-    BREAKOUT: [fvg, breakout_retest]
+    BREAKOUT: [breakout_retest]
     CRASH:    [breakout_retest]
     PUMP:     []
 
   LINKUSDT:
     # LINK: institutional demand, strong trend-following
-    TREND:    [fvg, ema_pullback_short, breakout_retest]
+    # fvg REMOVED — PF 0.68 WR 24%, confirmed loser
+    TREND:    [ema_pullback_short, breakout_retest]
     RANGE:    [breakout_retest]
-    BREAKOUT: [fvg, breakout_retest]
+    BREAKOUT: [breakout_retest]
     CRASH:    [ema_pullback_short, breakout_retest]
     PUMP:     []
 

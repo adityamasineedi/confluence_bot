@@ -34,6 +34,7 @@ _MIN_SEP       = int(_LIQ_CFG.get("min_separation_bars", 10))
 _VOL_MULT      = float(_LIQ_CFG.get("vol_spike_mult", 1.5))
 _THRESHOLD     = float(_LIQ_CFG.get("fire_threshold", 0.75))
 _MC_VOL_MAX    = float(_LIQ_CFG.get("mc_vol_ratio_max", 0.0))
+_MAX_ENTRY_DRIFT_PCT = float(_LIQ_CFG.get("max_entry_drift_pct", 0.003))
 
 _cd_long  = CooldownStore("LIQ_SWEEP_LONG")
 _cd_short = CooldownStore("LIQ_SWEEP_SHORT")
@@ -243,36 +244,43 @@ async def score(symbol: str, cache) -> list[dict]:
         if bars:
             sweep_bar = bars[-1]
             entry     = sweep_bar["c"]
-            sl_dist   = max(entry - sweep_bar["l"] * (1.0 - _SL_BUFFER),
-                            entry * 0.002)
-            stop = entry - sl_dist
-            tp   = entry + sl_dist * _RR_RATIO
 
-            fire = (score_val >= _THRESHOLD
-                    and htf_ok and weekly_ok and rsi_ok and cool_ok
-                    and stop > 0 and tp > entry)
+            # Gate: reject if price has already moved away from the sweep close
+            current_price = cache.get_last_price(symbol)
+            if current_price > 0 and abs(current_price - entry) / entry > _MAX_ENTRY_DRIFT_PCT:
+                log.debug("Liq sweep LONG entry drift too large on %s: swept=%.6f current=%.6f drift=%.3f%%",
+                          symbol, entry, current_price, abs(current_price - entry) / entry * 100)
+            else:
+                sl_dist   = max(entry - sweep_bar["l"] * (1.0 - _SL_BUFFER),
+                                entry * 0.002)
+                stop = entry - sl_dist
+                tp   = entry + sl_dist * _RR_RATIO
 
-            if fire:
-                _cd_long.set(symbol, _COOLDOWN_SECS)
+                fire = (score_val >= _THRESHOLD
+                        and htf_ok and weekly_ok and rsi_ok and cool_ok
+                        and stop > 0 and tp > entry)
 
-            results.append({
-                "symbol":    symbol,
-                "regime":    "LIQSWEEP",
-                "direction": "LONG",
-                "score":     round(score_val, 4),
-                "signals":   {
-                    "sweep_detected": True,
-                    "eq_low":         round(eq_low, 6),
-                    "htf_bullish":    htf_ok,
-                    "weekly_ok":      weekly_ok,
-                    "rsi_ok":         rsi_ok,
-                    "rsi_val":        rsi_val,
-                    "cooldown_ok":    cool_ok,
-                },
-                "fire":    fire,
-                "ls_stop": round(stop, 8),
-                "ls_tp":   round(tp,   8),
-            })
+                if fire:
+                    _cd_long.set(symbol, _COOLDOWN_SECS)
+
+                results.append({
+                    "symbol":    symbol,
+                    "regime":    "liq_sweep",
+                    "direction": "LONG",
+                    "score":     round(score_val, 4),
+                    "signals":   {
+                        "sweep_detected": True,
+                        "eq_low":         round(eq_low, 6),
+                        "htf_bullish":    htf_ok,
+                        "weekly_ok":      weekly_ok,
+                        "rsi_ok":         rsi_ok,
+                        "rsi_val":        rsi_val,
+                        "cooldown_ok":    cool_ok,
+                    },
+                    "fire":    fire,
+                    "ls_stop": round(stop, 8),
+                    "ls_tp":   round(tp,   8),
+                })
 
     # ── SHORT sweep ───────────────────────────────────────────────────────────
     sweep_short, eq_high = check_liq_sweep_short(symbol, cache)
@@ -291,35 +299,42 @@ async def score(symbol: str, cache) -> list[dict]:
         if bars:
             sweep_bar = bars[-1]
             entry     = sweep_bar["c"]
-            sl_dist   = max(sweep_bar["h"] * (1.0 + _SL_BUFFER) - entry,
-                            entry * 0.002)
-            stop = entry + sl_dist
-            tp   = entry - sl_dist * _RR_RATIO
 
-            fire = (score_val >= _THRESHOLD
-                    and htf_ok and weekly_ok and rsi_ok and cool_ok
-                    and stop > 0 and tp < entry)
+            # Gate: reject if price has already moved away from the sweep close
+            current_price = cache.get_last_price(symbol)
+            if current_price > 0 and abs(current_price - entry) / entry > _MAX_ENTRY_DRIFT_PCT:
+                log.debug("Liq sweep SHORT entry drift too large on %s: swept=%.6f current=%.6f drift=%.3f%%",
+                          symbol, entry, current_price, abs(current_price - entry) / entry * 100)
+            else:
+                sl_dist   = max(sweep_bar["h"] * (1.0 + _SL_BUFFER) - entry,
+                                entry * 0.002)
+                stop = entry + sl_dist
+                tp   = entry - sl_dist * _RR_RATIO
 
-            if fire:
-                _cd_short.set(symbol, _COOLDOWN_SECS)
+                fire = (score_val >= _THRESHOLD
+                        and htf_ok and weekly_ok and rsi_ok and cool_ok
+                        and stop > 0 and tp < entry)
 
-            results.append({
-                "symbol":    symbol,
-                "regime":    "LIQSWEEP",
-                "direction": "SHORT",
-                "score":     round(score_val, 4),
-                "signals":   {
-                    "sweep_detected": True,
-                    "eq_high":        round(eq_high, 6),
-                    "htf_bearish":    htf_ok,
-                    "weekly_ok":      weekly_ok,
-                    "rsi_ok":         rsi_ok,
-                    "rsi_val":        rsi_val,
-                    "cooldown_ok":    cool_ok,
-                },
-                "fire":    fire,
-                "ls_stop": round(stop, 8),
-                "ls_tp":   round(tp,   8),
-            })
+                if fire:
+                    _cd_short.set(symbol, _COOLDOWN_SECS)
+
+                results.append({
+                    "symbol":    symbol,
+                    "regime":    "liq_sweep",
+                    "direction": "SHORT",
+                    "score":     round(score_val, 4),
+                    "signals":   {
+                        "sweep_detected": True,
+                        "eq_high":        round(eq_high, 6),
+                        "htf_bearish":    htf_ok,
+                        "weekly_ok":      weekly_ok,
+                        "rsi_ok":         rsi_ok,
+                        "rsi_val":        rsi_val,
+                        "cooldown_ok":    cool_ok,
+                    },
+                    "fire":    fire,
+                    "ls_stop": round(stop, 8),
+                    "ls_tp":   round(tp,   8),
+                })
 
     return results

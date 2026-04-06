@@ -62,6 +62,10 @@ _deal_lock = _asyncio.Lock()
 # Post-trade cooldown: symbol → monotonic timestamp when cooldown expires
 _post_trade_until: dict[str, float] = {}
 
+# Cross-strategy directional cooldown — prevents 2 strategies entering
+# the same symbol in the same direction within post_trade_cooldown_mins
+_symbol_direction_until: dict[tuple[str, str], float] = {}
+
 # ── Dynamic slippage ──────────────────────────────────────────────────────────
 # Baseline slippage per regime (one-way). Used as the reference in log output
 # and as the fallback when config doesn't override a regime.
@@ -145,6 +149,14 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
                   direction, symbol, remaining / 60)
         return None
 
+    # Gate: cross-strategy direction cooldown (prevents 2 strategies entering same symbol+direction)
+    _sym_dir_key = (symbol, direction)
+    if _time.monotonic() < _symbol_direction_until.get(_sym_dir_key, 0.0):
+        remaining = _symbol_direction_until[_sym_dir_key] - _time.monotonic()
+        log.debug("Skipping %s %s — cross-strategy direction cooldown (%.0f min)",
+                  direction, symbol, remaining / 60)
+        return None
+
     # Gate: no duplicate open position — hold lock during check+claim only,
     # never during I/O so other signals can proceed concurrently.
     deal_key = (symbol, direction)
@@ -224,7 +236,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "VWAPBAND":    ("vb_stop",  "vb_tp"),
         "OISPIKE":     ("os_stop",  "os_tp"),
         "WYCKOFF":     ("ws_stop",  "ws_tp"),
-        "LIQSWEEP":        ("ls_stop",  "ls_tp"),
+        "liq_sweep":       ("ls_stop",  "ls_tp"),
         "BREAKOUT_RETEST": ("br_stop",  "br_tp"),
     }
 
@@ -239,7 +251,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "VWAPBAND":     1.5,
         "OISPIKE":      2.0,
         "WYCKOFF":      float(_cfg.get("wyckoff_spring", {}).get("rr_ratio", 2.5)),
-        "LIQSWEEP":        float(_cfg.get("liq_sweep",       {}).get("rr_ratio", 2.5)),
+        "liq_sweep":       float(_cfg.get("liq_sweep",       {}).get("rr_ratio", 2.5)),
         "BREAKOUT_RETEST": 1.3,   # scorer validates 2.2R from flip level; allow slippage
     }
 
@@ -407,7 +419,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     elif regime == "WYCKOFF":
         from .wyckoff_scorer import set_cooldown
         set_cooldown(symbol)
-    elif regime == "LIQSWEEP":
+    elif regime == "liq_sweep":
         pass   # liq_sweep cooldown is managed inside liq_sweep_scorer.score()
 
     return order
@@ -418,6 +430,7 @@ def close_deal(symbol: str, direction: str) -> None:
     import time as _time
     _active_deals.discard((symbol, direction))
     _post_trade_until[symbol] = _time.monotonic() + _POST_TRADE_COOLDOWN
+    _symbol_direction_until[(symbol, direction)] = _time.monotonic() + _POST_TRADE_COOLDOWN
     from core.rr_calculator import invalidate_committed_cache
     invalidate_committed_cache()
     log.debug("Post-trade cooldown set for %s (%.0f min)", symbol, _POST_TRADE_COOLDOWN / 60)

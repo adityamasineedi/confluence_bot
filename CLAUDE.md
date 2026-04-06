@@ -21,11 +21,12 @@ ema_pullback     — core/ema_pullback_scorer.py — includes SHORT
 microrange       — core/microrange_scorer.py — 5M tight box
 wyckoff_spring   — core/wyckoff_scorer.py   — LONG, wick SL
 liq_sweep        — core/liq_sweep_scorer.py — LONG + SHORT
+breakout_retest  — core/breakout_retest_scorer.py — all 8 coins
 
-### Scorers to build (confirmed in backtest, no live file yet):
-cme_gap          — BTC only, 135 trades/3yr, PF 2.74  ← BUILD NEXT
-wyckoff_upthrust — 7 coins in bear, PF 1.87-9.99
-ema_pullback_short_v2 — XRP 233 trades/3yr, PF 1.58
+### Scorers to build (stubs exist, implement in order):
+cme_gap          — core/cme_gap_scorer.py (stub)         — BTC only, 135 trades/3yr, PF 2.74  ← BUILD NEXT
+wyckoff_upthrust — core/wyckoff_upthrust_scorer.py (stub) — 7 coins in bear, PF 1.87-9.99
+ema_pullback_short_v2 — core/ema_pullback_short_v2_scorer.py (stub) — XRP 233 trades/3yr, PF 1.58
 
 ### Confirmed backtest results per coin:
 BTCUSDT:  cme_gap(PF2.74) liq_sweep(2.46) spring_v2(3.83) fvg(2.50)
@@ -38,15 +39,28 @@ DOGEUSDT: liq_sweep(7.49) liq_sw_short(2.56) upthrust(9.99)
 SUIUSDT:  liq_sw_short(2.44) upthrust(9.99) micro(1.54)
 
 ### Disabled / removed strategies (confirmed losers):
-vwap_band   — PF 0.60-0.88 across all coins, all periods — REMOVED
+vwap_band   — PF 0.60-0.88 across all coins, all periods — disabled
 ema_pullback LONG on BTC/ETH — PF 0.28/0.35 — REMOVED
 wyckoff_range — PF 0.81-0.93 on most coins — REMOVED
-insidebar, sweep, funding_harvest, bos — deleted
+insidebar — WR 33.7%, account wipe — FILES DELETED
+funding_harvest — WR 9.1%, 11 trades in 6m — FILES DELETED
+call_skew_roc — confirmed -33% edge — FILE DELETED
+time_distribution — confirmed -33% edge — FILE DELETED
+sweep, bos — deleted
+leadlag — disabled (live trade count unconfirmed)
+zone — disabled (too few backtest trades)
+oi_spike — disabled (not validated via backtest)
+session_trap — disabled (not validated via backtest)
+
+### Known bugs fixed:
+1. FVG _touched TTL — _touched set grew forever blocking valid re-entries; now expires after 7 days
+2. Liq sweep entry drift gate — late entries destroyed edge; now rejects if price moved > 0.3% from sweep bar close
+3. Regime string standardisation — LIQSWEEP → liq_sweep; mismatched executor preset levels/min RR
 
 ### Build order for remaining scorers:
-1. cme_gap_scorer.py          ← $1,739/yr impact
-2. wyckoff_upthrust_scorer.py ← $940/yr, 7 coins
-3. ema_pullback_short_v2      ← $2,538/yr, XRP+SOL
+1. cme_gap_scorer.py          ← $1,739/yr impact (stub exists)
+2. wyckoff_upthrust_scorer.py ← $940/yr, 7 coins (stub exists)
+3. ema_pullback_short_v2      ← $2,538/yr, XRP+SOL (stub exists)
 
 ## Strict code rules
 - Signal functions: def check_X(symbol: str, cache) -> bool
