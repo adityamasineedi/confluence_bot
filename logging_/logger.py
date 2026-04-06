@@ -103,7 +103,8 @@ class TradeLogger:
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)""",
                     (_utcnow(), score_dict.get("symbol",""), score_dict.get("direction",""),
                      score_dict.get("regime",""), order.get("entry", 0.0), order.get("stop", 0.0),
-                     order.get("take_profit", 0.0), order.get("qty", 0.0),
+                     order.get("take_profit", 0.0),
+                     order.get("executedQty", order.get("qty", 0.0)),
                      str(order.get("orderId","")), entry_time, risk_usdt),
                 )
         except sqlite3.OperationalError as exc:

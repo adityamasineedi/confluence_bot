@@ -1,6 +1,10 @@
 """Risk/Reward calculator — computes entry, stop loss, take profit, and position size."""
+import logging
 import os
+import time as _time
 import yaml
+
+log = logging.getLogger(__name__)
 
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_CONFIG_PATH) as _f:
@@ -80,26 +84,49 @@ def compute(symbol: str, direction: str, cache) -> tuple[float, float, float]:
     return entry, round(stop, 8), round(take_profit, 8)
 
 
+_committed_cache_value: float = 0.0
+_committed_cache_ts:    float = 0.0
+_COMMITTED_TTL = 10.0   # re-query at most every 10 seconds
+
+
 def _committed_risk() -> float:
     """Return total risk currently committed to open trades.
 
     For each open trade: risk = abs(entry - stop_loss) × qty.
     This is the max additional loss if ALL open trades hit SL simultaneously.
-    Returns 0.0 on any DB access failure.
+    Results are cached for _COMMITTED_TTL seconds to avoid a DB connection per symbol.
     """
+    global _committed_cache_value, _committed_cache_ts
+
+    now = _time.monotonic()
+    if now - _committed_cache_ts < _COMMITTED_TTL:
+        return _committed_cache_value    # fast path — no DB hit
+
     try:
         import sqlite3
         db_path = os.environ.get("DB_PATH", "confluence_bot.db")
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, timeout=2.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")   # allow concurrent readers
             rows = conn.execute(
                 "SELECT entry, stop_loss, size FROM trades WHERE status='OPEN'"
             ).fetchall()
-        total_risk = 0.0
-        for entry_p, sl, qty in rows:
-            total_risk += abs(float(entry_p) - float(sl)) * float(qty)
-        return total_risk
-    except Exception:
-        return 0.0
+        total = sum(
+            abs(float(e) - float(sl)) * float(qty)
+            for e, sl, qty in rows
+            if float(e) > 0 and float(sl) > 0
+        )
+        _committed_cache_value = total
+        _committed_cache_ts    = now
+        return total
+    except Exception as exc:
+        log.debug("_committed_risk query failed: %s — returning last known value", exc)
+        return _committed_cache_value   # stale but safe
+
+
+def invalidate_committed_cache() -> None:
+    """Call after a trade opens or closes to force immediate re-query."""
+    global _committed_cache_ts
+    _committed_cache_ts = 0.0
 
 
 def position_size(

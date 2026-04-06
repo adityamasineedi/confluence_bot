@@ -97,14 +97,82 @@ async def main() -> None:
         raise
 
 
+# ── Per-symbol eval with timeout ─────────────────────────────────────────────
+
+_last_eval_ts: dict[str, float] = {}
+
+
+async def _eval_symbol(
+    symbol: str, cache, logger, prev_regimes: dict,
+    regime_alert_ts: dict, regime_eval_count: dict,
+) -> None:
+    """Evaluate one symbol — detect regime, score, fire. Called under wait_for()."""
+    from core.regime_detector import detect_regime
+    from core.direction_router import route_direction
+    from core.executor import execute_signal
+
+    regime     = detect_regime(symbol, cache)
+    regime_str = str(regime)
+
+    # Regime change logging + Telegram
+    regime_eval_count[symbol] = regime_eval_count.get(symbol, 0) + 1
+    if prev_regimes.get(symbol) != regime_str:
+        import time as _t
+        old = prev_regimes.get(symbol, "")
+        prev_regimes[symbol] = regime_str
+        log.info("%s regime → %s", symbol, regime_str)
+        asyncio.create_task(logger.log_regime(symbol, regime_str))
+        now = _t.monotonic()
+        if (old and regime_eval_count[symbol] > 2
+                and (now - regime_alert_ts.get(symbol, 0)) >= 1800.0):
+            regime_alert_ts[symbol] = now
+            from notifications.telegram import send_regime_change
+            asyncio.create_task(send_regime_change(symbol, old, regime_str))
+
+    all_signals = await route_direction(symbol, cache, regime)
+
+    for score_dict in all_signals:
+        asyncio.create_task(logger.log_signal(score_dict))
+        if not score_dict.get("fire"):
+            continue
+        log.info("Signal FIRE: %s %s %s  score=%.2f",
+                 score_dict["direction"], symbol, regime_str, score_dict["score"])
+        order = await execute_signal(score_dict, cache)
+        if order:
+            log.info("Order placed: %s %s  qty=%.4f  entry=%s",
+                     score_dict["direction"], symbol,
+                     order.get("qty", 0), order.get("entry", "MARKET"))
+
+    import time as _t
+    _last_eval_ts[symbol] = _t.monotonic()
+
+
+async def _eval_watchdog(symbols: list[str], loop_interval: float) -> None:
+    """Alert if any symbol hasn't been evaluated for 3× the loop interval."""
+    import time as _t
+    ALERT_THRESHOLD = loop_interval * 3
+    while True:
+        await asyncio.sleep(loop_interval)
+        now = _t.monotonic()
+        for sym in symbols:
+            gap = now - _last_eval_ts.get(sym, now)
+            if gap > ALERT_THRESHOLD:
+                log.error("EVAL HANG: %s not evaluated for %.0fs", sym, gap)
+                try:
+                    from notifications.telegram import send_message
+                    await send_message(f"⚠️ EVAL HANG: {sym} stuck for {gap:.0f}s")
+                except Exception:
+                    pass
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 async def _main_inner() -> None:
     """Actual main body — wrapped by main() for crash-safe logging."""
     from data.cache        import DataCache
     from data.binance_ws   import start_streams
     from data.binance_rest import BinanceRestPoller
-    from core.regime_detector import detect_regime
-    from core.direction_router import route_direction
-    from core.executor     import execute_signal, restore_active_deals
+    from core.executor     import restore_active_deals
     from logging_.logger   import TradeLogger
 
     # Register asyncio exception handler for fire-and-forget tasks
@@ -120,6 +188,27 @@ async def _main_inner() -> None:
 
     # 1. Cache
     cache = DataCache()
+
+    # Prime circuit breaker — fetch real balance before first eval tick
+    try:
+        from data.binance_rest import get_account_balance as _fetch_bal
+        _init_balance = await _fetch_bal()
+        if _init_balance > 0:
+            cache.set_account_balance(_init_balance)
+            # Persist to DB immediately so CB has it even if cache resets
+            import sqlite3 as _sq
+            from datetime import datetime, timezone
+            _db = os.environ.get("DB_PATH", "confluence_bot.db")
+            with _sq.connect(_db) as _c:
+                _c.execute(
+                    "INSERT OR REPLACE INTO bot_state(key,value,updated) VALUES(?,?,?)",
+                    ("account_balance", str(_init_balance), datetime.now(timezone.utc).isoformat())
+                )
+            log.info("Initial balance primed: %.2f USDT", _init_balance)
+        else:
+            log.warning("Could not fetch initial balance — circuit breaker %% check disabled until first poll")
+    except Exception as exc:
+        log.warning("Balance prime failed: %s", exc)
 
     # 2. TradeLogger (initialises DB schema on first run)
     logger = TradeLogger()
@@ -330,7 +419,11 @@ async def _main_inner() -> None:
         asyncio.create_task(_periodic(_health_check_periodic, interval=300))
     )
 
-    # 7. Wait for cache to be populated before firing any signals
+    # 7. Warm the strategy router config cache (avoids 8 redundant YAML reads on first tick)
+    from core.strategy_router import clear_cache as _warm_router
+    _warm_router()   # triggers first load
+
+    # 8. Wait for cache to be populated before firing any signals
     _CACHE_MIN_BARS   = 50    # need at least 50 × 1h bars for ADX/EMA warmup
     _CACHE_MIN_BARS5m = 32    # need 32 × 5m bars for microrange warmup
     _CACHE_WAIT_MAX   = 120   # max 2 minutes; then proceed anyway with a warning
@@ -361,65 +454,29 @@ async def _main_inner() -> None:
                  sym, len(bars_5m) if bars_5m else 0,
                  len(bars_1h) if bars_1h else 0)
 
-    # 8. Main evaluation loop
+    # 9. Main evaluation loop
     prev_regimes: dict[str, str] = {}
     _regime_alert_ts: dict[str, float] = {}   # symbol → last Telegram alert timestamp
-    _REGIME_ALERT_COOLDOWN = 1800.0            # max one Telegram alert per symbol per 30 min
     _regime_eval_count: dict[str, int] = {}   # suppress alerts for first 2 evals after startup
     # Stagger per-symbol evaluation evenly across the loop interval so each
     # symbol gets a distinct timestamp in the signals log.
     stagger_sleep = loop_interval / max(len(symbols), 1)
+    EVAL_TIMEOUT = 45.0   # hard limit per symbol — must be < loop_interval
+
+    # Watchdog: alert if any symbol hasn't been evaluated for 3× the loop interval
+    asyncio.create_task(_eval_watchdog(symbols, loop_interval))
 
     while True:
         for symbol in symbols:
             try:
-                regime = detect_regime(symbol, cache)
-                regime_str = str(regime)
-
-                # Log regime changes
-                _regime_eval_count[symbol] = _regime_eval_count.get(symbol, 0) + 1
-                if prev_regimes.get(symbol) != regime_str:
-                    import time as _time
-                    old_regime = prev_regimes.get(symbol, "")
-                    prev_regimes[symbol] = regime_str
-                    log.info("%s regime → %s", symbol, regime_str)
-                    asyncio.create_task(logger.log_regime(symbol, regime_str))
-                    now = _time.monotonic()
-                    # Skip alert for first 2 evals per symbol (startup warmup) and enforce cooldown
-                    if (old_regime
-                            and _regime_eval_count[symbol] > 2
-                            and (now - _regime_alert_ts.get(symbol, 0)) >= _REGIME_ALERT_COOLDOWN):
-                        _regime_alert_ts[symbol] = now
-                        from notifications.telegram import send_regime_change
-                        asyncio.create_task(
-                            send_regime_change(symbol, old_regime, regime_str)
-                        )
-
-                all_signals = await route_direction(symbol, cache, regime)
-
-                for score_dict in all_signals:
-                    asyncio.create_task(logger.log_signal(score_dict))
-
-                    if not score_dict.get("fire"):
-                        continue
-
-                    log.info(
-                        "Signal FIRE: %s %s %s  score=%.2f",
-                        score_dict["direction"],
-                        symbol,
-                        regime_str,
-                        score_dict["score"],
-                    )
-                    order = await execute_signal(score_dict, cache)
-                    if order:
-                        log.info(
-                            "Order placed: %s %s  qty=%.4f  entry=%s",
-                            score_dict["direction"],
-                            symbol,
-                            order.get("qty", 0),
-                            order.get("entry", "MARKET"),
-                        )
-
+                await asyncio.wait_for(
+                    _eval_symbol(symbol, cache, logger, prev_regimes,
+                                 _regime_alert_ts, _regime_eval_count),
+                    timeout=EVAL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.error("EVAL TIMEOUT: %s did not complete in %.0fs — possible deadlock",
+                          symbol, EVAL_TIMEOUT)
             except Exception:
                 log.error("Error evaluating %s", symbol, exc_info=True)
             finally:

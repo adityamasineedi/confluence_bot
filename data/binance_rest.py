@@ -15,6 +15,7 @@ from .cache import DataCache
 log = logging.getLogger(__name__)
 
 _BINANCE_BASE      = os.environ.get("BINANCE_BASE_URL",  "https://fapi.binance.com")
+_IS_DEMO           = "demo-fapi" in _BINANCE_BASE
 # Separate base for public data endpoints (klines, OI, funding).
 # Defaults to live fapi so kline history always resolves even when
 # BINANCE_BASE_URL points to the demo host for order operations.
@@ -515,6 +516,64 @@ async def get_account_balance() -> float:
     return 0.0
 
 
+# ── Demo/live order type helpers ──────────────────────────────────────────────
+log.info("Order mode: %s (BINANCE_BASE_URL=%s)",
+         "DEMO (STOP limit)" if _IS_DEMO else "LIVE (STOP_MARKET)",
+         os.environ.get("BINANCE_BASE_URL", ""))
+
+
+def _make_sl_params(symbol: str, close_side: str, quantity: float, stop: float) -> dict:
+    if _IS_DEMO:
+        # demo-fapi.binance.com rejects STOP_MARKET (-4120)
+        # Use STOP limit with 0.5% slippage buffer so it fills in normal moves
+        sl_price = _round_price(symbol, stop * (0.995 if close_side == "SELL" else 1.005))
+        return {
+            "symbol":      symbol,
+            "side":        close_side,
+            "type":        "STOP",
+            "quantity":    quantity,
+            "stopPrice":   _round_price(symbol, stop),
+            "price":       sl_price,
+            "timeInForce": "GTC",
+            "reduceOnly":  "true",
+        }
+    else:
+        return {
+            "symbol":      symbol,
+            "side":        close_side,
+            "type":        "STOP_MARKET",
+            "quantity":    quantity,
+            "stopPrice":   _round_price(symbol, stop),
+            "reduceOnly":  "true",
+            "workingType": "MARK_PRICE",
+        }
+
+
+def _make_tp_params(symbol: str, close_side: str, quantity: float, take_profit: float) -> dict:
+    if _IS_DEMO:
+        tp_price = _round_price(symbol, take_profit * (1.005 if close_side == "SELL" else 0.995))
+        return {
+            "symbol":      symbol,
+            "side":        close_side,
+            "type":        "TAKE_PROFIT",
+            "quantity":    quantity,
+            "stopPrice":   _round_price(symbol, take_profit),
+            "price":       tp_price,
+            "timeInForce": "GTC",
+            "reduceOnly":  "true",
+        }
+    else:
+        return {
+            "symbol":      symbol,
+            "side":        close_side,
+            "type":        "TAKE_PROFIT_MARKET",
+            "quantity":    quantity,
+            "stopPrice":   _round_price(symbol, take_profit),
+            "reduceOnly":  "true",
+            "workingType": "MARK_PRICE",
+        }
+
+
 async def place_order(
     symbol: str,
     side: str,
@@ -553,23 +612,6 @@ async def place_order(
         entry_params["price"]    = entry
         entry_params["timeInForce"] = "GTC"
 
-    sl_params = {
-        "symbol":        symbol,
-        "side":          close_side,
-        "type":          "STOP_MARKET",
-        "quantity":      quantity,
-        "stopPrice":     _round_price(symbol, stop),
-        "reduceOnly":    "true",
-    }
-    tp_params = {
-        "symbol":        symbol,
-        "side":          close_side,
-        "type":          "TAKE_PROFIT_MARKET",
-        "quantity":      quantity,
-        "stopPrice":     _round_price(symbol, take_profit),
-        "reduceOnly":    "true",
-    }
-
     url = f"{_BINANCE_BASE}/fapi/v1/order"
     result: dict = {}
     try:
@@ -584,6 +626,25 @@ async def place_order(
             if isinstance(result.get("code"), int) and result["code"] < 0:
                 log.error("place_order entry rejected %s %s: %s", side, symbol, result)
                 return {}
+
+            # Determine actual filled quantity for bracket orders
+            orig_qty   = float(result.get("origQty",     quantity))
+            filled_qty = float(result.get("executedQty", 0))
+
+            if filled_qty <= 0:
+                log.warning("Entry unfilled for %s %s (executedQty=0) — skipping bracket",
+                            side, symbol)
+                return result
+
+            if filled_qty < orig_qty * 0.95:
+                log.warning("Partial fill %s %s: filled %.4f of %.4f requested",
+                            side, symbol, filled_qty, orig_qty)
+
+            bracket_qty = _round_qty(symbol, filled_qty)
+            result["executedQty"] = filled_qty
+
+            sl_params = _make_sl_params(symbol, close_side, bracket_qty, stop)
+            tp_params = _make_tp_params(symbol, close_side, bracket_qty, take_profit)
 
             # 2. Stop loss (with retry)
             sl_resp = await _place_with_retry(
@@ -603,8 +664,11 @@ async def place_order(
                 log.warning("TP order rejected %s: code=%s msg=%s — software SL/TP will protect position",
                             symbol, tp_resp["code"], tp_resp.get("msg", "?"))
 
+        if bracket_qty < orig_qty:
+            log.warning("Bracket placed for %.4f (filled) not %.4f (requested) — %s %s",
+                        bracket_qty, orig_qty, side, symbol)
         log.info("Order placed: %s %s qty=%.4f entry=%s orderId=%s",
-                 side, symbol, quantity, entry or "MARKET", result.get("orderId", "?"))
+                 side, symbol, bracket_qty, entry or "MARKET", result.get("orderId", "?"))
     except Exception as exc:
         log.error("place_order(%s %s) failed: %s", side, symbol, exc)
 
@@ -613,6 +677,12 @@ async def place_order(
 
 async def get_order_status(symbol: str, order_id: int) -> str:
     """Return order status string ('FILLED', 'NEW', 'PARTIALLY_FILLED', etc.) or '' on error."""
+    detail = await _get_order_detail(symbol, order_id)
+    return detail.get("status", "")
+
+
+async def _get_order_detail(symbol: str, order_id: int) -> dict:
+    """Return full order detail dict from Binance, or {} on error."""
     url     = f"{_BINANCE_BASE}/fapi/v1/order"
     headers = {"X-MBX-APIKEY": _API_KEY}
     params  = _sign({"symbol": symbol, "orderId": order_id})
@@ -620,11 +690,10 @@ async def get_order_status(symbol: str, order_id: int) -> str:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             async with session.get(url, params=params, headers=headers) as resp:
                 resp.raise_for_status()
-                data = await resp.json()
-        return data.get("status", "")
+                return await resp.json()
     except Exception as exc:
-        log.debug("get_order_status(%s, %s): %s", symbol, order_id, exc)
-        return ""
+        log.debug("_get_order_detail(%s, %s): %s", symbol, order_id, exc)
+        return {}
 
 
 async def place_limit_then_market(
@@ -681,8 +750,10 @@ async def place_limit_then_market(
         # ── Step 2: wait for fill ──────────────────────────────────────────────
         await asyncio.sleep(timeout_s)
 
-        # ── Step 3: check fill status ──────────────────────────────────────────
-        status = await get_order_status(symbol, order_id)
+        # ── Step 3: check fill status (full detail for executedQty) ───────────
+        order_detail = await _get_order_detail(symbol, order_id)
+        status = order_detail.get("status", "")
+        filled_qty = float(order_detail.get("executedQty", 0))
 
         if status not in ("FILLED", "PARTIALLY_FILLED"):
             # ── Step 4: cancel LIMIT and submit MARKET ─────────────────────────
@@ -704,31 +775,35 @@ async def place_limit_then_market(
                 if isinstance(result.get("code"), int) and result["code"] < 0:
                     log.error("MARKET fallback rejected %s %s: %s", side, symbol, result)
                     return {}
-                log.info("MARKET fallback filled %s %s orderId=%s", side, symbol, result.get("orderId"))
+                filled_qty = float(result.get("executedQty", 0))
+                log.info("MARKET fallback filled %s %s orderId=%s qty=%.4f",
+                         side, symbol, result.get("orderId"), filled_qty)
             except Exception as exc:
                 log.error("MARKET fallback failed (%s %s): %s", side, symbol, exc)
                 return {}
 
+        # Guard: no position opened → skip bracket
+        if filled_qty <= 0:
+            log.warning("Entry unfilled for %s %s (executedQty=0) — skipping bracket",
+                        side, symbol)
+            return result
+
+        bracket_qty = _round_qty(symbol, filled_qty)
+        result["executedQty"] = filled_qty
+
+        if filled_qty < quantity * 0.95:
+            log.warning("Partial fill %s %s: filled %.4f of %.4f requested",
+                        side, symbol, filled_qty, quantity)
+
+        if bracket_qty < quantity:
+            log.warning("Bracket placed for %.4f (filled) not %.4f (requested) — %s %s",
+                        bracket_qty, quantity, side, symbol)
+
         # ── Step 5: SL (always) + TP (only when provided) ─────────────────────
         bracket_orders: list[tuple[str, dict]] = []
-        bracket_orders.append(("SL", {
-            "symbol":    symbol,
-            "side":      close_side,
-            "type":      "STOP_MARKET",
-            "quantity":  quantity,
-            "stopPrice": _round_price(symbol, stop),
-            "reduceOnly": "true",
-            "workingType": "MARK_PRICE",
-        }))
+        bracket_orders.append(("SL", _make_sl_params(symbol, close_side, bracket_qty, stop)))
         if take_profit is not None:
-            bracket_orders.append(("TP", {
-                "symbol":    symbol,
-                "side":      close_side,
-                "type":      "TAKE_PROFIT_MARKET",
-                "quantity":  quantity,
-                "stopPrice": _round_price(symbol, take_profit),
-                "reduceOnly": "true",
-            }))
+            bracket_orders.append(("TP", _make_tp_params(symbol, close_side, bracket_qty, take_profit)))
         for label, params in bracket_orders:
             try:
                 async with session.post(url, params=_sign(params), headers=headers) as resp:

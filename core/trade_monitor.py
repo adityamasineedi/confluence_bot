@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from data.binance_rest import _round_price
+from data.binance_rest import _round_price, _make_sl_params
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ _BINANCE_DATA_BASE = os.environ.get("BINANCE_DATA_URL", "https://fapi.binance.co
 _API_KEY         = os.environ.get("BINANCE_API_KEY", "")
 _SECRET          = os.environ.get("BINANCE_SECRET", "")
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
+TAKER_FEE_RATE   = 0.0005   # 0.05% per side (Binance Futures taker)
 
 # Session-level guard: once a trade ID is detected as closed it stays here.
 _closing_trade_ids: set[int] = set()
@@ -102,24 +103,26 @@ def _load_open_trades() -> list[dict]:
         return []
 
 
-def _close_trade_db(trade_id: int, exit_price: float, pnl: float) -> bool:
-    """Mark a trade as FILLED. Returns True only if this call changed the row.
+def _close_trade_db(trade: dict, exit_price: float) -> bool:
+    """Mark a trade as FILLED with net PnL (after fees).
 
+    Returns True only if this call changed the row.
     Uses WHERE status='OPEN' so that if two processes (or two DB rows for the
     same position) race to close the same trade, only the first UPDATE succeeds
     and returns True — preventing duplicate Telegram alerts.
     """
+    pnl = _calc_net_pnl(trade, exit_price)
     closed_ts = datetime.now(timezone.utc).isoformat()
     try:
         with sqlite3.connect(_DB_PATH) as conn:
             cur = conn.execute(
                 "UPDATE trades SET status='FILLED', exit_price=?, pnl_usdt=?, closed_ts=? "
                 "WHERE id=? AND status='OPEN'",
-                (exit_price, pnl, closed_ts, trade_id),
+                (exit_price, pnl, closed_ts, trade["id"]),
             )
             return cur.rowcount > 0
     except Exception as exc:
-        log.warning("_close_trade_db(%s) failed: %s", trade_id, exc)
+        log.warning("_close_trade_db(%s) failed: %s", trade["id"], exc)
         return False
 
 
@@ -408,16 +411,10 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
             log.warning("Breakeven: cancel SL error %s: %s", symbol, exc)
             return False
 
-    # Step 3: place new SL at entry (breakeven)
-    new_sl_params = _sign({
-        "symbol":      symbol,
-        "side":        close_side,
-        "type":        "STOP_MARKET",
-        "quantity":    float(trade["size"]),
-        "stopPrice":   _round_price(symbol, entry),
-        "reduceOnly":  "true",
-        "workingType": "MARK_PRICE",
-    })
+    # Step 3: place new SL at entry (breakeven) — demo-aware order type
+    new_sl_params = _sign(
+        _make_sl_params(symbol, close_side, float(trade["size"]), entry)
+    )
     try:
         async with session.post(
             f"{_BINANCE_BASE}/fapi/v1/order",
@@ -426,8 +423,6 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
             res = await r.json()
         if isinstance(res.get("code"), int) and res["code"] < 0:
             log.warning("Breakeven: new SL rejected %s: %s (updating DB only)", symbol, res)
-            # Demo API doesn't support STOP_MARKET — update DB so software monitor
-            # tracks the breakeven SL and we don't retry every tick.
             with sqlite3.connect(_DB_PATH) as conn:
                 conn.execute(
                     "UPDATE trades SET stop_loss=? WHERE id=?",
@@ -509,18 +504,28 @@ async def _force_regime_close(trade: dict, session: aiohttp.ClientSession, cache
         log.warning("Regime flip market close error %s: %s", symbol, exc)
         fill_price = price or float(trade["entry"])
 
-    pnl = _calc_pnl(trade, fill_price) if fill_price > 0 else 0.0
-    return await asyncio.to_thread(_close_trade_db, trade["id"], fill_price, pnl)
+    return await asyncio.to_thread(_close_trade_db, trade, fill_price)
 
 
 # ── PnL ───────────────────────────────────────────────────────────────────────
 
-def _calc_pnl(trade: dict, exit_price: float) -> float:
-    entry = float(trade["entry"])
-    size  = float(trade["size"])
-    if trade["direction"] == "LONG":
-        return round((exit_price - entry) * size, 4)
-    return round((entry - exit_price) * size, 4)
+def _calc_net_pnl(trade: dict, exit_price: float) -> float:
+    """Net PnL after taker fees on both entry and exit legs."""
+    entry     = float(trade["entry"])
+    size      = float(trade["size"])
+    direction = trade["direction"]
+
+    # Gross PnL
+    if direction == "LONG":
+        gross = (exit_price - entry) * size
+    else:
+        gross = (entry - exit_price) * size
+
+    # Taker fee on both entry and exit legs
+    entry_fee = entry      * size * TAKER_FEE_RATE
+    exit_fee  = exit_price * size * TAKER_FEE_RATE
+
+    return round(gross - entry_fee - exit_fee, 4)
 
 
 # ── Main coroutine ────────────────────────────────────────────────────────────
@@ -566,7 +571,7 @@ async def monitor_trades(cache) -> None:
                             if row_claimed:
                                 from core.executor import close_deal
                                 close_deal(trade["symbol"], trade["direction"])
-                                pnl = _calc_pnl(trade, float(trade.get("entry", 0)))
+                                pnl = _calc_net_pnl(trade, float(trade.get("entry", 0)))
                                 log.info(
                                     "Regime flip closed: %s %s  pnl≈%+.2f USDT",
                                     trade["direction"], trade["symbol"], pnl,
@@ -590,7 +595,7 @@ async def monitor_trades(cache) -> None:
                     # Claim the trade ID before any await — atomic in asyncio
                     _closing_trade_ids.add(trade_id)
                     outcome, exit_price = result
-                    pnl = _calc_pnl(trade, exit_price) if exit_price > 0 else 0.0
+                    pnl = _calc_net_pnl(trade, exit_price) if exit_price > 0 else 0.0
 
                     if outcome == "CANCELLED":
                         await asyncio.to_thread(_cancel_trade_db, trade["id"])
@@ -599,7 +604,7 @@ async def monitor_trades(cache) -> None:
                         # Atomic: only the first UPDATE (status='OPEN' guard) returns True.
                         # Handles both duplicate DB rows and two concurrent bot processes.
                         row_claimed = await asyncio.to_thread(
-                            _close_trade_db, trade["id"], exit_price, pnl
+                            _close_trade_db, trade, exit_price
                         )
 
                     if not row_claimed:
@@ -612,11 +617,15 @@ async def monitor_trades(cache) -> None:
                     from core.executor import close_deal
                     close_deal(trade["symbol"], trade["direction"])
 
-                    emoji = "✅" if pnl >= 0 else "❌"
+                    # Log gross vs net for fee-drag tracking
+                    entry_f = float(trade["entry"])
+                    size_f  = float(trade["size"])
+                    gross = (exit_price - entry_f) * size_f if trade["direction"] == "LONG" \
+                        else (entry_f - exit_price) * size_f
                     log.info(
-                        "%s Trade closed: %s %s  outcome=%s  exit=%.4f  pnl=%+.2f USDT",
-                        emoji, trade["direction"], trade["symbol"],
-                        outcome, exit_price, pnl,
+                        "Trade closed %s %s: gross=%.4f  fees=%.4f  net=%.4f  outcome=%s",
+                        trade["direction"], trade["symbol"],
+                        gross, abs(pnl - gross), pnl, outcome,
                     )
 
                     # Telegram close alert

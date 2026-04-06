@@ -378,6 +378,8 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     async with _deal_lock:
         _pending_deals.discard(deal_key)
         _active_deals.add(deal_key)
+    from core.rr_calculator import invalidate_committed_cache
+    invalidate_committed_cache()
     log.info("Position opened: %s %s — active deals: %d", direction, symbol, len(_active_deals))
 
     # Set per-symbol cooldown (each strategy manages its own cooldown state)
@@ -416,6 +418,8 @@ def close_deal(symbol: str, direction: str) -> None:
     import time as _time
     _active_deals.discard((symbol, direction))
     _post_trade_until[symbol] = _time.monotonic() + _POST_TRADE_COOLDOWN
+    from core.rr_calculator import invalidate_committed_cache
+    invalidate_committed_cache()
     log.debug("Post-trade cooldown set for %s (%.0f min)", symbol, _POST_TRADE_COOLDOWN / 60)
 
 

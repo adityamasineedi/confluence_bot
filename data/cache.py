@@ -24,6 +24,9 @@ _AGG_TRADE_MAXLEN = 10_000
 _LIQ_EVENT_MAXLEN = 500    # forced-liquidation events (~last hour at busy markets)
 
 
+_global_cache: "DataCache | None" = None
+
+
 class DataCache:
     """Thread-safe in-memory store for all market data.
 
@@ -51,6 +54,9 @@ class DataCache:
     """
 
     def __init__(self) -> None:
+        global _global_cache
+        _global_cache = self
+
         self._lock = threading.Lock()
 
         # OHLCV and CVD: keyed by (symbol, tf); deque maxlen set at creation

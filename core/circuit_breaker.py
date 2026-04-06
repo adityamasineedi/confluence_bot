@@ -125,14 +125,26 @@ def _evaluate() -> bool:
 
 
 def _get_balance() -> float:
+    # 1. Try cache (fastest, always current)
+    try:
+        from data.cache import _global_cache
+        if _global_cache is not None:
+            bal = _global_cache.get_account_balance()
+            if bal > 0:
+                return bal
+    except Exception:
+        pass
+    # 2. Fall back to DB (persisted across restarts)
     try:
         with sqlite3.connect(_DB_PATH) as conn:
             row = conn.execute(
                 "SELECT value FROM bot_state WHERE key='account_balance' LIMIT 1"
             ).fetchone()
-            return float(row[0]) if row else 0.0
+            if row and float(row[0]) > 0:
+                return float(row[0])
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 
 def reset() -> dict:
