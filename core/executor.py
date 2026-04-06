@@ -152,10 +152,10 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
         if deal_key in _active_deals or deal_key in _pending_deals:
             log.debug("Skipping %s %s — already active or pending", direction, symbol)
             return None
-        if len(_active_deals) >= _MAX_OPEN:
+        if len(_active_deals) + len(_pending_deals) >= _MAX_OPEN:
             log.debug("Skipping %s %s — max positions (%d) reached", direction, symbol, _MAX_OPEN)
             return None
-        same_dir = sum(1 for _, d in _active_deals if d == direction)
+        same_dir = sum(1 for _, d in (_active_deals | _pending_deals) if d == direction)
         if same_dir >= _MAX_SAME_DIRECTION:
             log.debug("Skipping %s %s — directional cap %d/%d", direction, symbol,
                       same_dir, _MAX_SAME_DIRECTION)
@@ -163,14 +163,17 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
         _pending_deals.add(deal_key)   # claim slot before releasing lock
 
     try:
-        return await _execute_signal_inner(score_dict, cache, deal_key)
+        result = await _execute_signal_inner(score_dict, cache, deal_key)
     except Exception:
         async with _deal_lock:
             _pending_deals.discard(deal_key)
         raise
-    finally:
-        # Discard from pending regardless of outcome (inner moves to active on success)
-        _pending_deals.discard(deal_key)
+    # Clean up pending on any failure path (discard is idempotent —
+    # harmless if inner already promoted to active or discarded).
+    if result is None:
+        async with _deal_lock:
+            _pending_deals.discard(deal_key)
+    return result
 
 
 async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dict | None:
@@ -191,7 +194,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         if _open_row:
             log.info("Skipping %s %s — OPEN trade already in DB (id=%s)",
                      direction, symbol, _open_row[0])
-            _active_deals.add(deal_key)   # re-sync in-memory state
+            async with _deal_lock:
+                _pending_deals.discard(deal_key)
+                _active_deals.add(deal_key)   # re-sync in-memory state
             return None
     except Exception as _exc:
         log.debug("DB open trade pre-check failed: %s", _exc)
@@ -201,7 +206,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     pos_amt = await get_position_amt(symbol)
     if (direction == "LONG" and pos_amt > 0) or (direction == "SHORT" and pos_amt < 0):
         log.info("Skipping %s %s — open position already exists on exchange (amt=%.4f)", direction, symbol, pos_amt)
-        _active_deals.add(deal_key)   # re-sync
+        async with _deal_lock:
+            _pending_deals.discard(deal_key)
+            _active_deals.add(deal_key)   # re-sync
         return None
 
     from .rr_calculator import compute, position_size

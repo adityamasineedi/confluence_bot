@@ -625,25 +625,20 @@ strategy_routing:
     PUMP:     []
 
   XRPUSDT:
-    # ema_pullback_short_v2: PF 1.58, 233 trades — highest frequency
-    # liq_sweep_short: PF 2.22 confirmed SHORT
-    # wyckoff_upthrust_v2: PF 1.87 confirmed bear
-    # vwap_band REMOVED — PF 0.73, consistent loser
-    TREND:    [ema_pullback_short_v2, breakout_retest]
-    RANGE:    [ema_pullback_short_v2, breakout_retest]
-    BREAKOUT: [ema_pullback_short_v2, breakout_retest]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short_v2, breakout_retest]
+    # XRP: strong trend-following, institutional ETF narrative
+    # Only strategies confirmed via backtest. Others excluded pending results.
+    TREND:    [fvg, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [fvg, breakout_retest]
+    CRASH:    [breakout_retest]
     PUMP:     []
 
   LINKUSDT:
-    # liq_sweep: PF 3.74 confirmed
-    # liq_sweep_short: PF 1.75 confirmed
-    # wyckoff_spring_v2: PF 2.50 confirmed
-    # wyckoff_upthrust_v2: PF 3.74 confirmed bear
-    TREND:    [liq_sweep, wyckoff_spring_v2, breakout_retest]
-    RANGE:    [liq_sweep, breakout_retest]
-    BREAKOUT: [liq_sweep, wyckoff_spring_v2, breakout_retest]
-    CRASH:    [wyckoff_upthrust_v2, liq_sweep_short, breakout_retest]
+    # LINK: institutional demand, strong trend-following
+    TREND:    [fvg, ema_pullback_short, breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [fvg, breakout_retest]
+    CRASH:    [ema_pullback_short, breakout_retest]
     PUMP:     []
 
   DOGEUSDT:

@@ -1,4 +1,5 @@
 """Regime detector — classifies market as TREND, RANGE, or CRASH."""
+import logging
 import os
 from enum import StrEnum
 from typing import Literal
@@ -10,6 +11,8 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 
 with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
+
+log = logging.getLogger(__name__)
 
 
 # ── Regime type ───────────────────────────────────────────────────────────────
@@ -165,8 +168,9 @@ class RegimeDetector:
 
     Detection order (highest priority first):
         1. CRASH  — EMA50 cross + 7-day drop + no recovery
-        2. RANGE  — ADX hysteresis confirmed + tight price range
-        3. TREND  — default when neither above triggers
+        2. PUMP   — EMA50 above + 7-day gain + new highs (duration-based)
+        3. RANGE  — ADX hysteresis confirmed + tight price range
+        4. TREND  — default when none above triggers
 
     Config keys (all under ``regime:`` in config.yaml):
         adx_range_threshold : ADX below this to enter RANGE  (default 20)
@@ -192,7 +196,7 @@ class RegimeDetector:
         self._range_exit_countdown: dict[str, int]                = {}
         self._range_bounds_at_exit: dict[str, tuple[float, float]] = {}
         self._breakout_direction:   dict[str, str]                = {}
-        # PUMP: transition-based — only fires on the bar where pump starts
+        # PUMP: duration-based — fires for every bar while pump conditions hold
         self._pump_active: dict[str, bool] = {}
         # Minimum dwell: bars since last regime change (prevents rapid flipping)
         self._regime_dwell: dict[str, int] = {}
@@ -212,19 +216,21 @@ class RegimeDetector:
         pump_gain_thr    = float(rcfg.get("pump_weekly_gain",        0.12))
         ema_period       = int(rcfg.get("ema_crash_period",           50))
 
-        # ── Step 1: PUMP — transition-based (only fires on the FIRST bar of a
-        #            new pump cycle to avoid re-firing every bar during bull runs) ─
+        # ── Step 1: CRASH — highest priority (a crash is worse than a pump) ───
+        if self._is_crash(symbol, cache, ema_period, crash_drop_thr):
+            return Regime.CRASH
+
+        # ── Step 2: PUMP — duration-based.  Returns PUMP for every bar while
+        #            pump conditions hold, not just the transition bar.  The old
+        #            transition-only logic fired PUMP once then fell through to
+        #            TREND, so the 60-second eval loop almost always missed it.
         was_pumping = self._pump_active.get(symbol, False)
         is_pumping  = self._is_pump(symbol, cache, ema_period, pump_gain_thr)
         self._pump_active[symbol] = is_pumping
-        if is_pumping and not was_pumping:
-            # Just crossed into pump territory — fire PUMP this bar only
+        if is_pumping:
+            if not was_pumping:
+                log.debug("PUMP regime entered for %s", symbol)
             return Regime.PUMP
-        # If still pumping after first bar → fall through to TREND (handled as TREND LONG)
-
-        # ── Step 2: Crash check ───────────────────────────────────────────────
-        if self._is_crash(symbol, cache, ema_period, crash_drop_thr):
-            return Regime.CRASH
 
         # ── Step 3: ADX on 4H ────────────────────────────────────────────────
         adx_info = self._get_adx(symbol, cache)

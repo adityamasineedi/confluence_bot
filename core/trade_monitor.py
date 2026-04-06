@@ -409,17 +409,14 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
             return False
 
     # Step 3: place new SL at entry (breakeven)
-    # Use STOP (limit) — demo API rejects STOP_MARKET (-4120)
-    _be_limit = _round_price(symbol, entry * (0.995 if close_side == "SELL" else 1.005))
     new_sl_params = _sign({
         "symbol":      symbol,
         "side":        close_side,
-        "type":        "STOP",
+        "type":        "STOP_MARKET",
         "quantity":    float(trade["size"]),
         "stopPrice":   _round_price(symbol, entry),
-        "price":       _be_limit,
-        "timeInForce": "GTC",
         "reduceOnly":  "true",
+        "workingType": "MARK_PRICE",
     })
     try:
         async with session.post(

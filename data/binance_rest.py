@@ -553,27 +553,20 @@ async def place_order(
         entry_params["price"]    = entry
         entry_params["timeInForce"] = "GTC"
 
-    # Use STOP (limit) instead of STOP_MARKET — demo API doesn't support MARKET conditionals
-    _sl_price = _round_price(symbol, stop * (0.995 if close_side == "SELL" else 1.005))
     sl_params = {
         "symbol":        symbol,
         "side":          close_side,
-        "type":          "STOP",
+        "type":          "STOP_MARKET",
         "quantity":      quantity,
         "stopPrice":     _round_price(symbol, stop),
-        "price":         _sl_price,
-        "timeInForce":   "GTC",
         "reduceOnly":    "true",
     }
-    _tp_price = _round_price(symbol, take_profit * (1.005 if close_side == "SELL" else 0.995))
     tp_params = {
         "symbol":        symbol,
         "side":          close_side,
-        "type":          "TAKE_PROFIT",
+        "type":          "TAKE_PROFIT_MARKET",
         "quantity":      quantity,
         "stopPrice":     _round_price(symbol, take_profit),
-        "price":         _tp_price,
-        "timeInForce":   "GTC",
         "reduceOnly":    "true",
     }
 
@@ -718,29 +711,23 @@ async def place_limit_then_market(
 
         # ── Step 5: SL (always) + TP (only when provided) ─────────────────────
         bracket_orders: list[tuple[str, dict]] = []
-        # Use STOP/TAKE_PROFIT (limit) — demo API rejects MARKET conditionals (-4120)
-        _sl_lim = _round_price(symbol, stop * (0.995 if close_side == "SELL" else 1.005))
         bracket_orders.append(("SL", {
-            "symbol":      symbol,
-            "side":        close_side,
-            "type":        "STOP",
-            "quantity":    quantity,
-            "stopPrice":   _round_price(symbol, stop),
-            "price":       _sl_lim,
-            "timeInForce": "GTC",
-            "reduceOnly":  "true",
+            "symbol":    symbol,
+            "side":      close_side,
+            "type":      "STOP_MARKET",
+            "quantity":  quantity,
+            "stopPrice": _round_price(symbol, stop),
+            "reduceOnly": "true",
+            "workingType": "MARK_PRICE",
         }))
         if take_profit is not None:
-            _tp_lim = _round_price(symbol, take_profit * (1.005 if close_side == "SELL" else 0.995))
             bracket_orders.append(("TP", {
-                "symbol":      symbol,
-                "side":        close_side,
-                "type":        "TAKE_PROFIT",
-                "quantity":    quantity,
-                "stopPrice":   _round_price(symbol, take_profit),
-                "price":       _tp_lim,
-                "timeInForce": "GTC",
-                "reduceOnly":  "true",
+                "symbol":    symbol,
+                "side":      close_side,
+                "type":      "TAKE_PROFIT_MARKET",
+                "quantity":  quantity,
+                "stopPrice": _round_price(symbol, take_profit),
+                "reduceOnly": "true",
             }))
         for label, params in bracket_orders:
             try:

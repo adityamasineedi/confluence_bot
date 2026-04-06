@@ -51,6 +51,12 @@ log.info("Bot started — PAPER_MODE=%s  balance will load shortly",
 log.info("=" * 60)
 
 
+def _handle_async_exception(loop, context):
+    exc = context.get("exception", context["message"])
+    log.critical("Unhandled asyncio exception: %s", context["message"],
+                 exc_info=exc if isinstance(exc, Exception) else None)
+
+
 def _handle_shutdown(sig, frame):
     log.info("Shutdown signal received — stopping bot cleanly")
     sys.exit(0)
@@ -75,7 +81,7 @@ async def _periodic(fn, *args, interval: float, **kwargs) -> None:
         try:
             await fn(*args, **kwargs)
         except Exception as exc:
-            log.warning("Periodic %s failed: %s", getattr(fn, "__name__", fn), exc)
+            log.error("Periodic task %s failed", getattr(fn, "__name__", fn), exc_info=True)
         await asyncio.sleep(interval)
 
 
@@ -83,6 +89,16 @@ async def _periodic(fn, *args, interval: float, **kwargs) -> None:
 
 async def main() -> None:
     """Bootstrap all components and run the main signal evaluation loop."""
+    try:
+        await _main_inner()
+    except Exception as exc:
+        log.critical("FATAL: Unhandled exception in main() — bot shutting down",
+                     exc_info=True)
+        raise
+
+
+async def _main_inner() -> None:
+    """Actual main body — wrapped by main() for crash-safe logging."""
     from data.cache        import DataCache
     from data.binance_ws   import start_streams
     from data.binance_rest import BinanceRestPoller
@@ -90,6 +106,10 @@ async def main() -> None:
     from core.direction_router import route_direction
     from core.executor     import execute_signal, restore_active_deals
     from logging_.logger   import TradeLogger
+
+    # Register asyncio exception handler for fire-and-forget tasks
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(_handle_async_exception)
 
     symbols: list[str]  = cfg.get("symbols",              ["BTCUSDT", "ETHUSDT"])
     loop_interval: float = cfg.get("loop_interval_seconds", 60.0)
@@ -400,8 +420,8 @@ async def main() -> None:
                             order.get("entry", "MARKET"),
                         )
 
-            except Exception as exc:
-                log.exception("Error evaluating %s: %s", symbol, exc)
+            except Exception:
+                log.error("Error evaluating %s", symbol, exc_info=True)
             finally:
                 await asyncio.sleep(stagger_sleep)
 
