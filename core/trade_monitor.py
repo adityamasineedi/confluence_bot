@@ -16,11 +16,17 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 
+import yaml
+
 import aiohttp
 
 from data.binance_rest import _round_price, _make_sl_params
 
 log = logging.getLogger(__name__)
+
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+with open(_CONFIG_PATH) as _f:
+    _cfg = yaml.safe_load(_f)
 
 _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
 _PAPER_MODE      = os.environ.get("PAPER_MODE", "0") == "1"
@@ -156,11 +162,13 @@ async def _check_live_order(
     symbol   = trade["symbol"]
     headers  = {"X-MBX-APIKEY": _API_KEY}
 
-    # ── Step 1: Check open orders — if both SL and TP still open → trade live ──
+    # ── Step 1: Check open orders — regular + algo (SL/TP are algo orders now) ──
     direction = trade["direction"]
     sl = float(trade["stop_loss"])
     tp = float(trade["take_profit"])
+    bracket_open = 0
     try:
+        # 1a. Legacy open orders (non-conditional)
         open_params = _sign({"symbol": symbol})
         async with session.get(
             f"{_BINANCE_BASE}/fapi/v1/openOrders",
@@ -168,18 +176,32 @@ async def _check_live_order(
         ) as resp:
             resp.raise_for_status()
             open_orders = await resp.json()
-
-        # Count reduce-only orders for this symbol (SL + optional TP/trailing).
-        # Trailing stop trades have only 1 bracket order (SL), so ≥1 means open.
-        bracket_open = sum(
+        bracket_open += sum(
             1 for o in open_orders
             if o.get("reduceOnly") and o.get("symbol") == symbol
         )
-        if bracket_open >= 1:
-            return None   # at least one bracket leg still live → position open
-
     except Exception as exc:
         log.debug("_check_live_order openOrders (%s): %s", symbol, exc)
+
+    try:
+        # 1b. Algo open orders (SL/TP conditional orders — migrated Dec 2025)
+        algo_params = _sign({"symbol": symbol})
+        async with session.get(
+            f"{_BINANCE_BASE}/fapi/v1/openAlgoOrders",
+            params=algo_params, headers=headers
+        ) as resp:
+            resp.raise_for_status()
+            algo_orders = await resp.json()
+        if isinstance(algo_orders, list):
+            bracket_open += sum(
+                1 for o in algo_orders
+                if o.get("symbol") == symbol and o.get("reduceOnly")
+            )
+    except Exception as exc:
+        log.debug("_check_live_order openAlgoOrders (%s): %s", symbol, exc)
+
+    if bracket_open >= 1:
+        return None   # at least one bracket leg still live → position open
 
     # ── Step 2: Bracket gone — check position size ───────────────────────────
     pos_amt = 0.0
@@ -257,6 +279,9 @@ async def _check_live_order(
     # ── Step 3: Position flat — fetch actual exit price from recent orders ────
     actual_exit = 0.0
     outcome     = "SL"   # conservative default
+    close_side  = "SELL" if direction == "LONG" else "BUY"
+
+    # 3a. Check legacy allOrders
     try:
         from datetime import datetime, timezone
         ts_str = trade.get("ts") or ""
@@ -279,8 +304,6 @@ async def _check_live_order(
             resp.raise_for_status()
             all_orders = await resp.json()
 
-        # Find the filled reduce-only order (SL, TP, or trailing stop)
-        close_side = "SELL" if direction == "LONG" else "BUY"
         for o in reversed(all_orders):
             if (o.get("reduceOnly") and
                     o.get("side") == close_side and
@@ -292,13 +315,43 @@ async def _check_live_order(
                     if "TAKE_PROFIT" in order_type:
                         outcome = "TP"
                     elif "TRAILING_STOP" in order_type:
-                        outcome = "TP"   # trailing stop = profitable exit
+                        outcome = "TP"
                     else:
                         outcome = "SL"
                     break
 
     except Exception as exc:
         log.debug("_check_live_order allOrders (%s): %s", symbol, exc)
+
+    # 3b. Check algo order history (SL/TP placed via Algo Order API)
+    if actual_exit <= 0:
+        try:
+            algo_hist_params = _sign({"symbol": symbol, "algoType": "CONDITIONAL"})
+            async with session.get(
+                f"{_BINANCE_BASE}/fapi/v1/allAlgoOrders",
+                params=algo_hist_params, headers=headers
+            ) as resp:
+                resp.raise_for_status()
+                algo_all = await resp.json()
+            if isinstance(algo_all, list):
+                for o in reversed(algo_all):
+                    if (o.get("symbol") == symbol and
+                            o.get("side") == close_side and
+                            o.get("algoStatus") == "TRIGGERED"):
+                        fill_price = float(o.get("actualPrice") or
+                                           o.get("triggerPrice") or 0)
+                        order_type = o.get("orderType", o.get("type", ""))
+                        if fill_price > 0:
+                            actual_exit = fill_price
+                            if "TAKE_PROFIT" in order_type:
+                                outcome = "TP"
+                            elif "TRAILING_STOP" in order_type:
+                                outcome = "TP"
+                            else:
+                                outcome = "SL"
+                            break
+        except Exception as exc:
+            log.debug("_check_live_order allAlgoOrders (%s): %s", symbol, exc)
 
     # ── Step 4: Fallback — infer from price proximity to SL/TP levels ─────────
     if actual_exit <= 0:
@@ -353,10 +406,25 @@ def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:
 # ── Breakeven move ────────────────────────────────────────────────────────────
 
 async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -> bool:
-    """Move SL to entry when price reaches entry + 1× stop distance.
+    """Move SL to entry when price reaches configurable R-multiple.
+
+    Skips strategies that were backtested WITHOUT breakeven management
+    (applying it live would degrade performance vs the validated backtest).
+    For all other strategies, trigger is configurable via breakeven_trigger_r
+    (default 2.0 — was 1.0, too aggressive on 5M scalps).
 
     Cancels only the SL order (not TP). Skips if already at breakeven.
     """
+    # Skip BE for strategies that did not use it in backtest
+    _risk_cfg = _cfg.get("risk", {})
+    _be_disabled = set(
+        s.lower()
+        for s in _risk_cfg.get("breakeven_disabled_strategies", [])
+    )
+    regime = trade.get("regime", "")
+    if regime.lower() in _be_disabled:
+        return False
+
     symbol    = trade["symbol"]
     direction = trade["direction"]
     entry     = float(trade["entry"])
@@ -365,78 +433,128 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
     if direction == "LONG"  and sl >= entry: return False
     if direction == "SHORT" and sl <= entry: return False
 
-    stop_dist    = abs(entry - sl)
-    one_r_target = entry + stop_dist if direction == "LONG" else entry - stop_dist
-    price        = cache.get_last_price(symbol)
+    stop_dist = abs(entry - sl)
+    be_trigger_r = float(_risk_cfg.get("breakeven_trigger_r", 2.0))
+    be_target = (entry + stop_dist * be_trigger_r
+                 if direction == "LONG"
+                 else entry - stop_dist * be_trigger_r)
+    price = cache.get_last_price(symbol)
     if not price: return False
 
-    reached = (direction == "LONG"  and price >= one_r_target) or \
-              (direction == "SHORT" and price <= one_r_target)
+    reached = (direction == "LONG"  and price >= be_target) or \
+              (direction == "SHORT" and price <= be_target)
     if not reached: return False
 
     headers    = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if direction == "LONG" else "BUY"
 
-    # Step 1: find the existing SL order ID — cancel only that, leave TP intact
-    sl_order_id = None
+    # Step 1: find the existing SL algo order — cancel only that, leave TP intact
+    sl_algo_id = None
+
+    # 1a. Check algo orders (SL/TP placed via Algo Order API since Dec 2025)
     try:
         async with session.get(
-            f"{_BINANCE_BASE}/fapi/v1/openOrders",
+            f"{_BINANCE_BASE}/fapi/v1/openAlgoOrders",
             params=_sign({"symbol": symbol}), headers=headers,
         ) as r:
-            open_orders = await r.json()
-        for o in open_orders:
-            if (o.get("type") in ("STOP_MARKET", "STOP") and
-                    o.get("reduceOnly") and
-                    o.get("side") == close_side):
-                sl_order_id = o.get("orderId")
-                break
+            algo_orders = await r.json()
+        if isinstance(algo_orders, list):
+            for o in algo_orders:
+                order_type = o.get("orderType", o.get("type", ""))
+                if (order_type in ("STOP_MARKET", "STOP") and
+                        o.get("reduceOnly") and
+                        o.get("side") == close_side and
+                        o.get("symbol") == symbol):
+                    sl_algo_id = o.get("algoId")
+                    break
     except Exception as exc:
-        log.warning("Breakeven: failed to fetch open orders %s: %s", symbol, exc)
-        return False
+        log.warning("Breakeven: failed to fetch open algo orders %s: %s", symbol, exc)
 
-    # Step 2: cancel only the SL order
-    if sl_order_id:
+    # 1b. Fallback: check legacy open orders (in case older SL was placed pre-migration)
+    sl_legacy_id = None
+    if not sl_algo_id:
+        try:
+            async with session.get(
+                f"{_BINANCE_BASE}/fapi/v1/openOrders",
+                params=_sign({"symbol": symbol}), headers=headers,
+            ) as r:
+                open_orders = await r.json()
+            for o in open_orders:
+                if (o.get("type") in ("STOP_MARKET", "STOP") and
+                        o.get("reduceOnly") and
+                        o.get("side") == close_side):
+                    sl_legacy_id = o.get("orderId")
+                    break
+        except Exception as exc:
+            log.warning("Breakeven: failed to fetch legacy open orders %s: %s", symbol, exc)
+
+    if not sl_algo_id and not sl_legacy_id:
+        log.debug("Breakeven: no SL order found to cancel for %s", symbol)
+
+    # Step 2: cancel the existing SL order
+    if sl_algo_id:
+        try:
+            async with session.delete(
+                f"{_BINANCE_BASE}/fapi/v1/algoOrder",
+                params=_sign({"algoId": sl_algo_id}),
+                headers=headers,
+            ) as r:
+                cancel_resp = await r.json()
+            if str(cancel_resp.get("code", "200")) not in ("200", "0"):
+                log.warning("Breakeven: cancel algo SL failed %s: %s", symbol, cancel_resp)
+                return False
+        except Exception as exc:
+            log.warning("Breakeven: cancel algo SL error %s: %s", symbol, exc)
+            return False
+    elif sl_legacy_id:
         try:
             async with session.delete(
                 f"{_BINANCE_BASE}/fapi/v1/order",
-                params=_sign({"symbol": symbol, "orderId": sl_order_id}),
+                params=_sign({"symbol": symbol, "orderId": sl_legacy_id}),
                 headers=headers,
             ) as r:
                 cancel_resp = await r.json()
             if isinstance(cancel_resp.get("code"), int) and cancel_resp["code"] < 0:
-                log.warning("Breakeven: cancel SL failed %s: %s", symbol, cancel_resp)
+                log.warning("Breakeven: cancel legacy SL failed %s: %s", symbol, cancel_resp)
                 return False
         except Exception as exc:
-            log.warning("Breakeven: cancel SL error %s: %s", symbol, exc)
+            log.warning("Breakeven: cancel legacy SL error %s: %s", symbol, exc)
             return False
 
-    # Step 3: place new SL at entry (breakeven) — demo-aware order type
+    # Step 3: place new SL at entry + fee buffer (true breakeven after fees)
+    # Without buffer, a "breakeven" trade loses 0.05% taker fee on exit.
+    # Buffer = round-trip fees: 0.05% entry + 0.05% exit = 0.10%
+    _FEE_BUFFER_PCT = 0.001   # 0.10% — covers round-trip taker fees
+    if direction == "LONG":
+        be_price = entry * (1.0 + _FEE_BUFFER_PCT)   # SL slightly above entry
+    else:
+        be_price = entry * (1.0 - _FEE_BUFFER_PCT)   # SL slightly below entry
     new_sl_params = _sign(
-        _make_sl_params(symbol, close_side, float(trade["size"]), entry)
+        _make_sl_params(symbol, close_side, float(trade["size"]), be_price)
     )
     try:
         async with session.post(
-            f"{_BINANCE_BASE}/fapi/v1/order",
+            f"{_BINANCE_BASE}/fapi/v1/algoOrder",
             params=new_sl_params, headers=headers,
         ) as r:
             res = await r.json()
-        if isinstance(res.get("code"), int) and res["code"] < 0:
+        if isinstance(res.get("code"), int) and int(res["code"]) < 0:
             log.warning("Breakeven: new SL rejected %s: %s (updating DB only)", symbol, res)
             with sqlite3.connect(_DB_PATH) as conn:
                 conn.execute(
                     "UPDATE trades SET stop_loss=? WHERE id=?",
-                    (_round_price(symbol, entry), trade["id"]),
+                    (_round_price(symbol, be_price), trade["id"]),
                 )
-            log.info("Breakeven: SL updated in DB to entry %.6f for %s %s (software SL active)",
-                     entry, direction, symbol)
+            log.info("Breakeven: SL updated in DB to %.6f (entry+fees) for %s %s (software SL active)",
+                     be_price, direction, symbol)
             return True
         with sqlite3.connect(_DB_PATH) as conn:
             conn.execute(
                 "UPDATE trades SET stop_loss=? WHERE id=?",
-                (_round_price(symbol, entry), trade["id"]),
+                (_round_price(symbol, be_price), trade["id"]),
             )
-        log.info("Breakeven: SL moved to entry %.6f for %s %s", entry, direction, symbol)
+        log.info("Breakeven: SL moved to %.6f (entry %.6f + fee buffer) for %s %s",
+                 be_price, entry, direction, symbol)
         return True
     except Exception as exc:
         log.warning("Breakeven: new SL error %s: %s", symbol, exc)
@@ -571,6 +689,9 @@ async def monitor_trades(cache) -> None:
                             if row_claimed:
                                 from core.executor import close_deal
                                 close_deal(trade["symbol"], trade["direction"])
+                                if not _PAPER_MODE:
+                                    from data.binance_rest import refresh_account_balance
+                                    await refresh_account_balance()
                                 pnl = _calc_net_pnl(trade, float(trade.get("entry", 0)))
                                 log.info(
                                     "Regime flip closed: %s %s  pnl≈%+.2f USDT",
@@ -613,9 +734,18 @@ async def monitor_trades(cache) -> None:
                                   trade_id, trade["direction"], trade["symbol"])
                         continue
 
-                    # Remove from executor's active set
+                    # Remove from executor's active set + refresh balance for compounding
                     from core.executor import close_deal
                     close_deal(trade["symbol"], trade["direction"])
+                    if not _PAPER_MODE:
+                        from data.binance_rest import refresh_account_balance
+                        await refresh_account_balance()
+                    else:
+                        # Paper mode: compound by adding PnL to cached balance
+                        from data.cache import _global_cache
+                        if _global_cache is not None:
+                            old_bal = _global_cache.get_account_balance()
+                            _global_cache.set_account_balance(old_bal + pnl)
 
                     # Log gross vs net for fee-drag tracking
                     entry_f = float(trade["entry"])

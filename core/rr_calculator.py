@@ -166,7 +166,9 @@ def position_size(
     # Subtract risk already committed to open trades — prevents over-leveraging
     committed = _committed_risk()
     available_equity = balance - committed
-    available_equity = max(available_equity, balance * 0.10)   # never below 10% of balance
+    if available_equity <= 0:
+        log.debug("No available equity for %s (balance=%.2f committed=%.2f)", symbol, balance, committed)
+        return 0.0
 
     effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
     risk_usdt = min(available_equity * effective_risk, _MAX_RISK_USDT)

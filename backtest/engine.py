@@ -1460,16 +1460,41 @@ def compute_stats(trades: list[Trade]) -> dict:
     )
 
 
+def _exhausted_4h(b4h, ts_ms, direction,
+                   pct=0.015, bars=6):
+    """Return True if 4H price already moved > pct in signal direction."""
+    if b4h is None or len(b4h) < bars + 1:
+        return False
+    j = int(np.searchsorted(b4h[:, TS], int(ts_ms), side='right')) - 1
+    start_j = j - bars
+    if start_j < 0 or j < 0 or j >= len(b4h):
+        return False
+    start_price = b4h[start_j, O]
+    end_price   = b4h[j, C]
+    if start_price == 0:
+        return False
+    move = (end_price - start_price) / start_price
+    if direction == "LONG"  and move > pct:
+        return True
+    if direction == "SHORT" and move < -pct:
+        return True
+    return False
+
+
 def run_breakout_retest(symbol, data, btc_data,
                         from_ts, to_ts, rr_ratio=2.2, **_kw):
     b5m = data.get(f"{symbol}:5m")
     b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
     _btc = btc_data or {}
     b1w = _btc.get("BTCUSDT:1w")
     if b1w is None:
         b1w = data.get(f"{symbol}:1w")
     if b5m is None or len(b5m) < WARMUP + 20:
         return []
+    _br_cfg = _CFG.get("breakout_retest", {})
+    _exh_pct  = float(_br_cfg.get("exhaustion_pct",  0.015))
+    _exh_bars = int(_br_cfg.get("exhaustion_bars",  6))
     n = len(b5m)
     pm = (b5m[:, TS] >= from_ts) & (b5m[:, TS] <= to_ts)
     wm = np.zeros(n, bool); wm[WARMUP:] = True
@@ -1500,6 +1525,11 @@ def run_breakout_retest(symbol, data, btc_data,
         vm = float(vm5[i]) if i < len(vm5) else 0.0
         bl = _is_breakout_long(b5m[i],  rh, 1.25, vm) and valid[i] and wk_l[i] and hbull[i]
         bs = _is_breakout_short(b5m[i], rl, 1.25, vm) and valid[i] and wk_s[i] and hbear[i]
+        # Exhaustion gate — skip breakout if 4H move already extended
+        if bl and _exhausted_4h(b4h, b5m[i, TS], "LONG", _exh_pct, _exh_bars):
+            bl = False
+        if bs and _exhausted_4h(b4h, b5m[i, TS], "SHORT", _exh_pct, _exh_bars):
+            bs = False
         if not bl and not bs:
             i += 1; continue
         direction = "LONG" if bl else "SHORT"
@@ -1517,6 +1547,9 @@ def run_breakout_retest(symbol, data, btc_data,
                     rf=True; eb=j; break
                 if bj[C] > flip*1.003: break
         if not rf or eb < 0:
+            i += 1; continue
+        # Exhaustion re-check at retest confirmation time
+        if _exhausted_4h(b4h, b5m[eb, TS], direction, _exh_pct, _exh_bars):
             i += 1; continue
         av = float(at5[eb]) if eb < len(at5) else 0.0
         if av <= 0:

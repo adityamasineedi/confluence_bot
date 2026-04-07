@@ -34,10 +34,12 @@ _VOL_MULT       = float(_BR_CFG.get("vol_spike_mult",   1.25))
 _RETEST_BARS    = int(  _BR_CFG.get("retest_bars",      8))
 _SL_ATR_MULT    = float(_BR_CFG.get("sl_atr_mult",      1.3))
 _RR_RATIO       = float(_BR_CFG.get("rr_ratio",         1.5))
-_COOLDOWN_SECS  = float(_BR_CFG.get("cooldown_mins",    15)) * 60
-_MAX_DAY_TRADES = int(  _BR_CFG.get("max_trades_per_day", 4))
-_SKIP_HOUR_S    = 14   # skip 14:00–15:00 UTC
-_SKIP_HOUR_E    = 15
+_COOLDOWN_SECS    = float(_BR_CFG.get("cooldown_mins",    15)) * 60
+_MAX_DAY_TRADES   = int(  _BR_CFG.get("max_trades_per_day", 4))
+_EXHAUSTION_PCT   = float(_BR_CFG.get("exhaustion_pct",   0.025))
+_EXHAUSTION_BARS  = int(  _BR_CFG.get("exhaustion_bars",   6))
+_SKIP_HOUR_S      = 14   # skip 14:00–15:00 UTC
+_SKIP_HOUR_E      = 15
 
 _cd = CooldownStore("BREAKOUT_RETEST")
 
@@ -87,6 +89,27 @@ def _atr(bars: list[dict], period: int = 14) -> float:
 def _vol_ma(bars: list[dict], period: int = 20) -> float:
     vols = [b["v"] for b in bars[-period:] if b.get("v", 0) > 0]
     return sum(vols) / len(vols) if vols else 0.0
+
+
+def _recent_move_exhausted(bars_4h: list[dict], direction: str) -> bool:
+    """Return True if price already moved > _EXHAUSTION_PCT in signal direction.
+
+    Prevents shorting into bottoms / buying into tops after the move is
+    already spent.  Checks the last _EXHAUSTION_BARS 4H candles (default 24h).
+    """
+    if not bars_4h or len(bars_4h) < _EXHAUSTION_BARS:
+        return False
+    window = bars_4h[-_EXHAUSTION_BARS:]
+    start  = window[0]["o"]
+    end    = window[-1]["c"]
+    if start == 0:
+        return False
+    move = (end - start) / start
+    if direction == "LONG"  and move > _EXHAUSTION_PCT:
+        return True
+    if direction == "SHORT" and move < -_EXHAUSTION_PCT:
+        return True
+    return False
 
 
 def _ema(closes: list[float], period: int) -> float:
@@ -198,6 +221,12 @@ async def score(symbol: str, cache) -> list[dict]:
         bars_waited = st.get("bars_waited", 0) + 1
         st["bars_waited"] = bars_waited
 
+        # Exhaustion — skip if price already moved too far in signal direction
+        if _recent_move_exhausted(bars_4h, direction):
+            log.info("BR %s %s — recent move exhausted, resetting", symbol, direction)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
         # Timeout — discard after _RETEST_BARS
         if bars_waited > _RETEST_BARS:
             log.info("BR %s %s — retest timeout, reset", symbol, direction)
@@ -298,6 +327,14 @@ async def score(symbol: str, cache) -> list[dict]:
                    and vol_ok
                    and htf_bear
                    and weekly_allows_short("breakout_retest", cache))
+
+    # Exhaustion gate — cancel breakout if 4H move already extended
+    if broke_long and _recent_move_exhausted(bars_4h, "LONG"):
+        log.info("BR %s LONG breakout — but 4H exhausted, skip", symbol)
+        broke_long = False
+    if broke_short and _recent_move_exhausted(bars_4h, "SHORT"):
+        log.info("BR %s SHORT breakout — but 4H exhausted, skip", symbol)
+        broke_short = False
 
     if not broke_long and not broke_short:
         log.info("BR %s: range valid but no breakout  "

@@ -683,6 +683,7 @@ async def dashboard() -> HTMLResponse:
     <button class="tab" onclick="showTab('backtest',this)">&#128202; Backtest</button>
     <button class="tab" onclick="showTab('debug',this)">&#128269; Debug</button>
     <button class="tab" onclick="showTab('strategies',this)">&#128218; Strategies</button>
+    <button class="tab" onclick="showTab('gates',this)">&#128683; Gates</button>
   </nav>
   <span id="cvd-warmup" style="font-size:0.75rem;margin-left:8px">…</span>
   <span class="hdr-right" id="hdr-right">loading…</span>
@@ -785,20 +786,7 @@ async def dashboard() -> HTMLResponse:
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Strategy</label>
       <select id="bt-strat" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:145px">
-        <option value="breakout_retest_tp1" selected>Breakout Retest TP1 (1.5R) — CONFIRMED PF 4.16</option>
-        <option value="breakout_retest_tp2">Breakout Retest TP2 (2.2R) — CONFIRMED PF 3.61 +166%</option>
-        <option value="main">Main Trend/Range</option>
-        <option value="microrange">MicroRange</option>
-        <option value="ema_pullback">EMA Pullback</option>
-        <option value="zone">HTF Zone Retest</option>
-        <option value="leadlag">Lead-Lag</option>
-        <option value="session">Session Trap</option>
-        <option value="fvg">FVG Fill</option>
-        <option value="vwap_band">VWAP Band Reversion</option>
-        <option value="oi_spike">OI Spike Fade</option>
-        <option value="liq_sweep">Liquidity Sweep</option>
-        <option value="wyckoff_spring">Wyckoff Spring</option>
-        <option value="cme_gap">CME Gap (BTC only)</option>
+        <option value="">Loading strategies...</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
@@ -843,6 +831,20 @@ async def dashboard() -> HTMLResponse:
 </div>
 
 <!-- ── STRATEGIES ─────────────────────────────────────────── -->
+<div id="panel-gates" class="panel">
+  <div style="padding:20px">
+    <h2 style="margin:0 0 8px 0">&#128683; Trade Gate Status</h2>
+    <p style="color:#9ca3af;font-size:0.82rem;margin:0 0 16px 0">
+      Every gate that can block a new trade. Green = clear, Red = blocking, Yellow = partial/warning.
+      <button onclick="loadGates()" style="margin-left:12px;padding:4px 14px;background:#374151;color:#e0e0e0;border:1px solid #4b5563;border-radius:4px;cursor:pointer;font-size:0.78rem">&#8635; Refresh</button>
+      <span id="gates-ts" style="margin-left:8px;color:#6b7280;font-size:0.72rem"></span>
+    </p>
+    <div id="gates-list" style="display:flex;flex-direction:column;gap:6px">
+      <div style="color:#6b7280;padding:40px;text-align:center">Loading gates...</div>
+    </div>
+  </div>
+</div>
+
 <div id="panel-strategies" class="panel">
   <h1>&#128218; Strategy Reference</h1>
   <p class="intro">
@@ -1750,6 +1752,7 @@ function showTab(name, btn) {
     if (mktTimer) { clearInterval(mktTimer); mktTimer = null; }
   }
   if (name === 'backtest' && !btLoaded) { btLoaded = true; loadBacktest(); }
+  if (name === 'gates') loadGates();
 }
 
 (function initHash() {
@@ -1760,6 +1763,34 @@ function showTab(name, btn) {
 // ── Shared helpers ────────────────────────────────────────────────────────────
 async function fetchJSON(url) { const r = await fetch(url); return r.json(); }
 function badge(cls, text) { return `<span class="badge badge-${text}">${text}</span>`; }
+
+// ── Gates panel ──────────────────────────────────────────────────────────────
+async function loadGates() {
+  try {
+    const gates = await fetchJSON('/api/gates');
+    const el = document.getElementById('gates-list');
+    const ts = document.getElementById('gates-ts');
+    ts.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    el.innerHTML = gates.map(g => {
+      const s = g.status;
+      const bg = s === 'BLOCKING' ? '#7f1d1d' : s === 'WARNING' ? '#78350f' : s === 'PARTIAL' ? '#78350f'
+               : s === 'ERROR' ? '#4c1d1d' : s === 'INFO' ? '#1e293b' : '#14271a';
+      const border = s === 'BLOCKING' ? '#dc2626' : s === 'WARNING' ? '#f59e0b' : s === 'PARTIAL' ? '#f59e0b'
+                   : s === 'ERROR' ? '#ef4444' : s === 'INFO' ? '#3b82f6' : '#22c55e';
+      const icon = s === 'BLOCKING' ? '&#128308;' : s === 'WARNING' ? '&#128992;' : s === 'PARTIAL' ? '&#128992;'
+                 : s === 'ERROR' ? '&#9888;' : s === 'INFO' ? '&#128309;' : '&#128994;';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:${bg};border-left:3px solid ${border};border-radius:4px">
+        <span style="font-size:1.1rem;min-width:20px">${icon}</span>
+        <span style="font-weight:600;min-width:180px;color:#e0e0e0;font-size:0.85rem">${g.gate}</span>
+        <span style="font-weight:700;min-width:80px;color:${border};font-size:0.78rem;text-transform:uppercase">${s}</span>
+        <span style="color:#9ca3af;font-size:0.8rem;flex:1">${g.detail}</span>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('gates-list').innerHTML =
+      '<div style="color:#ef4444;padding:20px">Failed to load gates: ' + e.message + '</div>';
+  }
+}
 
 // ── SIGNALS / TRADES / REGIMES (shared refresh) ───────────────────────────────
 async function refreshTradelog() {
@@ -2298,11 +2329,24 @@ function buildBarChart(monthly) {
       } },
   });
 }
-function loadBacktest() {
+async function loadBacktest() {
   // Set default "to" date to today
   const toEl = document.getElementById('bt-to');
   if (toEl && !toEl.value) {
     toEl.value = new Date().toISOString().slice(0,10);
+  }
+  // Populate strategy dropdown from config.yaml via API
+  try {
+    const r = await fetch('/api/strategies');
+    const strategies = await r.json();
+    const sel = document.getElementById('bt-strat');
+    sel.innerHTML = strategies.map(s =>
+      `<option value="${s.value}">${s.label}</option>`
+    ).join('');
+    const def = strategies.find(s => s.value === 'breakout_retest_tp1');
+    if (def) sel.value = 'breakout_retest_tp1';
+  } catch(e) {
+    console.error('Failed to load strategies:', e);
   }
 }
 
@@ -2535,6 +2579,320 @@ def backtest_results() -> JSONResponse:
         return JSONResponse({"error": "No backtest results yet. Run: python -m backtest.run"}, status_code=404)
 
 
+@app.get("/api/gates")
+def get_gates() -> JSONResponse:
+    """Return live status of every trade-blocking gate — real-time diagnostics."""
+    import yaml as _yaml, time as _t
+    from datetime import datetime, timezone
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(cfg_path) as f:
+        cfg = _yaml.safe_load(f)
+
+    symbols = cfg.get("symbols", [])
+    now_utc = datetime.now(timezone.utc)
+    gates = []
+
+    # 1. Circuit breaker
+    try:
+        from core.circuit_breaker import is_tripped, status as cb_status
+        tripped = is_tripped()
+        cb = cb_status()
+        gates.append({
+            "gate": "Circuit Breaker",
+            "status": "BLOCKING" if tripped else "OK",
+            "detail": cb.get("reason", "") if tripped else
+                      f"PnL ${cb['daily_pnl']:+.2f}  losses={cb['consecutive_losses']}/{cb['limits']['max_consecutive']}",
+        })
+    except Exception as exc:
+        gates.append({"gate": "Circuit Breaker", "status": "ERROR", "detail": str(exc)})
+
+    # 2. Active positions / max open
+    try:
+        from core.executor import _active_deals, _pending_deals, _MAX_OPEN, _MAX_SAME_DIRECTION
+        active = len(_active_deals)
+        pending = len(_pending_deals)
+        total = active + pending
+        longs = sum(1 for _, d in _active_deals if d == "LONG")
+        shorts = sum(1 for _, d in _active_deals if d == "SHORT")
+        full = total >= _MAX_OPEN
+        gates.append({
+            "gate": "Max Positions",
+            "status": "BLOCKING" if full else "OK",
+            "detail": f"{total}/{_MAX_OPEN} open ({longs}L {shorts}S)  pending={pending}",
+        })
+        long_full = longs >= _MAX_SAME_DIRECTION
+        short_full = shorts >= _MAX_SAME_DIRECTION
+        gates.append({
+            "gate": "Max Same Direction",
+            "status": "BLOCKING" if (long_full and short_full) else
+                      "PARTIAL" if (long_full or short_full) else "OK",
+            "detail": f"LONG {longs}/{_MAX_SAME_DIRECTION}{'  BLOCKED' if long_full else ''}  "
+                      f"SHORT {shorts}/{_MAX_SAME_DIRECTION}{'  BLOCKED' if short_full else ''}",
+        })
+        # List active deals
+        if _active_deals:
+            deal_list = [f"{s} {d}" for s, d in sorted(_active_deals)]
+            gates.append({
+                "gate": "Active Deals",
+                "status": "INFO",
+                "detail": ", ".join(deal_list),
+            })
+    except Exception as exc:
+        gates.append({"gate": "Max Positions", "status": "ERROR", "detail": str(exc)})
+
+    # 3. Post-trade cooldowns
+    try:
+        from core.executor import _post_trade_until, _symbol_direction_until
+        now_mono = _t.monotonic()
+        cooling = []
+        for sym, until in _post_trade_until.items():
+            remaining = until - now_mono
+            if remaining > 0:
+                cooling.append(f"{sym} {remaining/60:.0f}min")
+        gates.append({
+            "gate": "Post-Trade Cooldown",
+            "status": "BLOCKING" if cooling else "OK",
+            "detail": ", ".join(cooling) if cooling else "No symbols in cooldown",
+        })
+        dir_cooling = []
+        for (sym, d), until in _symbol_direction_until.items():
+            remaining = until - now_mono
+            if remaining > 0:
+                dir_cooling.append(f"{sym} {d} {remaining/60:.0f}min")
+        if dir_cooling:
+            gates.append({
+                "gate": "Direction Cooldown",
+                "status": "BLOCKING",
+                "detail": ", ".join(dir_cooling),
+            })
+    except Exception as exc:
+        gates.append({"gate": "Post-Trade Cooldown", "status": "ERROR", "detail": str(exc)})
+
+    # 4. Weekly trend gate
+    try:
+        from core.weekly_trend_gate import weekly_allows_long, weekly_allows_short
+        long_ok = weekly_allows_long("fvg", _cache) if _cache else None
+        short_ok = weekly_allows_short("fvg", _cache) if _cache else None
+        if long_ok is None:
+            detail = "No cache — cannot check"
+        elif long_ok and short_ok:
+            detail = "LONG + SHORT both allowed"
+        elif not long_ok:
+            detail = "LONGs BLOCKED (BTC below 10W EMA)"
+        else:
+            detail = "SHORTs BLOCKED (BTC above 10W EMA)"
+        blocking = (long_ok is False or short_ok is False)
+        gates.append({
+            "gate": "Weekly Trend Gate",
+            "status": "BLOCKING" if blocking else "OK",
+            "detail": detail,
+        })
+    except Exception as exc:
+        gates.append({"gate": "Weekly Trend Gate", "status": "ERROR", "detail": str(exc)})
+
+    # 5. ATR spike gate
+    try:
+        from core.filter import atr_spike_ok
+        if _cache:
+            blocked_syms = [s for s in symbols if not atr_spike_ok(s, _cache, tf="1h")]
+            gates.append({
+                "gate": "ATR Spike Gate",
+                "status": "BLOCKING" if blocked_syms else "OK",
+                "detail": f"Blocked: {', '.join(blocked_syms)}" if blocked_syms else "All symbols clear",
+            })
+        else:
+            gates.append({"gate": "ATR Spike Gate", "status": "UNKNOWN", "detail": "No cache"})
+    except Exception as exc:
+        gates.append({"gate": "ATR Spike Gate", "status": "ERROR", "detail": str(exc)})
+
+    # 6. Session filter
+    try:
+        sf = cfg.get("session_filter", {})
+        wd = now_utc.weekday()
+        hr = now_utc.hour
+        sat_blocked = sf.get("block_saturday", True) and wd == 5
+        dz_start = sf.get("dead_zone_start_utc", 22)
+        dz_end = sf.get("dead_zone_end_utc", 24) % 24
+        in_dead = (dz_start <= hr < 24) if dz_end == 0 else (dz_start <= hr < dz_end)
+        blocked = sat_blocked or in_dead
+        reason = "Saturday blocked" if sat_blocked else f"Dead zone {dz_start}:00-{dz_end or 24}:00 UTC" if in_dead else "Clear"
+        gates.append({
+            "gate": "Session Filter",
+            "status": "BLOCKING" if blocked else "OK",
+            "detail": f"{reason}  (now={now_utc.strftime('%a %H:%M')} UTC)",
+        })
+    except Exception as exc:
+        gates.append({"gate": "Session Filter", "status": "ERROR", "detail": str(exc)})
+
+    # 7. Account balance
+    try:
+        bal = _cache.get_account_balance() if _cache else 0.0
+        gates.append({
+            "gate": "Account Balance",
+            "status": "OK" if bal > 0 else "BLOCKING",
+            "detail": f"${bal:,.2f} USDT" if bal > 0 else "Balance = 0 — position_size() returns 0",
+        })
+    except Exception as exc:
+        gates.append({"gate": "Account Balance", "status": "ERROR", "detail": str(exc)})
+
+    # 8. Committed risk vs available equity
+    try:
+        from core.rr_calculator import _committed_risk
+        bal = _cache.get_account_balance() if _cache else 0.0
+        committed = _committed_risk()
+        available = bal - committed
+        pct_used = (committed / bal * 100) if bal > 0 else 0
+        gates.append({
+            "gate": "Committed Risk",
+            "status": "BLOCKING" if available <= 0 else "WARNING" if pct_used > 80 else "OK",
+            "detail": f"Committed ${committed:,.2f} / ${bal:,.2f} ({pct_used:.0f}%)  "
+                      f"Available ${max(available, 0):,.2f}",
+        })
+    except Exception as exc:
+        gates.append({"gate": "Committed Risk", "status": "ERROR", "detail": str(exc)})
+
+    # 9. Cache warmup
+    try:
+        if _cache:
+            warmup_issues = []
+            for s in symbols:
+                bars_1h = _cache.get_ohlcv(s, window=50, tf="1h")
+                bars_5m = _cache.get_ohlcv(s, window=32, tf="5m")
+                if not bars_1h or len(bars_1h) < 50:
+                    warmup_issues.append(f"{s} 1h={len(bars_1h) if bars_1h else 0}/50")
+                if not bars_5m or len(bars_5m) < 32:
+                    warmup_issues.append(f"{s} 5m={len(bars_5m) if bars_5m else 0}/32")
+            gates.append({
+                "gate": "Cache Warmup",
+                "status": "BLOCKING" if warmup_issues else "OK",
+                "detail": ", ".join(warmup_issues) if warmup_issues else "All symbols warmed up",
+            })
+        else:
+            gates.append({"gate": "Cache Warmup", "status": "BLOCKING", "detail": "No cache initialized"})
+    except Exception as exc:
+        gates.append({"gate": "Cache Warmup", "status": "ERROR", "detail": str(exc)})
+
+    # 10. Disabled strategies
+    try:
+        disabled = []
+        for s in ["leadlag", "session_trap", "zone", "vwap_band", "oi_spike",
+                   "fvg", "microrange", "ema_pullback", "liq_sweep", "wyckoff_spring",
+                   "cme_gap", "breakout_retest"]:
+            scfg = cfg.get(s, {})
+            if isinstance(scfg, dict) and not scfg.get("enabled", True):
+                disabled.append(s)
+        gates.append({
+            "gate": "Disabled Strategies",
+            "status": "INFO" if disabled else "OK",
+            "detail": ", ".join(disabled) if disabled else "All strategies enabled",
+        })
+    except Exception as exc:
+        gates.append({"gate": "Disabled Strategies", "status": "ERROR", "detail": str(exc)})
+
+    return JSONResponse(gates)
+
+
+@app.get("/api/strategies")
+def get_strategies() -> JSONResponse:
+    """Return all strategies currently in config.yaml routing + enabled blocks."""
+    import yaml as _yaml
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(cfg_path) as f:
+        cfg = _yaml.safe_load(f)
+
+    routing = cfg.get("strategy_routing", {})
+    found = set()
+    for sym_key, sym_routes in routing.items():
+        if sym_key == "_default" or not isinstance(sym_routes, dict):
+            continue
+        for regime_strats in sym_routes.values():
+            for s in (regime_strats or []):
+                found.add(s)
+
+    # Also include strategies with enabled config blocks (loop-based, may not be in routing)
+    _KNOWN = [
+        "fvg", "microrange", "breakout_retest", "liq_sweep",
+        "wyckoff_spring", "ema_pullback", "leadlag", "vwap_band",
+        "cme_gap", "wyckoff_upthrust", "ema_pullback_short_v2",
+        "zone", "oi_spike", "session",
+    ]
+    for s in _KNOWN:
+        if cfg.get(s, {}).get("enabled", False):
+            found.add(s)
+
+    # Always include these base options
+    found.add("main")
+    found.add("breakout_retest_tp1")
+    found.add("breakout_retest_tp2")
+
+    _LABELS = {
+        "fvg":                    "FVG Fill",
+        "microrange":             "Micro Range",
+        "breakout_retest":        "Breakout Retest (2.2R)",
+        "breakout_retest_tp1":    "Breakout Retest TP1 (1.5R)",
+        "breakout_retest_tp2":    "Breakout Retest TP2 (3.0R)",
+        "liq_sweep":              "Liquidity Sweep",
+        "wyckoff_spring":         "Wyckoff Spring",
+        "wyckoff_spring_v2":      "Wyckoff Spring v2",
+        "ema_pullback":           "EMA Pullback",
+        "ema_pullback_short":     "EMA Pullback Short",
+        "ema_pullback_short_v2":  "EMA Pullback Short v2",
+        "leadlag":                "Lead Lag",
+        "vwap_band":              "VWAP Band",
+        "cme_gap":                "CME Gap (BTC)",
+        "wyckoff_upthrust":       "Wyckoff Upthrust",
+        "wyckoff_upthrust_v2":    "Wyckoff Upthrust v2",
+        "zone":                   "HTF Zone",
+        "oi_spike":               "OI Spike Fade",
+        "session":                "Session Trap",
+        "liq_sweep_short":        "Liquidity Sweep Short",
+        "main":                   "Main (all signals)",
+    }
+
+    strategies = sorted(found)
+    return JSONResponse([
+        {"value": s, "label": _LABELS.get(s, s.replace("_", " ").title())}
+        for s in strategies
+    ])
+
+
+@app.get("/api/routing")
+def get_routing() -> JSONResponse:
+    """Return live routing table from config.yaml — what runs on what symbol."""
+    import yaml as _yaml
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(cfg_path) as f:
+        cfg = _yaml.safe_load(f)
+
+    routing  = cfg.get("strategy_routing", {})
+    symbols  = cfg.get("symbols", [])
+
+    result = {}
+    for sym in symbols:
+        sym_routes = routing.get(sym.upper(), routing.get("_default", {}))
+        result[sym] = {}
+        for regime in ["TREND", "RANGE", "BREAKOUT", "CRASH", "PUMP"]:
+            strats = sym_routes.get(regime, [])
+            annotated = []
+            for s in strats:
+                scorer_file = os.path.join(
+                    os.path.dirname(__file__), "..", "core", f"{s}_scorer.py"
+                )
+                has_scorer = os.path.exists(scorer_file)
+                enabled = cfg.get(s, {}).get("enabled", True)
+                annotated.append({
+                    "name":       s,
+                    "has_scorer": has_scorer,
+                    "enabled":    enabled,
+                    "status":     "live" if (has_scorer and enabled) else
+                                  "stub" if has_scorer else "missing",
+                })
+            result[sym][regime] = annotated
+
+    return JSONResponse(result)
+
+
 @app.post("/api/backtest/run")
 async def api_backtest_run(request: Request) -> JSONResponse:
     """Run a backtest on demand from the web UI.
@@ -2592,37 +2950,29 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             finally:
                 loop.close()
 
+        # ── Dynamic engine loader ─────────────────────────────────────────
+        # Convention: strategy "X" has backtest/X_engine.py with run().
+        # Falls back to backtest/engine.py run_strategy() for strategies
+        # registered in the generic vectorised engine (RUNNERS dict).
+        import numpy as _np
+
+        # Strategies handled by backtest/engine.py run_strategy() with
+        # numpy arrays (need dict→numpy conversion + per-symbol dispatch)
+        _GENERIC_ENGINE = {
+            "breakout_retest", "breakout_retest_tp1", "breakout_retest_tp2",
+        }
+
+        trades = []
+
         if strategy == "main":
             from backtest.engine import run as _run
-            trades = _run_async(_run(symbols=symbols, ohlcv=ohlcv, oi=oi, funding=funding,
-                                     warmup_bars=210, starting_capital=capital, risk_pct=risk_pct))
-        elif strategy == "leadlag":
-            from backtest.leadlag_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "microrange":
-            from backtest.microrange_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "session":
-            from backtest.session_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "ema_pullback":
-            from backtest.ema_pullback_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "zone":
-            from backtest.zone_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "fvg":
-            from backtest.fvg_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "vwap_band":
-            from backtest.vwap_band_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy == "oi_spike":
-            from backtest.oi_spike_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, oi=oi, starting_capital=capital, risk_pct=risk_pct)
-        elif strategy in ("breakout_retest", "breakout_retest_tp1", "breakout_retest_tp2"):
+            trades = _run_async(_run(
+                symbols=symbols, ohlcv=ohlcv, oi=oi, funding=funding,
+                warmup_bars=210, starting_capital=capital, risk_pct=risk_pct
+            ))
+
+        elif strategy in _GENERIC_ENGINE:
             from backtest.engine import run_strategy as _bt_run
-            import numpy as _np
 
             # Convert fetched ohlcv (list[dict]) to numpy arrays for engine
             np_data: dict = {}
@@ -2646,20 +2996,52 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 all_trades.extend(sym_trades)
             trades = all_trades
 
-        elif strategy == "liq_sweep":
-            from backtest.liq_sweep_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-
-        elif strategy == "wyckoff_spring":
-            from backtest.wyckoff_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-
-        elif strategy == "cme_gap":
-            from backtest.cme_gap_engine import run as _run
-            trades = _run(symbols=symbols, ohlcv=ohlcv, starting_capital=capital, risk_pct=risk_pct)
-
         else:
-            trades = []
+            # Try dedicated engine file: backtest/{strategy}_engine.py
+            import importlib, inspect
+            engine_module = f"backtest.{strategy}_engine"
+            try:
+                eng = importlib.import_module(engine_module)
+                if not hasattr(eng, 'run'):
+                    raise ImportError(f"No run() in {engine_module}")
+                sig = inspect.signature(eng.run)
+                if 'oi' in sig.parameters:
+                    trades = eng.run(
+                        symbols=symbols, ohlcv=ohlcv, oi=oi,
+                        starting_capital=capital, risk_pct=risk_pct
+                    )
+                else:
+                    trades = eng.run(
+                        symbols=symbols, ohlcv=ohlcv,
+                        starting_capital=capital, risk_pct=risk_pct
+                    )
+            except (ImportError, ModuleNotFoundError):
+                # Fall back to generic engine run_strategy()
+                try:
+                    from backtest.engine import run_strategy as _bt_run2
+                    np_data2: dict = {}
+                    for ok, bl in ohlcv.items():
+                        if bl and isinstance(bl, list) and isinstance(bl[0], dict):
+                            np_data2[ok] = _np.array(
+                                [[b["o"], b["h"], b["l"], b["c"], b["v"], b["ts"]]
+                                 for b in bl], dtype=_np.float64)
+                        elif bl is not None and hasattr(bl, '__len__') and len(bl) > 0:
+                            np_data2[ok] = _np.asarray(bl, dtype=_np.float64)
+                    btc_keys2 = {k for k in np_data2 if k.startswith("BTCUSDT:")}
+                    btc_data2 = {k: np_data2[k] for k in btc_keys2} if btc_keys2 else None
+                    all_trades2 = []
+                    for sym in symbols:
+                        sd = {k: v for k, v in np_data2.items() if k.startswith(f"{sym}:")}
+                        if sd:
+                            all_trades2.extend(_bt_run2(sym, strategy, sd, btc_data2,
+                                                        from_ms, to_ms))
+                    trades = all_trades2
+                except Exception as eng_exc:
+                    return {
+                        "error": f"No engine for '{strategy}'. "
+                                 f"Create backtest/{strategy}_engine.py with run(). "
+                                 f"Detail: {eng_exc}"
+                    }
 
         try:
             stats = compute_stats(trades, starting_capital=capital)

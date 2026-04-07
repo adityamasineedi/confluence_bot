@@ -138,15 +138,20 @@ risk:
   risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
   max_risk_usdt: 5000              # high cap so compounding is never blocked
   max_position_size_usdt: 4000     # keep notional within demo account margin (bal×lev×0.85)
-  max_open_positions: 3
-  max_same_direction_positions: 2  # max 2 longs OR 2 shorts at once — correlation cap
+  max_open_positions: 5
+  max_same_direction_positions: 3  # max 3 longs OR 3 shorts at once — correlation cap
   rr_ratio: 2.5                    # TP = entry ± stop_dist × 2.5
   leverage: 3
   margin_type: ISOLATED
   # ── Circuit breaker ───────────────────────────────────────────────────────
   max_daily_loss_pct: 3.0          # halt if daily loss > 3% of growing balance
-  max_consecutive_losses: 4        # halt after 4 consecutive losses
-  post_trade_cooldown_mins: 15     # 15 min cooldown per symbol after any close
+  max_consecutive_losses: 6        # halt after 6 consecutive losses
+  post_trade_cooldown_mins: 10     # 10 min cooldown per symbol after any close
+  # ── Breakeven management ────────────────────────────────────────────────
+  breakeven_trigger_r: 2.0         # move SL to entry at +2R (was +1R — too aggressive)
+  breakeven_disabled_strategies:   # strategies backtested WITHOUT BE — do not apply
+    - breakout_retest
+    - microrange
   # ── Extreme volatility gate ──────────────────────────────────────────────
   # Halts all new entries when 4H ATR spikes 3× above median (flash crash events).
   # Catches: COVID March 2020, LUNA May 2022, FTX November 2022.
@@ -222,7 +227,7 @@ leadlag:
   max_alts_per_signal: 6        # max simultaneous alt entries per BTC breakout (raised: more alts per signal)
   check_interval_secs: 30       # how often the leadlag loop checks BTC
   stop_pct: 0.0020              # SL = 0.20% from entry
-  tp_pct:   0.0100              # TP = 1.00% from entry (5 RR)  [tuned: was 0.005]
+  tp_pct:   0.0050              # TP = 0.50% from entry (2.5 RR) — 5R never hits in 30min
   max_hold_bars: 6              # max 6 × 5m bars = 30 min hold
   require_trend_aligned: true   # only LONG above BTC 1h EMA20, SHORT below [tuned: new]
   exclude_symbols:              # never enter these as alts
@@ -250,7 +255,7 @@ ema_pullback:
   enabled: true
   check_interval_secs: 30
   max_positions: 3
-  cooldown_mins: 45             # 45 min cooldown — one pullback per 45m per symbol
+  cooldown_mins: 20             # 20 min cooldown — one pullback per 20m per symbol
   fire_threshold: 0.75
   pullback_touch_pct: 0.002     # price must be within 0.2% of EMA21 (tightened from 0.4%)
   min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
@@ -294,7 +299,7 @@ zone:
 # Confirmed by wick rejection on the 15m bar + volume spike (liquidation cascade).
 # Skips when OI data unavailable (Binance + Bybit both missing).
 oi_spike:
-  enabled: false
+  enabled: true    # enabled for paper testing
   spike_pct: 0.15             # OI must increase ≥ 15% within lookback_hours
   lookback_hours: 2.0         # compare current OI vs 2h ago
   wick_pct: 0.005             # lower/upper wick must be ≥ 0.5% of price
@@ -359,7 +364,7 @@ wyckoff_spring:
 # ── Liquidity sweep strategy ─────────────────────────────────────────────────
 liq_sweep:
   enabled: true
-  cooldown_mins: 60
+  cooldown_mins: 30
   rr_ratio: 2.5
   sl_buffer_pct: 0.001
   lookback_bars: 30
@@ -371,6 +376,17 @@ liq_sweep:
   max_positions: 2
   mc_vol_ratio_max: 2.5    # block when recent 6H vol > 2.5× baseline (backtest: PF 2.62)
   max_entry_drift_pct: 0.003   # skip if price moved > 0.3% from sweep bar close
+
+# ── CME Gap fill strategy ───────────────────────────────────────────���────────
+# BTC only — PF 2.74, 135 trades/3yr. Trades the Friday→Sunday gap fill.
+cme_gap:
+  enabled: true
+  min_gap_pct: 0.003         # gap must be ≥ 0.3% to trade
+  cooldown_hours: 72         # one trade per weekend gap
+  rr_ratio: 1.5              # TP = Friday close, SL = 1% from Sunday open
+  sl_pct: 0.010              # 1% hard SL if gap target is too far
+  max_positions: 1           # one gap trade at a time
+  check_interval_secs: 300   # check every 5 minutes
 
 # ── Session filter ────────────────────────────────────────────────────────────
 session_filter:
@@ -397,7 +413,7 @@ fvg:
   enabled: true   # confirmed: BTC PF1.65 WR39%, SOL PF1.64 WR43%, BNB PF2.11 WR44%
   min_gap_pct: 0.003          # FVG must be ≥ 0.3% wide (filters micro-noise)
   check_interval_secs: 60     # align with 1H bar close
-  cooldown_mins: 45           # per-symbol cooldown after entry
+  cooldown_mins: 25           # per-symbol cooldown after entry
   max_positions: 3            # max simultaneous FVG trades
   rr_ratio: 2.0               # TP = entry ± dist × 2.0
   sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
@@ -428,7 +444,7 @@ microrange:
                             # invariant check: 0.004 ≤ 0.005 ✓
   tp_ratio: 0.55
   max_hold_bars: 3
-  cooldown_mins: 60             # was 20 — tripled to cut trades by ~3×
+  cooldown_mins: 30             # reduced for more opportunities
   min_box_touches: 2            # NEW: both boundaries must be tested ≥2× (no one-time spikes)
   max_positions: 3
   max_vol_ratio: 1.3
@@ -458,6 +474,8 @@ breakout_retest:
   max_trades_per_day: 6          # was 4 — more trades per day
   max_positions: 3
   check_interval_secs: 30
+  exhaustion_pct: 0.025           # skip if 4H already moved > 2.5% in signal direction
+  exhaustion_bars: 6              # look back 6 × 4H bars (24 hours)
 
 # ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
 long_short_ratio:
@@ -600,7 +618,7 @@ strategy_routing:
     RANGE:    [breakout_retest]
     BREAKOUT: [fvg, wyckoff_spring_v2, breakout_retest]
     CRASH:    [breakout_retest]
-    PUMP:     []
+    PUMP:     [fvg, breakout_retest]
 
   SOLUSDT:
     # ema_pullback_short: PF 1.74, 174 trades — BEST SOL strategy
@@ -611,7 +629,7 @@ strategy_routing:
     RANGE:    [breakout_retest]
     BREAKOUT: [fvg, ema_pullback_short, breakout_retest]
     CRASH:    [ema_pullback_short, wyckoff_upthrust_v2, breakout_retest]
-    PUMP:     []
+    PUMP:     [fvg, breakout_retest]
 
   BNBUSDT:
     # wyckoff_spring_v2: PF 5.33 — strongest BNB strategy
@@ -623,7 +641,7 @@ strategy_routing:
     RANGE:    [microrange, breakout_retest]
     BREAKOUT: [liq_sweep, wyckoff_spring_v2, breakout_retest]
     CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
-    PUMP:     []
+    PUMP:     [liq_sweep, breakout_retest]
 
   XRPUSDT:
     # XRP: strong trend-following, institutional ETF narrative
@@ -652,7 +670,7 @@ strategy_routing:
     RANGE:    [breakout_retest]
     BREAKOUT: [liq_sweep, breakout_retest]
     CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short, breakout_retest]
-    PUMP:     []
+    PUMP:     [liq_sweep, breakout_retest]
 
   SUIUSDT:
     # liq_sweep_short: PF 2.44 confirmed
@@ -664,7 +682,7 @@ strategy_routing:
     RANGE:    [breakout_retest]
     BREAKOUT: [wyckoff_spring_v2, breakout_retest]
     CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
-    PUMP:     []
+    PUMP:     [breakout_retest]
 
   _default:
     TREND:    []
@@ -687,9 +705,9 @@ atr_spike_gate:
 # callback_pct = ATR% × atr_multiplier, clamped to [min_callback_pct, max_callback_pct].
 trailing_stop:
   enabled:          true
-  min_callback_pct: 0.5    # minimum trail distance (Binance floor is 0.1%)
-  max_callback_pct: 3.0    # maximum trail distance
-  atr_multiplier:   1.5    # callback = ATR% × this
+  min_callback_pct: 1.5    # minimum trail distance — 0.5% was too tight, normal vol kills it
+  max_callback_pct: 4.0    # maximum trail distance — let big trends breathe
+  atr_multiplier:   2.0    # callback = ATR% × this — wider to survive intra-bar noise
   activate_after_pct: 0.5  # activationPrice offset from entry (ignored — Binance activates immediately)
   apply_to: [PUMP, BREAKOUT]
 

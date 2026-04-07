@@ -213,13 +213,13 @@ class DataCache:
 
     # ── Open Interest ─────────────────────────────────────────────────────────
 
-    def get_oi(self, symbol: str, offset_hours: int = 0, exchange: str = "binance") -> float | None:
+    def get_oi(self, symbol: str, offset_hours: int | float = 0, exchange: str = "binance") -> float | None:
         """Return OI value `offset_hours` ago (0 = latest) for a specific exchange."""
         dq = self._oi.get((symbol, exchange))
         if not dq:
             return None
         snap = list(dq)
-        idx = -(1 + offset_hours)
+        idx = -(1 + int(offset_hours))
         try:
             return snap[idx]["oi"]
         except IndexError:

@@ -24,6 +24,11 @@ _RISK       = _cfg.get("risk", {})
 _MAX_LOSS_PCT    = float(_RISK.get("max_daily_loss_pct",      5.0))
 _MAX_LOSS_USDT   = float(_RISK.get("max_daily_loss_usdt",   250.0))
 _MAX_CONSEC      = int(_RISK.get("max_consecutive_losses",     4))
+_RISK_PER_TRADE  = float(_RISK.get("risk_per_trade",         0.01))
+# PnL must exceed 10% of the risked amount to count as a "real win".
+# Breakeven / scratched trades (PnL near zero) count as losses for
+# the consecutive-loss counter so the circuit breaker isn't fooled.
+_MIN_WIN_RATIO   = 0.10
 _DB_PATH         = os.environ.get("DB_PATH", "confluence_bot.db")
 
 # In-memory state (fast path — avoids DB hit on every signal)
@@ -50,7 +55,14 @@ def _reset_if_new_day() -> None:
 
 
 def _query_daily_stats() -> tuple[float, int]:
-    """Return (daily_pnl, consecutive_losses) from DB for today UTC."""
+    """Return (daily_pnl, consecutive_losses) from DB for today UTC.
+
+    Consecutive-loss counting treats breakeven / scratched trades as
+    losses.  A trade only counts as a "real win" (streak-breaker) when
+    its PnL exceeds 10 % of the risked amount.  If risk_usdt is not
+    recorded (legacy rows store 0), we fall back to
+    balance × risk_per_trade × _MIN_WIN_RATIO as the threshold.
+    """
     today = _today_utc()
     try:
         with sqlite3.connect(_DB_PATH) as conn:
@@ -64,15 +76,26 @@ def _query_daily_stats() -> tuple[float, int]:
 
             # Consecutive losses: walk back from most recent closed trade
             rows = conn.execute(
-                "SELECT pnl_usdt FROM trades WHERE status IN ('FILLED','CLOSED') "
+                "SELECT pnl_usdt, risk_usdt FROM trades "
+                "WHERE status IN ('FILLED','CLOSED') "
                 "ORDER BY closed_ts DESC LIMIT 20"
             ).fetchall()
+
+            # Fallback min-win when risk_usdt is 0 / NULL
+            balance = _get_balance()
+            fallback_min_win = balance * _RISK_PER_TRADE * _MIN_WIN_RATIO
+
             consec = 0
-            for r in rows:
-                if float(r[0]) < 0:
+            for pnl_val, risk_val in rows:
+                pnl  = float(pnl_val)
+                risk = float(risk_val) if risk_val else 0.0
+                min_win = (risk * _MIN_WIN_RATIO) if risk > 0 else fallback_min_win
+                # Clamp: at least $1 so a $0.10 scratch never passes
+                min_win = max(min_win, 1.0)
+                if pnl < min_win:
                     consec += 1
                 else:
-                    break
+                    break   # genuine win — streak ends
 
         return daily_pnl, consec
     except Exception as exc:

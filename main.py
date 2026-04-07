@@ -327,6 +327,14 @@ async def _main_inner() -> None:
         )
         log.info("Liquidity Sweep strategy enabled")
 
+    # 6b7a. CME Gap fill (BTC only — Sunday open → Friday close gap fill)
+    if cfg.get("cme_gap", {}).get("enabled", False):
+        from core.cme_gap_loop import run_cme_gap_loop
+        extra_tasks.append(
+            asyncio.create_task(run_cme_gap_loop(["BTCUSDT"], cache))
+        )
+        log.info("CME Gap strategy enabled")
+
     # 6b7. HTF Demand/Supply Zone (4H zone retests with 1H confirmation)
     if cfg.get("zone", {}).get("enabled", False):
         from core.zone_loop import run_zone_loop

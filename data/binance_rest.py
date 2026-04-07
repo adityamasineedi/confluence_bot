@@ -498,6 +498,45 @@ async def get_position_amt(symbol: str) -> float:
     return 0.0
 
 
+async def refresh_account_balance() -> float:
+    """Fetch balance from Binance and update cache + DB immediately.
+
+    Call after a trade closes to ensure position_size() compounds correctly.
+    Returns the new balance, or 0.0 on failure (cache keeps last known value).
+    """
+    url = f"{_BINANCE_BASE}/fapi/v2/account"
+    try:
+        params = _sign({"timestamp": int(time.time() * 1000)})
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.get(url, params=params,
+                                   headers={"X-MBX-APIKEY": _API_KEY}) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+        balance = float(data.get("totalWalletBalance", 0))
+        if balance > 0:
+            from data.cache import _global_cache
+            if _global_cache is not None:
+                _global_cache.set_account_balance(balance)
+            # Persist for circuit breaker
+            try:
+                import sqlite3 as _sq
+                from datetime import datetime, timezone
+                db = os.environ.get("DB_PATH", "confluence_bot.db")
+                with _sq.connect(db) as _c:
+                    _c.execute(
+                        "INSERT OR REPLACE INTO bot_state(key,value,updated) VALUES(?,?,?)",
+                        ("account_balance", str(balance),
+                         datetime.now(timezone.utc).isoformat())
+                    )
+            except Exception:
+                pass
+            log.info("Balance refreshed after trade: %.2f USDT", balance)
+        return balance
+    except Exception as exc:
+        log.warning("refresh_account_balance failed: %s", exc)
+        return 0.0
+
+
 async def get_account_balance() -> float:
     """Fetch available USDT balance from Binance Futures account."""
     url = f"{_BINANCE_BASE}/fapi/v2/balance"
@@ -517,61 +556,42 @@ async def get_account_balance() -> float:
 
 
 # ── Demo/live order type helpers ──────────────────────────────────────────────
-log.info("Order mode: %s (BINANCE_BASE_URL=%s)",
-         "DEMO (STOP limit)" if _IS_DEMO else "LIVE (STOP_MARKET)",
+log.info("Order mode: %s — SL/TP via /fapi/v1/algoOrder (BINANCE_BASE_URL=%s)",
+         "DEMO" if _IS_DEMO else "LIVE",
          os.environ.get("BINANCE_BASE_URL", ""))
 
 
 def _make_sl_params(symbol: str, close_side: str, quantity: float, stop: float) -> dict:
-    if _IS_DEMO:
-        # demo-fapi.binance.com rejects STOP_MARKET (-4120)
-        # Use STOP limit with 0.5% slippage buffer so it fills in normal moves
-        sl_price = _round_price(symbol, stop * (0.995 if close_side == "SELL" else 1.005))
-        return {
-            "symbol":      symbol,
-            "side":        close_side,
-            "type":        "STOP",
-            "quantity":    quantity,
-            "stopPrice":   _round_price(symbol, stop),
-            "price":       sl_price,
-            "timeInForce": "GTC",
-            "reduceOnly":  "true",
-        }
-    else:
-        return {
-            "symbol":      symbol,
-            "side":        close_side,
-            "type":        "STOP_MARKET",
-            "quantity":    quantity,
-            "stopPrice":   _round_price(symbol, stop),
-            "reduceOnly":  "true",
-            "workingType": "MARK_PRICE",
-        }
+    """Build SL params for the Algo Order API (POST /fapi/v1/algoOrder).
+
+    Since 2025-12-09 Binance migrated all conditional order types
+    (STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET, TRAILING_STOP_MARKET)
+    to the Algo Service.  The old /fapi/v1/order endpoint returns -4120.
+    """
+    return {
+        "algoType":     "CONDITIONAL",
+        "symbol":       symbol,
+        "side":         close_side,
+        "type":         "STOP_MARKET",
+        "quantity":     quantity,
+        "triggerPrice": _round_price(symbol, stop),
+        "reduceOnly":   "true",
+        "workingType":  "MARK_PRICE",
+    }
 
 
 def _make_tp_params(symbol: str, close_side: str, quantity: float, take_profit: float) -> dict:
-    if _IS_DEMO:
-        tp_price = _round_price(symbol, take_profit * (1.005 if close_side == "SELL" else 0.995))
-        return {
-            "symbol":      symbol,
-            "side":        close_side,
-            "type":        "TAKE_PROFIT",
-            "quantity":    quantity,
-            "stopPrice":   _round_price(symbol, take_profit),
-            "price":       tp_price,
-            "timeInForce": "GTC",
-            "reduceOnly":  "true",
-        }
-    else:
-        return {
-            "symbol":      symbol,
-            "side":        close_side,
-            "type":        "TAKE_PROFIT_MARKET",
-            "quantity":    quantity,
-            "stopPrice":   _round_price(symbol, take_profit),
-            "reduceOnly":  "true",
-            "workingType": "MARK_PRICE",
-        }
+    """Build TP params for the Algo Order API (POST /fapi/v1/algoOrder)."""
+    return {
+        "algoType":     "CONDITIONAL",
+        "symbol":       symbol,
+        "side":         close_side,
+        "type":         "TAKE_PROFIT_MARKET",
+        "quantity":     quantity,
+        "triggerPrice": _round_price(symbol, take_profit),
+        "reduceOnly":   "true",
+        "workingType":  "MARK_PRICE",
+    }
 
 
 async def place_order(
@@ -645,22 +665,23 @@ async def place_order(
 
             sl_params = _make_sl_params(symbol, close_side, bracket_qty, stop)
             tp_params = _make_tp_params(symbol, close_side, bracket_qty, take_profit)
+            algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
 
-            # 2. Stop loss (with retry)
+            # 2. Stop loss (with retry) — via Algo Order API
             sl_resp = await _place_with_retry(
-                session, url, sl_params, headers, f"SL {symbol}"
+                session, algo_url, sl_params, headers, f"SL {symbol}"
             )
-            if isinstance(sl_resp.get("code"), int) and sl_resp["code"] < 0:
+            if isinstance(sl_resp.get("code"), int) and int(sl_resp["code"]) < 0:
                 log.warning("SL order rejected %s: code=%s msg=%s — software SL/TP will protect position",
                             symbol, sl_resp["code"], sl_resp.get("msg", "?"))
-            elif sl_resp.get("orderId"):
-                log.debug("SL placed %s: orderId=%s", symbol, sl_resp.get("orderId"))
+            elif sl_resp.get("algoId"):
+                log.debug("SL placed %s: algoId=%s", symbol, sl_resp.get("algoId"))
 
-            # 3. Take profit (with retry)
+            # 3. Take profit (with retry) — via Algo Order API
             tp_resp = await _place_with_retry(
-                session, url, tp_params, headers, f"TP {symbol}"
+                session, algo_url, tp_params, headers, f"TP {symbol}"
             )
-            if isinstance(tp_resp.get("code"), int) and tp_resp["code"] < 0:
+            if isinstance(tp_resp.get("code"), int) and int(tp_resp["code"]) < 0:
                 log.warning("TP order rejected %s: code=%s msg=%s — software SL/TP will protect position",
                             symbol, tp_resp["code"], tp_resp.get("msg", "?"))
 
@@ -799,19 +820,20 @@ async def place_limit_then_market(
             log.warning("Bracket placed for %.4f (filled) not %.4f (requested) — %s %s",
                         bracket_qty, quantity, side, symbol)
 
-        # ── Step 5: SL (always) + TP (only when provided) ─────────────────────
+        # ── Step 5: SL (always) + TP (only when provided) — via Algo Order API
+        algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
         bracket_orders: list[tuple[str, dict]] = []
         bracket_orders.append(("SL", _make_sl_params(symbol, close_side, bracket_qty, stop)))
         if take_profit is not None:
             bracket_orders.append(("TP", _make_tp_params(symbol, close_side, bracket_qty, take_profit)))
         for label, params in bracket_orders:
             try:
-                async with session.post(url, params=_sign(params), headers=headers) as resp:
+                async with session.post(algo_url, params=_sign(params), headers=headers) as resp:
                     r = await resp.json()
-                if isinstance(r.get("code"), int) and r["code"] < 0:
+                if isinstance(r.get("code"), int) and int(r["code"]) < 0:
                     log.warning("%s rejected %s: code=%s msg=%s", label, symbol, r["code"], r.get("msg"))
                 else:
-                    log.debug("%s placed %s orderId=%s", label, symbol, r.get("orderId"))
+                    log.debug("%s placed %s algoId=%s", label, symbol, r.get("algoId"))
             except Exception as exc:
                 log.warning("%s placement failed %s: %s", label, symbol, exc)
 
@@ -854,6 +876,7 @@ async def place_trailing_stop(
     headers = {"X-MBX-APIKEY": _API_KEY}
     qty = _round_qty(symbol, quantity)
     params = _sign({
+        "algoType":     "CONDITIONAL",
         "symbol":       symbol,
         "side":         side,
         "type":         "TRAILING_STOP_MARKET",
@@ -862,16 +885,16 @@ async def place_trailing_stop(
         "reduceOnly":   "true",
         "workingType":  "MARK_PRICE",
     })
-    url = f"{_BINANCE_BASE}/fapi/v1/order"
+    url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
     try:
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             async with session.post(url, params=params, headers=headers) as resp:
                 result = await resp.json()
-        if isinstance(result.get("code"), int) and result["code"] < 0:
+        if isinstance(result.get("code"), int) and int(result["code"]) < 0:
             log.warning("place_trailing_stop rejected %s: %s", symbol, result)
             return {}
-        log.info("Trailing stop placed %s side=%s callback=%.1f%%",
-                 symbol, side, callback_pct)
+        log.info("Trailing stop placed %s side=%s callback=%.1f%% algoId=%s",
+                 symbol, side, callback_pct, result.get("algoId"))
         return result
     except Exception as exc:
         log.error("place_trailing_stop %s failed: %s", symbol, exc)
