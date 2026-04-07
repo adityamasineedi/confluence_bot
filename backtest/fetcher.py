@@ -480,37 +480,86 @@ async def fetch_period_async(
 
     Adds `warmup_days` days of context before `from_ms` so indicators
     (EMA200, ADX, ATR) are properly warmed up at the start of the window.
-    Data is NOT cached to disk (always fresh for historical periods).
+    Uses local compressed cache — only downloads gaps from Binance.
     """
+    from backtest.data_store import (
+        load_bars, save_bars, missing_ranges, migrate_legacy_json
+    )
+
     warmup_ms   = warmup_days * 86_400_000
     fetch_start = from_ms - warmup_ms
     merged: dict = {"ohlcv": {}, "oi": {}, "funding": {}}
 
-    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+    # Determine which symbols×timeframes actually need API calls
+    needs_download: list[tuple[str, str, list[tuple[int, int]]]] = []
+    tfs_needed = ["5m", "15m", "1h", "4h", "1d", "1w"]
+
+    # Migrate any old-format JSON files into compressed cache first
+    for symbol in symbols:
+        for tf in tfs_needed:
+            migrate_legacy_json(symbol, tf)
+
+    for symbol in symbols:
+        for tf in tfs_needed:
+            cached = load_bars(symbol, tf, fetch_start, to_ms)
+            gaps = missing_ranges(symbol, tf, fetch_start, to_ms)
+            if gaps:
+                needs_download.append((symbol, tf, gaps))
+            else:
+                # Fully cached — use directly
+                merged["ohlcv"][f"{symbol}:{tf}"] = sorted(
+                    cached, key=lambda x: x["ts"])
+        # 1m is unused by backtest strategies
+        merged["ohlcv"][f"{symbol}:1m"] = []
+
+    if not needs_download:
+        log.info("All data served from local cache — 0 API calls")
+        # Still need OI and funding from cache files (or skip)
         for symbol in symbols:
-            log.info("Fetching range %s (%s → %s + %dd warmup)...",
-                     symbol,
-                     _ms_to_date(from_ms), _ms_to_date(to_ms), warmup_days)
+            merged["oi"][symbol] = []
+            merged["funding"][symbol] = []
+        return merged
 
-            for tf in ["1m", "5m", "15m", "1h", "4h", "1d", "1w"]:
-                # Skip 1m — not used by any strategy (too large and not useful for backtest)
-                if tf == "1m":
-                    merged["ohlcv"][f"{symbol}:{tf}"] = []
-                    continue
-                log.info("  %s %s...", symbol, tf)
-                bars = await _fetch_klines_range(session, symbol, tf, fetch_start, to_ms)
-                merged["ohlcv"][f"{symbol}:{tf}"] = bars
-                await asyncio.sleep(1)
+    log.info("%d symbol×tf combos need downloading (%d already cached)",
+             len(needs_download),
+             len(symbols) * len(tfs_needed) - len(needs_download))
 
-            log.info("  %s OI...", symbol)
-            oi = await _fetch_oi_range(session, symbol, fetch_start, to_ms)
-            merged["oi"][symbol] = oi
+    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+        for symbol, tf, gaps in needs_download:
+            for gap_start, gap_end in gaps:
+                log.info("  downloading gap: %s %s %s → %s",
+                         symbol, tf, _ms_to_date(gap_start), _ms_to_date(gap_end))
+                new_bars = await _fetch_klines_range(
+                    session, symbol, tf, gap_start, gap_end)
+                if new_bars:
+                    save_bars(symbol, tf, new_bars)
+                await asyncio.sleep(0.5)
 
-            log.info("  %s funding...", symbol)
-            fund = await _fetch_funding_range(session, symbol, fetch_start, to_ms)
-            merged["funding"][symbol] = fund
+            # Reload full range from cache after filling gaps
+            cached = load_bars(symbol, tf, fetch_start, to_ms)
+            merged["ohlcv"][f"{symbol}:{tf}"] = sorted(
+                cached, key=lambda x: x["ts"])
 
-            await asyncio.sleep(3)
+        # Fetch OI and funding (these are short-lived, not cached in data_store)
+        for symbol in symbols:
+            if symbol not in merged["oi"]:
+                log.info("  %s OI...", symbol)
+                oi = await _fetch_oi_range(session, symbol, fetch_start, to_ms)
+                merged["oi"][symbol] = oi
+
+            if symbol not in merged["funding"]:
+                log.info("  %s funding...", symbol)
+                fund = await _fetch_funding_range(session, symbol, fetch_start, to_ms)
+                merged["funding"][symbol] = fund
+
+            await asyncio.sleep(1)
+
+    # Fill any symbols that were fully cached but missing OI/funding keys
+    for symbol in symbols:
+        if symbol not in merged["oi"]:
+            merged["oi"][symbol] = []
+        if symbol not in merged["funding"]:
+            merged["funding"][symbol] = []
 
     return merged
 
@@ -545,3 +594,41 @@ async def fetch_all_async(symbols: list[str], force: bool = False) -> dict:
 
 def fetch_all_sync(symbols: list[str], force: bool = False) -> dict:
     return asyncio.run(fetch_all_async(symbols, force=force))
+
+
+def download_all_history(
+    symbols: list[str] = None,
+    from_date: str = "2022-01-01",
+    to_date: str = None,
+) -> dict:
+    """Pre-download all historical data to local compressed cache.
+
+    Run once before backtesting to avoid API calls during runs.
+    Usage:
+        python -c "from backtest.fetcher import download_all_history; download_all_history()"
+    """
+    import yaml
+    from datetime import datetime as _dt
+
+    if symbols is None:
+        cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+        symbols = cfg.get("symbols", [])
+    symbols = list(set(symbols + ["BTCUSDT"]))
+
+    if to_date is None:
+        to_date = _dt.utcnow().strftime("%Y-%m-%d")
+
+    from_ms = int(_dt.strptime(from_date, "%Y-%m-%d").timestamp() * 1000)
+    to_ms   = int(_dt.strptime(to_date,   "%Y-%m-%d").timestamp() * 1000)
+
+    print(f"Downloading {len(symbols)} symbols from {from_date} to {to_date}...")
+    fetch_period_sync(symbols, from_ms, to_ms, warmup_days=45)
+
+    from backtest.data_store import cache_info
+    info = cache_info()
+    print(f"Done. Cached: {info['total_bars']:,} bars, "
+          f"{info['total_size_mb']} MB, "
+          f"{info['total_files']} files")
+    return info

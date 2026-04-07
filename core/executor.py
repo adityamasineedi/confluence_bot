@@ -266,8 +266,47 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     else:
         entry, stop, tp = compute(symbol, direction, cache)
 
+    if regime == "BREAKOUT_RETEST":
+        # Recalculate SL/TP relative to actual fill price, not flip level
+        br_flip = score_dict.get("br_flip", stop)
+        original_sl_dist = abs(br_flip - score_dict.get("br_stop", stop))
+        if original_sl_dist < entry * 0.005:
+            original_sl_dist = entry * 0.005   # enforce 0.5% minimum
+        if direction == "LONG":
+            stop = entry - original_sl_dist
+            tp   = entry + original_sl_dist * _MIN_RR.get(regime, 1.5)
+        else:
+            stop = entry + original_sl_dist
+            tp   = entry - original_sl_dist * _MIN_RR.get(regime, 1.5)
+        log.debug(
+            "BR recalc from actual entry: entry=%.4f stop=%.4f tp=%.4f dist=%.4f",
+            entry, stop, tp, original_sl_dist,
+        )
+
     if entry == 0.0 or stop == 0.0 or tp == 0.0:
         log.warning("RR compute failed for %s %s — skipping", direction, symbol)
+        return None
+
+    # ── Hard SL validation — prevent impossible orders ────────────────
+    if direction == "SHORT" and stop <= entry:
+        log.error(
+            "INVALID SL: SHORT %s stop=%.6f <= entry=%.6f — skipping",
+            symbol, stop, entry,
+        )
+        return None
+
+    if direction == "LONG" and stop >= entry:
+        log.error(
+            "INVALID SL: LONG %s stop=%.6f >= entry=%.6f — skipping",
+            symbol, stop, entry,
+        )
+        return None
+
+    if abs(entry - stop) / entry < 0.0015:
+        log.warning(
+            "STOP TOO TIGHT: %s %s dist=%.4f%% < 0.15%% minimum — skipping",
+            direction, symbol, abs(entry - stop) / entry * 100,
+        )
         return None
 
     stop_dist = abs(entry - stop)

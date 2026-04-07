@@ -1,4 +1,5 @@
 """Backtest reporter — computes stats and prints formatted results + monthly P&L."""
+import math
 from datetime import datetime, timezone
 
 
@@ -27,6 +28,27 @@ def _bucket_stats(trades: list[dict]) -> dict:
         "avg_win":  round(avg_win, 2),
         "avg_loss": round(avg_loss, 2),
     }
+
+
+def _sharpe_from_dicts(trades: list[dict], starting_capital: float) -> float:
+    """Annualised Sharpe ratio from trade dicts (pnl field is dollar P&L)."""
+    if len(trades) < 10:
+        return 0.0
+    sorted_t = sorted(trades, key=lambda t: t.get("exit_ts", 0))
+    returns = []
+    equity = starting_capital
+    for t in sorted_t:
+        pnl = t.get("pnl", 0)
+        ret = pnl / equity if equity > 0 else 0
+        returns.append(ret)
+        equity = max(equity + pnl, 1)
+    avg = sum(returns) / len(returns)
+    variance = sum((r - avg) ** 2 for r in returns) / len(returns)
+    std = math.sqrt(variance) if variance > 0 else 0
+    if std == 0:
+        return 0.0
+    trades_per_year = 1825
+    return round((avg / std) * math.sqrt(trades_per_year), 2)
 
 
 def _max_drawdown(trades: list[dict], starting_capital: float) -> tuple[float, float]:
@@ -171,6 +193,7 @@ def compute_stats(trades: list[dict], starting_capital: float = 1_000.0) -> dict
     base["longest_loss_streak"] = _longest_streak(trades, "LOSS")
     base["final_equity"]        = round(starting_capital + base["pnl"], 2)
     base["total_return_pct"]    = round(base["pnl"] / starting_capital * 100, 1)
+    base["sharpe"]              = _sharpe_from_dicts(trades, starting_capital)
 
     return {
         "total":             base,

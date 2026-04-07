@@ -241,6 +241,19 @@ async def _check_live_order(
                 hit_sl = (direction == "LONG"  and price <= sl) or \
                          (direction == "SHORT" and price >= sl)
 
+                # When SL has been moved to breakeven, price can oscillate
+                # around entry before reaching TP.  Require price to actually
+                # breach the BE level by a small buffer (0.05%) to avoid
+                # closing a profitable trade on noise.
+                entry = float(trade["entry"])
+                sl_is_at_be = abs(sl - entry) / entry < 0.002 if entry > 0 else False
+                if sl_is_at_be and hit_sl and not hit_tp:
+                    # Only honour BE-stop if price actually lost money
+                    if direction == "LONG" and price > entry * 0.9995:
+                        hit_sl = False
+                    elif direction == "SHORT" and price < entry * 1.0005:
+                        hit_sl = False
+
                 if hit_tp or hit_sl:
                     outcome    = "TP" if hit_tp else "SL"
                     exit_price = tp if hit_tp else sl
@@ -675,7 +688,7 @@ async def monitor_trades(cache) -> None:
                         continue
 
                     if not _PAPER_MODE:
-                        # Move SL to breakeven once price reaches +1R
+                        # Move SL to breakeven once price reaches +2R
                         await _check_breakeven(trade, session, cache)
 
                         # Force-close if regime flipped against the trade direction
@@ -692,7 +705,9 @@ async def monitor_trades(cache) -> None:
                                 if not _PAPER_MODE:
                                     from data.binance_rest import refresh_account_balance
                                     await refresh_account_balance()
-                                pnl = _calc_net_pnl(trade, float(trade.get("entry", 0)))
+                                # Use actual market price, not entry — entry gives ~$0 PnL
+                                flip_exit = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
+                                pnl = _calc_net_pnl(trade, flip_exit)
                                 log.info(
                                     "Regime flip closed: %s %s  pnl≈%+.2f USDT",
                                     trade["direction"], trade["symbol"], pnl,

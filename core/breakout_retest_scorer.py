@@ -264,7 +264,7 @@ async def score(symbol: str, cache) -> list[dict]:
             return []
 
         entry   = flip
-        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.001)
+        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.005)  # 0.5% min floor
 
         if direction == "LONG":
             stop = entry - sl_dist
@@ -304,6 +304,7 @@ async def score(symbol: str, cache) -> list[dict]:
             "fire":      True,
             "br_stop":   round(stop, 6),
             "br_tp":     round(tp,   6),
+            "br_flip":   round(flip, 6),
         }]
 
     # ── STATE: IDLE — look for range + breakout ──────────────────────

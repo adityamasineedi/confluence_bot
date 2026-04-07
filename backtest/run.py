@@ -16,6 +16,7 @@ Usage examples:
       --capital 5000 --risk-usdt 50 --show-balance
 """
 import argparse
+import math
 import os
 import sys
 import time
@@ -87,14 +88,40 @@ def print_comparison(raw: dict, mc: dict, symbol: str, strategy: str,
 
 # -- Dollar P&L ---------------------------------------------------------------
 
+def _sharpe(trades: list, capital: float, risk_pct: float) -> float:
+    """Annualised Sharpe ratio using per-trade returns."""
+    if len(trades) < 10:
+        return 0.0
+    returns = []
+    equity = capital
+    for t in sorted(trades, key=lambda t: t.bar_idx):
+        pnl = getattr(t, "pnl_r", 0) * equity * risk_pct
+        ret = pnl / equity if equity > 0 else 0
+        returns.append(ret)
+        equity = max(equity + pnl, 1)
+    if not returns:
+        return 0.0
+    avg = sum(returns) / len(returns)
+    variance = sum((r - avg) ** 2 for r in returns) / len(returns)
+    std = math.sqrt(variance) if variance > 0 else 0
+    if std == 0:
+        return 0.0
+    # Annualise: assume ~5 trades/day = 1825 trades/year
+    trades_per_year = 1825
+    return round((avg / std) * math.sqrt(trades_per_year), 2)
+
+
 def compute_dollar_stats(trades: list,
                          capital: float,
                          risk_usdt: float = 0.0,
-                         risk_pct: float = 0.0) -> dict:
+                         risk_pct: float = 0.0,
+                         sizing_mode: str = "compound") -> dict:
     """Convert R-based trade results to dollar P&L.
 
-    If risk_pct > 0: risk compounds each trade (e.g. 1% of current equity).
-    If risk_usdt > 0: fixed dollar risk every trade.
+    sizing_mode:
+      "compound" = risk_pct of current equity (grows with wins)
+      "fixed"    = risk_pct of starting capital always (constant dollar risk)
+    If risk_usdt > 0 and risk_pct == 0: fixed dollar risk every trade.
     """
     empty = {
         "starting_capital": capital,
@@ -128,9 +155,11 @@ def compute_dollar_stats(trades: list,
     max_cw = max_cl = 0
 
     for trade in sorted(trades, key=lambda t: t.bar_idx):
-        # Compounding: risk = pct of current balance
         if risk_pct > 0:
-            current_risk = round(balance * risk_pct, 2)
+            if sizing_mode == "fixed":
+                current_risk = round(capital * risk_pct, 2)
+            else:  # "compound" — risk grows/shrinks with equity
+                current_risk = round(balance * risk_pct, 2)
         else:
             current_risk = risk_usdt
 
@@ -162,6 +191,48 @@ def compute_dollar_stats(trades: list,
     wins   = [p for p in pnls_only if p > 0]
     losses = [p for p in pnls_only if p < 0]
 
+    # ── Sharpe ratio ─────────────────────────────────────────────────
+    sharpe = _sharpe(trades, capital, risk_pct if risk_pct > 0 else
+                     (risk_usdt / capital if capital > 0 else 0.01))
+
+    # ── Monthly breakdown ────────────────────────────────────────────
+    monthly: dict[str, dict] = {}
+    eq = capital
+    sorted_trades = sorted(trades, key=lambda t: t.bar_idx)
+    for i, t in enumerate(sorted_trades):
+        ts = getattr(t, "exit_ts", 0) or getattr(t, "bar_idx", 0)
+        month_key = "unknown"
+        if ts > 1e9:  # looks like unix ms
+            dt = datetime.utcfromtimestamp(ts / 1000)
+            month_key = dt.strftime("%Y-%m")
+        pnl_d = trade_pnls[i][0] if i < len(trade_pnls) else 0.0
+        eq = max(eq + pnl_d, 1)
+        if month_key not in monthly:
+            monthly[month_key] = {"trades": 0, "pnl": 0.0, "wins": 0}
+        monthly[month_key]["trades"] += 1
+        monthly[month_key]["pnl"]    += pnl_d
+        if pnl_d > 0:
+            monthly[month_key]["wins"] += 1
+
+    monthly_list = [
+        {"month": k, "trades": v["trades"],
+         "pnl": round(v["pnl"], 2),
+         "wr": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0}
+        for k, v in sorted(monthly.items())
+    ]
+
+    # ── By regime / strategy breakdown ───────────────────────────────
+    by_regime: dict[str, dict] = {}
+    for t in trades:
+        regime = getattr(t, "strategy", "unknown")
+        if regime not in by_regime:
+            by_regime[regime] = {"trades": 0, "wins": 0, "pnl_r": 0.0}
+        by_regime[regime]["trades"] += 1
+        pnl_r = getattr(t, "pnl_r", 0)
+        by_regime[regime]["pnl_r"] += pnl_r
+        if pnl_r > 0:
+            by_regime[regime]["wins"] += 1
+
     return {
         "starting_capital": capital,
         "final_balance":    balance,
@@ -179,6 +250,10 @@ def compute_dollar_stats(trades: list,
         "max_consec_loss":  max_cl,
         "balance_history":  balance_history,
         "trade_pnls":       trade_pnls,
+        "sharpe":           sharpe,
+        "monthly":          monthly_list,
+        "by_regime":        by_regime,
+        "sizing_mode":      sizing_mode,
     }
 
 

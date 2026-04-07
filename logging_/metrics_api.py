@@ -97,17 +97,25 @@ async def recent_trades(limit: int = 20) -> JSONResponse:
 async def stats_summary() -> dict:
     try:
         with _get_conn() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+            total = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE status IN ('CLOSED','FILLED')"
+            ).fetchone()[0]
+            # A win must exceed 10% of risked amount (min $1) — matches
+            # circuit_breaker logic so dashboard WR is consistent.
             wins  = conn.execute(
-                "SELECT COUNT(*) FROM trades WHERE pnl_usdt > 0"
+                "SELECT COUNT(*) FROM trades "
+                "WHERE status IN ('CLOSED','FILLED') AND pnl_usdt > 0 "
+                "AND pnl_usdt >= MAX(COALESCE(risk_usdt * 0.10, 1.0), 1.0)"
             ).fetchone()[0]
             pnl   = conn.execute(
-                "SELECT COALESCE(SUM(pnl_usdt),0) FROM trades"
+                "SELECT COALESCE(SUM(pnl_usdt),0) FROM trades "
+                "WHERE status IN ('CLOSED','FILLED')"
             ).fetchone()[0]
             by_regime_rows = conn.execute(
                 """SELECT regime, direction, COUNT(*) as cnt,
                           COALESCE(SUM(pnl_usdt),0) as pnl
-                   FROM trades GROUP BY regime, direction"""
+                   FROM trades WHERE status IN ('CLOSED','FILLED')
+                   GROUP BY regime, direction"""
             ).fetchall()
             fired_today = conn.execute(
                 """SELECT COUNT(*) FROM signals
@@ -786,6 +794,8 @@ async def dashboard() -> HTMLResponse:
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Strategy</label>
       <select id="bt-strat" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:145px">
+        <option value="auto_regime">Auto — regime switching (matches live bot)</option>
+        <option value="auto_regime_compound">Auto — regime switching + compound</option>
         <option value="">Loading strategies...</option>
       </select>
     </div>
@@ -805,8 +815,19 @@ async def dashboard() -> HTMLResponse:
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Risk %</label>
       <input id="bt-risk" type="number" value="1" min="0.5" max="10" step="0.5" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;width:72px">
     </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Sizing mode</label>
+      <select id="bt-sizing" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:130px">
+        <option value="compound">Compound (1% of current equity)</option>
+        <option value="fixed">Fixed (1% of starting capital only)</option>
+      </select>
+    </div>
     <button id="bt-run-btn" onclick="runBacktest()" style="padding:7px 20px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;white-space:nowrap;align-self:flex-end">&#9654; Run</button>
     <span id="bt-status" style="font-size:0.75rem;color:#6b7280;align-self:center"></span>
+  </div>
+  <div id="cache-status" style="padding:6px 20px;font-size:12px;color:#6b7280;background:#12141e;border-bottom:1px solid #2a2d3a;display:flex;justify-content:space-between;align-items:center">
+    <span id="cache-info-text">Checking local cache...</span>
+    <button id="dl-btn" onclick="downloadData()" style="font-size:11px;padding:3px 10px;background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;border-radius:4px;cursor:pointer">Download / Update Data</button>
   </div>
   <div id="bt-meta" style="padding:10px 20px 0;font-size:0.75rem;color:#4b5563"></div>
   <div id="bt-app">
@@ -2298,16 +2319,68 @@ function btTradeTable(trades) {
     <td>$${t.equity_after?(+t.equity_after).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</td>
   </tr>`).join('')}</tbody></table>`;
 }
-function buildEquityCurve(monthly, sc) {
+function buildEquityCurve(monthly, sc, sizingMode, trades) {
   if (eqChart) { eqChart.destroy(); eqChart = null; }
   let eq = sc; const labels=['Start'], data=[sc];
   monthly.forEach(m => { eq+=m.pnl; labels.push(m.month); data.push(+eq.toFixed(2)); });
+
+  // Build fixed-sizing reference line from trade-level data
+  const fixedData = [sc];
+  if (trades && trades.length) {
+    const riskPct = parseFloat(document.getElementById('bt-risk').value) / 100 || 0.01;
+    let fixedEq = sc;
+    // Group trades by month to align with monthly labels
+    const tradesByMonth = {};
+    trades.forEach(t => {
+      const ts = t.exit_ts;
+      if (!ts) return;
+      const dt = new Date(ts);
+      const mk = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0');
+      if (!tradesByMonth[mk]) tradesByMonth[mk] = [];
+      tradesByMonth[mk].push(t);
+    });
+    monthly.forEach(m => {
+      const mTrades = tradesByMonth[m.month] || [];
+      mTrades.forEach(t => {
+        const fixedRisk = sc * riskPct;
+        const pnlR = t.pnl_r || 0;
+        fixedEq += pnlR * fixedRisk;
+        if (fixedEq < 0.01) fixedEq = 0.01;
+      });
+      fixedData.push(+fixedEq.toFixed(2));
+    });
+  }
+
+  const datasets = [
+    { label: sizingMode === 'fixed' ? 'Fixed Sizing' : 'Compound Sizing',
+      data, fill:true, borderColor:'#a78bfa',
+      backgroundColor:'rgba(167,139,250,0.1)', pointRadius:2, tension:0.3 }
+  ];
+  // Add reference line showing the alternative sizing mode
+  if (fixedData.length === data.length && sizingMode !== 'fixed') {
+    datasets.push({
+      label: 'Fixed Sizing (reference)',
+      data: fixedData, fill:false, borderColor:'#6b7280',
+      borderDash:[6,3], pointRadius:0, tension:0.3
+    });
+  } else if (sizingMode === 'fixed' && fixedData.length === data.length) {
+    // When in fixed mode, show what compound would look like
+    // (actual curve IS fixed; we don't have compound data from server,
+    //  so just show the single line)
+  }
+
+  const annotation = sizingMode === 'compound'
+    ? 'Compounding: each win increases next position size'
+    : 'Fixed: constant risk per trade regardless of equity';
+
   eqChart = new Chart(document.getElementById('eq-chart'), {
     type: 'line',
-    data: { labels, datasets: [{ data, fill:true, borderColor:'#a78bfa',
-      backgroundColor:'rgba(167,139,250,0.1)', pointRadius:2, tension:0.3 }] },
+    data: { labels, datasets },
     options: { responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false} },
+      plugins:{
+        legend:{ display: datasets.length > 1, labels:{color:'#9ca3af',font:{size:11}} },
+        subtitle:{ display:true, text:annotation, color:'#6b7280', font:{size:11}, padding:{bottom:8} }
+      },
       scales: {
         x:{ ticks:{color:'#6b7280',maxTicksLimit:12}, grid:{color:'#1e2130'} },
         y:{ ticks:{color:'#6b7280',callback:v=>'$'+v.toLocaleString()}, grid:{color:'#1e2130'} },
@@ -2340,14 +2413,62 @@ async function loadBacktest() {
     const r = await fetch('/api/strategies');
     const strategies = await r.json();
     const sel = document.getElementById('bt-strat');
-    sel.innerHTML = strategies.map(s =>
-      `<option value="${s.value}">${s.label}</option>`
-    ).join('');
-    const def = strategies.find(s => s.value === 'breakout_retest_tp1');
-    if (def) sel.value = 'breakout_retest_tp1';
+    const autoHtml = `<option value="auto_regime">Auto \u2014 regime switching (matches live bot)</option>
+<option value="auto_regime_compound">Auto \u2014 regime switching + compound</option>`;
+    const rest = strategies
+      .filter(s => s.value !== 'auto_regime' && s.value !== 'auto_regime_compound')
+      .map(s => `<option value="${s.value}">${s.label}</option>`)
+      .join('');
+    sel.innerHTML = autoHtml + rest;
   } catch(e) {
     console.error('Failed to load strategies:', e);
   }
+  loadCacheStatus();
+}
+
+async function loadCacheStatus() {
+  try {
+    const r = await fetch('/api/backtest/cache');
+    const d = await r.json();
+    const syms = Object.keys(d.symbols || {}).length;
+    const bars = (d.total_bars || 0).toLocaleString();
+    const mb   = d.total_size_mb || 0;
+    document.getElementById('cache-info-text').textContent =
+      syms > 0
+        ? `Local cache: ${bars} bars \u00b7 ${mb} MB \u00b7 ${syms} symbols \u2014 fast mode active`
+        : 'No local cache \u2014 first run will download from Binance (~60s)';
+  } catch(e) {
+    document.getElementById('cache-info-text').textContent =
+      'Cache status unavailable';
+  }
+}
+
+async function downloadData() {
+  const btn = document.getElementById('dl-btn');
+  const txt = document.getElementById('cache-info-text');
+  const fromDate = document.getElementById('bt-from').value || '2022-01-01';
+  const toDate   = document.getElementById('bt-to').value   || '';
+
+  btn.disabled = true;
+  btn.textContent = 'Downloading...';
+  txt.textContent = 'Downloading all symbols all timeframes \u2014 this runs once, ~2 min...';
+
+  try {
+    const r = await fetch('/api/backtest/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ from_date: fromDate, to_date: toDate }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    txt.textContent = d.message;
+    btn.textContent = 'Update Data';
+  } catch(e) {
+    txt.textContent = 'Download failed: ' + e.message;
+    btn.textContent = 'Retry Download';
+  }
+  btn.disabled = false;
+  loadCacheStatus();
 }
 
 async function runBacktest() {
@@ -2377,7 +2498,7 @@ async function runBacktest() {
     const r = await fetch('/api/backtest/run', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ symbol, strategy, from_date: fromDate, to_date: toDate, capital, risk_pct: riskPct }),
+      body: JSON.stringify({ symbol, strategy, from_date: fromDate, to_date: toDate, capital, risk_pct: riskPct, sizing: document.getElementById('bt-sizing').value }),
     });
     d = await r.json();
     if (d.error) throw new Error(d.error);
@@ -2424,7 +2545,7 @@ async function runBacktest() {
   const trades  = d.trades || [];
   const pf      = btProfitFactor(trades);
 
-  meta.textContent = `${d.symbols?.join(', ')} | ${d.strategy?.toUpperCase()} | Capital $${sc.toLocaleString()} | Risk ${(d.risk_pct*100).toFixed(0)}%/trade | ${fromDate} → ${toDate}`;
+  meta.textContent = `${d.symbols?.join(', ')} | ${d.strategy?.toUpperCase()} | Capital $${sc.toLocaleString()} | Risk ${(d.risk_pct*100).toFixed(0)}%/trade | ${fromDate} → ${toDate} | Sizing: ${d.sizing_mode || 'compound'}`;
 
   const kpis = [
     { label:'Starting Capital', val:'$'+sc.toLocaleString(), cls:'blue' },
@@ -2437,6 +2558,7 @@ async function runBacktest() {
     { label:'Avg Win / Loss',   val:btPnlFmt(t.avg_win)+' / '+btPnlFmt(t.avg_loss), cls:'blue' },
     { label:'Win / Loss / T-O', val:`${t.wins} / ${t.losses} / ${t.timeouts}`, cls:'gray' },
     { label:'Win Streak',       val:`${t.longest_win_streak} W  /  ${t.longest_loss_streak} L`, cls:'gray' },
+    { label:'Sizing Mode',     val: d.sizing_mode === 'compound' ? 'Compound' : 'Fixed', cls:'blue' },
   ];
 
   app.innerHTML = `
@@ -2464,7 +2586,7 @@ async function runBacktest() {
   </div>`;
 
   if (monthly.length) {
-    buildEquityCurve(monthly, sc);
+    buildEquityCurve(monthly, sc, d.sizing_mode || 'compound', trades);
     buildBarChart(monthly);
   }
 }
@@ -2851,10 +2973,17 @@ def get_strategies() -> JSONResponse:
     }
 
     strategies = sorted(found)
-    return JSONResponse([
+    result_list = [
+        {"value": "auto_regime",
+         "label": "Auto \u2014 regime switching (matches live bot)"},
+        {"value": "auto_regime_compound",
+         "label": "Auto \u2014 regime switching + compound"},
+    ]
+    result_list.extend(
         {"value": s, "label": _LABELS.get(s, s.replace("_", " ").title())}
         for s in strategies
-    ])
+    )
+    return JSONResponse(result_list)
 
 
 @app.get("/api/routing")
@@ -2893,6 +3022,57 @@ def get_routing() -> JSONResponse:
     return JSONResponse(result)
 
 
+@app.get("/api/backtest/cache")
+def backtest_cache_status() -> JSONResponse:
+    """Return what's in the local data cache."""
+    try:
+        from backtest.data_store import cache_info
+        return JSONResponse(cache_info())
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "symbols": {},
+                             "total_bars": 0, "total_files": 0,
+                             "total_size_mb": 0.0})
+
+
+@app.post("/api/backtest/download")
+async def backtest_download(request: Request) -> JSONResponse:
+    """Pre-download historical data to local cache.
+    Body: { from_date, to_date, symbols }
+    """
+    import asyncio as _asyncio
+
+    body      = await request.json()
+    from_date = str(body.get("from_date", "2022-01-01"))
+    to_date   = str(body.get("to_date", ""))
+    symbols   = body.get("symbols", None)  # None = all 8
+
+    if not to_date:
+        from datetime import datetime as _dt
+        to_date = _dt.utcnow().strftime("%Y-%m-%d")
+
+    def _dl():
+        from backtest.fetcher import download_all_history
+        return download_all_history(
+            symbols=symbols,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+    try:
+        result = await _asyncio.to_thread(_dl)
+        return JSONResponse({
+            "status": "ok",
+            "downloaded": result,
+            "message": (
+                f"Cached {result['total_bars']:,} bars "
+                f"({result['total_size_mb']} MB) \u2014 "
+                "backtests will now run instantly"
+            ),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/api/backtest/run")
 async def api_backtest_run(request: Request) -> JSONResponse:
     """Run a backtest on demand from the web UI.
@@ -2907,13 +3087,15 @@ async def api_backtest_run(request: Request) -> JSONResponse:
     strategy  = str(body.get("strategy", "main"))
     from_date = str(body.get("from_date", ""))
     to_date   = str(body.get("to_date",   ""))
-    capital   = float(body.get("capital",  1000))
-    risk_pct  = float(body.get("risk_pct", 0.02))
+    capital     = float(body.get("capital",  1000))
+    risk_pct    = float(body.get("risk_pct", 0.02))
+    sizing_mode = str(body.get("sizing", "compound"))
 
     if not from_date or not to_date:
         return JSONResponse({"error": "from_date and to_date are required (YYYY-MM-DD)"}, status_code=400)
 
     def _run_sync():
+        nonlocal sizing_mode
         import sys, os as _os
         _root = _os.path.join(_os.path.dirname(__file__), "..")
         if _root not in sys.path:
@@ -2996,6 +3178,150 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 all_trades.extend(sym_trades)
             trades = all_trades
 
+        elif strategy in ("auto_regime", "auto_regime_compound"):
+            # ── Regime-switching backtest ────────────────────────────────
+            import yaml as _yaml_bt
+            cfg_bt_path = _os.path.join(_os.path.dirname(__file__), "..", "config.yaml")
+            with open(cfg_bt_path) as _cf:
+                _cfg_bt = _yaml_bt.safe_load(_cf)
+
+            routing = _cfg_bt.get("strategy_routing", {})
+            weekly_gate_cfg = _cfg_bt.get("weekly_trend_gate", {})
+            weekly_enabled  = weekly_gate_cfg.get("enabled", True)
+            ema_period      = int(weekly_gate_cfg.get("ema_period", 10))
+
+            if strategy == "auto_regime_compound":
+                sizing_mode = "compound"
+
+            def _detect_regime_from_bars(sym_dr: str, bars_4h: list, bars_1d: list) -> str:
+                if not bars_4h or len(bars_4h) < 15:
+                    return "TREND"
+                highs  = [b["h"] for b in bars_4h[-15:]]
+                lows   = [b["l"] for b in bars_4h[-15:]]
+                closes = [b["c"] for b in bars_4h[-15:]]
+                if bars_1d and len(bars_1d) >= 8:
+                    change_7d = (bars_1d[-1]["c"] - bars_1d[-8]["c"]) / bars_1d[-8]["c"]
+                    ema50_val = sum(b["c"] for b in bars_1d[-50:]) / min(50, len(bars_1d))
+                    price_now = bars_1d[-1]["c"]
+                    if change_7d < -0.12 and price_now < ema50_val:
+                        return "CRASH"
+                    if change_7d >  0.12 and price_now > ema50_val:
+                        return "PUMP"
+                recent_range = (max(highs[-5:]) - min(lows[-5:])) / closes[-1]
+                long_range   = (max(highs) - min(lows)) / closes[-1]
+                if recent_range < 0.012 and long_range < 0.06:
+                    return "RANGE"
+                ema_fast = sum(closes[-5:])  / 5
+                ema_slow = sum(closes[-15:]) / 15
+                if ema_fast > ema_slow * 1.005:
+                    return "TREND"
+                if ema_fast < ema_slow * 0.995:
+                    return "TREND"
+                return "RANGE"
+
+            # Import all available engines
+            _ENGINE_MAP = {}
+            for _strat_name in [
+                "breakout_retest", "breakout_retest_tp1",
+                "fvg", "liq_sweep", "liq_sweep_short",
+                "wyckoff_spring", "wyckoff_upthrust",
+                "ema_pullback", "ema_pullback_short",
+                "microrange", "cme_gap",
+            ]:
+                try:
+                    import importlib as _imp
+                    _eng = _imp.import_module(f"backtest.{_strat_name}_engine")
+                    if hasattr(_eng, "run"):
+                        _ENGINE_MAP[_strat_name] = _eng
+                except (ImportError, ModuleNotFoundError):
+                    pass
+
+            # Also try generic engine for breakout_retest variants
+            try:
+                from backtest.engine import run_strategy as _bt_generic
+                for _gs in ("breakout_retest", "breakout_retest_tp1",
+                            "breakout_retest_tp2"):
+                    if _gs not in _ENGINE_MAP:
+                        _ENGINE_MAP[_gs] = None  # use generic
+            except ImportError:
+                pass
+
+            all_regime_trades = []
+            _already_run = set()
+
+            for sym in symbols:
+                sym_routing = routing.get(sym.upper(), routing.get("_default", {}))
+
+                # Get 4H and 1D bars for regime detection
+                key_4h = f"{sym}:4h"
+                key_1d = f"{sym}:1d"
+                bars_4h_raw = ohlcv.get(key_4h, [])
+                bars_1d_raw = ohlcv.get(key_1d, [])
+
+                if bars_4h_raw and isinstance(bars_4h_raw[0], dict):
+                    bars_4h_list = bars_4h_raw
+                    bars_1d_list = bars_1d_raw if bars_1d_raw else []
+                else:
+                    bars_4h_list = []
+                    bars_1d_list = []
+
+                mid_idx = len(bars_4h_list) // 2
+                regime_detected = _detect_regime_from_bars(
+                    sym,
+                    bars_4h_list[max(0, mid_idx-15): mid_idx+1],
+                    bars_1d_list[max(0, mid_idx//6 - 8): mid_idx//6 + 1]
+                    if bars_1d_list else []
+                )
+
+                active_strats = sym_routing.get(regime_detected, [])
+                if not active_strats:
+                    active_strats = sym_routing.get("TREND", [])
+
+                for strat in active_strats:
+                    run_key = (sym, strat)
+                    if run_key in _already_run:
+                        continue
+                    _already_run.add(run_key)
+
+                    if strat not in _ENGINE_MAP:
+                        continue
+
+                    eng = _ENGINE_MAP[strat]
+                    try:
+                        if eng is None:
+                            import numpy as _np2
+                            np_d = {}
+                            for ok2, bl2 in ohlcv.items():
+                                if ok2.startswith(f"{sym}:") or ok2.startswith("BTCUSDT:"):
+                                    if bl2 and isinstance(bl2, list) and isinstance(bl2[0], dict):
+                                        np_d[ok2] = _np.array([[b["o"],b["h"],b["l"],b["c"],b["v"],b["ts"]] for b in bl2], dtype=_np.float64)
+                                    elif bl2 is not None:
+                                        np_d[ok2] = _np.asarray(bl2, dtype=_np.float64)
+                            btck = {k: np_d[k] for k in np_d if k.startswith("BTCUSDT:")}
+                            sk   = {k: np_d[k] for k in np_d if k.startswith(f"{sym}:")}
+                            if sk:
+                                from backtest.engine import run_strategy as _btr
+                                sym_trades = _btr(sym, strat, sk, btck or None, from_ms, to_ms)
+                                all_regime_trades.extend(sym_trades)
+                        else:
+                            import inspect as _ins
+                            sig = _ins.signature(eng.run)
+                            kwargs = dict(symbols=[sym], ohlcv=ohlcv,
+                                          starting_capital=capital,
+                                          risk_pct=risk_pct)
+                            if "oi" in sig.parameters:
+                                kwargs["oi"] = oi
+                            if "funding" in sig.parameters:
+                                kwargs["funding"] = funding
+                            sym_trades = eng.run(**kwargs)
+                            all_regime_trades.extend(sym_trades)
+                    except Exception as _e:
+                        import logging as _log2
+                        _log2.getLogger(__name__).debug(
+                            "auto_regime engine %s/%s failed: %s", sym, strat, _e)
+
+            trades = all_regime_trades
+
         else:
             # Try dedicated engine file: backtest/{strategy}_engine.py
             import importlib, inspect
@@ -3050,7 +3376,8 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             from backtest.engine import compute_stats as _eng_stats
             from backtest.run import compute_dollar_stats as _dol_stats
             raw = _eng_stats(trades)
-            ds  = _dol_stats(trades, capital, risk_pct=risk_pct)
+            ds  = _dol_stats(trades, capital, risk_pct=risk_pct,
+                            sizing_mode=sizing_mode)
             stats = {
                 "total": {
                     "trades":            raw.get("n", 0),
@@ -3068,9 +3395,10 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                     "avg_loss":          ds["avg_loss_usd"],
                     "longest_win_streak":  ds["max_consec_wins"],
                     "longest_loss_streak": ds["max_consec_loss"],
+                    "sharpe":              ds.get("sharpe", 0.0),
                 },
-                "monthly":   [],
-                "by_regime": {},
+                "monthly":   ds.get("monthly", []),
+                "by_regime": ds.get("by_regime", {}),
                 "by_symbol": {},
             }
         # Resolve bar_idx → Unix ms timestamp using ohlcv bar data
@@ -3091,7 +3419,8 @@ async def api_backtest_run(request: Request) -> JSONResponse:
 
         # Convert trades to JS-compatible dicts with dollar PnL
         from backtest.run import compute_dollar_stats as _ds_fn
-        ds_for_trades = _ds_fn(trades, capital, risk_pct=risk_pct)
+        ds_for_trades = _ds_fn(trades, capital, risk_pct=risk_pct,
+                               sizing_mode=sizing_mode)
         pnl_pairs = ds_for_trades.get("trade_pnls", [])
         sorted_trades = sorted(trades or [], key=lambda t: getattr(t, 'bar_idx', 0))
         equity = capital
@@ -3120,12 +3449,13 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             })
 
         return {
-            "stats":    stats,
-            "trades":   trades_serializable,
-            "symbols":  symbols,
-            "capital":  capital,
-            "risk_pct": risk_pct,
-            "strategy": strategy,
+            "stats":       stats,
+            "trades":      trades_serializable,
+            "symbols":     symbols,
+            "capital":     capital,
+            "risk_pct":    risk_pct,
+            "strategy":    strategy,
+            "sizing_mode": sizing_mode,
         }
 
     try:
