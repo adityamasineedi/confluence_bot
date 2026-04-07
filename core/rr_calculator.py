@@ -11,7 +11,9 @@ with open(_CONFIG_PATH) as _f:
     _cfg = yaml.safe_load(_f)
 
 _RR_RATIO          = _cfg["risk"]["rr_ratio"]            # 2.5
-_RISK_PER_TRADE    = _cfg["risk"].get("risk_per_trade", 0.01)  # fallback 1% (max_risk_usdt takes priority)
+_RISK_PER_TRADE    = _cfg["risk"].get("risk_per_trade", 0.01)  # fallback 1%
+_FIXED_RISK_MODE   = bool(_cfg["risk"].get("fixed_risk_mode", False))
+_FIXED_RISK_USDT   = float(_cfg["risk"].get("fixed_risk_usdt", 50))
 _MAX_RISK_USDT     = float(_cfg["risk"].get("max_risk_usdt", 100))  # $100 hard cap
 _MAX_SIZE_USDT     = _cfg["risk"]["max_position_size_usdt"]  # 5000
 _STOP_ATR_MULT     = 1.5   # stop = entry ± ATR × multiplier
@@ -170,8 +172,13 @@ def position_size(
         log.debug("No available equity for %s (balance=%.2f committed=%.2f)", symbol, balance, committed)
         return 0.0
 
-    effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
-    risk_usdt = min(available_equity * effective_risk, _MAX_RISK_USDT)
+    if _FIXED_RISK_MODE and risk_pct is None:
+        # Fixed dollar risk — same amount every trade regardless of equity
+        risk_usdt = min(_FIXED_RISK_USDT, _MAX_RISK_USDT)
+    else:
+        # Compounding — risk percentage of available equity
+        effective_risk = risk_pct if risk_pct is not None else _RISK_PER_TRADE
+        risk_usdt = min(available_equity * effective_risk, _MAX_RISK_USDT)
     # Inflate stop distance by round-trip slippage + fees so risk_usdt is the
     # true net loss including market impact and commissions (both legs).
     _fee_pct        = 0.0005   # taker fee per side (0.05%)

@@ -22,7 +22,16 @@ MAX_HOLD  = 48       # 1H bars max — force close after 2 days
 RR        = 2.5      # reward:risk ratio
 SL_MULT   = 1.5      # stop = entry +/- ATR x SL_MULT
 MIN_SL    = 0.005    # minimum 0.5% stop distance (noise floor)
-FEE_RT    = 0.001    # 0.10% round-trip taker fee
+
+# ── Trading costs from config.yaml ───────────────────────────────────────────
+_BT_CFG       = _CFG.get("backtest", {})
+_TAKER_FEE    = float(_BT_CFG.get("taker_fee_pct", 0.0005))    # 0.05% per side
+_SLIPPAGE     = float(_BT_CFG.get("slippage_pct", 0.0002))     # 0.02% per side
+_FUNDING_8H   = float(_BT_CFG.get("funding_cost_per_8h", 0.0001))  # 0.01% per 8h
+FEE_RT        = (_TAKER_FEE + _SLIPPAGE) * 2   # round-trip: entry + exit
+SLIP_FRAC     = _SLIPPAGE                       # applied to entry/exit prices
+FUNDING_PER_BAR_1H = _FUNDING_8H / 8.0          # funding cost per 1H bar held
+FUNDING_PER_BAR_5M = _FUNDING_8H / 96.0         # funding cost per 5M bar held
 
 # numpy column indices
 O, H, L, C, V, TS = 0, 1, 2, 3, 4, 5
@@ -641,7 +650,13 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
              symbol: str, strategy: str,
              max_hold: int = MAX_HOLD,
              mc_threshold: float = 0.0) -> list[Trade]:
-    """Walk forward from each entry to find TP/SL hit. Prevents overlapping."""
+    """Walk forward from each entry to find TP/SL hit. Prevents overlapping.
+
+    Costs applied:
+      - Slippage: entry price worsened by SLIP_FRAC (market order impact)
+      - Taker fees: round-trip fee deducted from PnL (FEE_RT)
+      - Funding: FUNDING_PER_BAR_1H × hold_bars deducted from PnL
+    """
     trades, last_exit = [], -1
 
     for idx in entry_idx:
@@ -649,10 +664,16 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
         if idx <= last_exit or idx + max_hold >= len(bars):
             continue
 
-        entry   = bars[idx, C]
-        atr_val = atr_[idx]
-        if entry == 0.0 or atr_val == 0.0:
+        raw_entry = bars[idx, C]
+        atr_val   = atr_[idx]
+        if raw_entry == 0.0 or atr_val == 0.0:
             continue
+
+        # Slippage worsens entry: buy higher, sell lower
+        if direction == "LONG":
+            entry = raw_entry * (1.0 + SLIP_FRAC)
+        else:
+            entry = raw_entry * (1.0 - SLIP_FRAC)
 
         sl_dist = max(atr_val * SL_MULT, entry * MIN_SL)
 
@@ -670,6 +691,7 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
         # ─────────────────────────────────────────────────────────────────────
 
         outcome, pnl_r, exit_i = "TIMEOUT", 0.0, idx + max_hold
+        hold_bars = max_hold
 
         for j in range(1, max_hold + 1):
             bi = idx + j
@@ -678,24 +700,27 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
             bar = bars[bi]
             if direction == "LONG":
                 if bar[L] <= stop:
-                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi
+                    outcome, pnl_r, exit_i, hold_bars = "SL", -1.0, bi, j
                     break
                 if bar[H] >= tp:
-                    outcome, pnl_r, exit_i = "TP", RR - FEE_RT, bi
+                    outcome, pnl_r, exit_i, hold_bars = "TP", RR, bi, j
                     break
             else:
                 if bar[H] >= stop:
-                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi
+                    outcome, pnl_r, exit_i, hold_bars = "SL", -1.0, bi, j
                     break
                 if bar[L] <= tp:
-                    outcome, pnl_r, exit_i = "TP", RR - FEE_RT, bi
+                    outcome, pnl_r, exit_i, hold_bars = "TP", RR, bi, j
                     break
 
         if outcome == "TIMEOUT":
             ep = bars[min(idx + max_hold, len(bars) - 1), C]
-            raw = (ep - entry) / sl_dist if direction == "LONG" \
-                  else (entry - ep) / sl_dist
-            pnl_r = raw - FEE_RT
+            pnl_r = (ep - entry) / sl_dist if direction == "LONG" \
+                     else (entry - ep) / sl_dist
+
+        # Deduct fees + funding
+        funding_cost = FUNDING_PER_BAR_1H * hold_bars
+        pnl_r = pnl_r - FEE_RT - funding_cost
 
         trades.append(Trade(
             symbol, strategy, direction, idx,
@@ -715,10 +740,7 @@ def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
     """Simulate liq_sweep trades with wick-based SL.
 
     SL is placed just beyond the sweep wick — not ATR-based.
-    This is the correct SL for sweep reversal trades:
-      LONG: SL = sweep_bar.low × (1 - 0.001)   ← 0.1% below wick
-      SHORT: SL = sweep_bar.high × (1 + 0.001) ← 0.1% above wick
-    TP = entry ± |entry - SL| × rr
+    Costs: slippage on entry, round-trip fees, funding per bar held.
     """
     trades, last_exit = [], -1
 
@@ -727,9 +749,15 @@ def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
         if idx <= last_exit or idx + MAX_HOLD >= len(bars):
             continue
 
-        entry = bars[idx, C]
-        if entry == 0.0:
+        raw_entry = bars[idx, C]
+        if raw_entry == 0.0:
             continue
+
+        # Slippage worsens entry
+        if direction == "LONG":
+            entry = raw_entry * (1.0 + SLIP_FRAC)
+        else:
+            entry = raw_entry * (1.0 - SLIP_FRAC)
 
         # Wick-based SL — not ATR
         if direction == "LONG":
@@ -758,6 +786,7 @@ def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
         # ─────────────────────────────────────────────────────────────────────
 
         outcome, pnl_r, exit_i = "TIMEOUT", 0.0, idx + MAX_HOLD
+        hold_bars = MAX_HOLD
 
         for j in range(1, MAX_HOLD + 1):
             bi = idx + j
@@ -766,19 +795,23 @@ def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
             bar = bars[bi]
             if direction == "LONG":
                 if bar[L] <= stop:
-                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi; break
+                    outcome, pnl_r, exit_i, hold_bars = "SL", -1.0, bi, j; break
                 if bar[H] >= tp:
-                    outcome, pnl_r, exit_i = "TP", rr - FEE_RT, bi; break
+                    outcome, pnl_r, exit_i, hold_bars = "TP", rr, bi, j; break
             else:
                 if bar[H] >= stop:
-                    outcome, pnl_r, exit_i = "SL", -1.0 - FEE_RT, bi; break
+                    outcome, pnl_r, exit_i, hold_bars = "SL", -1.0, bi, j; break
                 if bar[L] <= tp:
-                    outcome, pnl_r, exit_i = "TP", rr - FEE_RT, bi; break
+                    outcome, pnl_r, exit_i, hold_bars = "TP", rr, bi, j; break
 
         if outcome == "TIMEOUT":
             ep    = bars[min(idx + MAX_HOLD, len(bars) - 1), C]
             pnl_r = ((ep - entry) / sl_dist if direction == "LONG"
-                     else (entry - ep) / sl_dist) - FEE_RT
+                     else (entry - ep) / sl_dist)
+
+        # Deduct fees + funding
+        funding_cost = FUNDING_PER_BAR_1H * hold_bars
+        pnl_r = pnl_r - FEE_RT - funding_cost
 
         trades.append(Trade(symbol, "liq_sweep", direction,
                             idx, entry, stop, tp, outcome, round(pnl_r, 4),
@@ -1555,27 +1588,35 @@ def run_breakout_retest(symbol, data, btc_data,
         if av <= 0:
             i += 1; continue
         sd = max(av*1.3, flip*0.001)
+        # Apply slippage to entry
         if direction == "LONG":
-            stop = flip - sd; tp = flip + sd*rr_ratio
+            entry_sl = flip * (1.0 + SLIP_FRAC)
         else:
-            stop = flip + sd; tp = flip - sd*rr_ratio
+            entry_sl = flip * (1.0 - SLIP_FRAC)
+        if direction == "LONG":
+            stop = entry_sl - sd; tp = entry_sl + sd*rr_ratio
+        else:
+            stop = entry_sl + sd; tp = entry_sl - sd*rr_ratio
         if stop <= 0 or tp <= 0:
             i += 1; continue
         fut = b5m[eb+1: eb+49]
-        outcome="TIMEOUT"; pnl=0.0; xb=eb+48
+        outcome="TIMEOUT"; pnl=0.0; xb=eb+48; hold_5m=48
         for k, f in enumerate(fut):
             if direction == "LONG":
-                if f[L] <= stop: outcome="SL"; pnl=-1.0-FEE_RT; xb=eb+1+k; break
-                if f[H] >= tp:   outcome="TP"; pnl=rr_ratio-FEE_RT; xb=eb+1+k; break
+                if f[L] <= stop: outcome="SL"; pnl=-1.0; xb=eb+1+k; hold_5m=k+1; break
+                if f[H] >= tp:   outcome="TP"; pnl=rr_ratio; xb=eb+1+k; hold_5m=k+1; break
             else:
-                if f[H] >= stop: outcome="SL"; pnl=-1.0-FEE_RT; xb=eb+1+k; break
-                if f[L] <= tp:   outcome="TP"; pnl=rr_ratio-FEE_RT; xb=eb+1+k; break
+                if f[H] >= stop: outcome="SL"; pnl=-1.0; xb=eb+1+k; hold_5m=k+1; break
+                if f[L] <= tp:   outcome="TP"; pnl=rr_ratio; xb=eb+1+k; hold_5m=k+1; break
         if outcome == "TIMEOUT":
-            lp = fut[-1,C] if len(fut) > 0 else flip
-            pnl = ((lp-flip)/sd if direction=="LONG" else (flip-lp)/sd) - FEE_RT
+            lp = fut[-1,C] if len(fut) > 0 else entry_sl
+            pnl = ((lp-entry_sl)/sd if direction=="LONG" else (entry_sl-lp)/sd)
+        # Deduct fees + funding (5M bars)
+        funding_cost = FUNDING_PER_BAR_5M * hold_5m
+        pnl = pnl - FEE_RT - funding_cost
         trades.append(Trade(symbol=symbol, strategy="breakout_retest",
                             direction=direction, bar_idx=eb,
-                            entry=flip, stop=stop, tp=tp,
+                            entry=entry_sl, stop=stop, tp=tp,
                             outcome=outcome, pnl_r=round(pnl,4)))
         last_exit = xb; i = xb + 1
     return trades

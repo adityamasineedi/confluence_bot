@@ -69,6 +69,62 @@ async def cb_reset() -> JSONResponse:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@app.post("/api/risk-mode")
+async def set_risk_mode(request: Request) -> JSONResponse:
+    """Toggle fixed vs compound risk sizing.
+    Body: { "fixed": true/false, "fixed_usdt": 50 }
+    """
+    import yaml as _yaml
+    body = await request.json()
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+
+    with open(cfg_path) as f:
+        cfg = _yaml.safe_load(f)
+
+    risk = cfg.get("risk", {})
+    if "fixed" in body:
+        risk["fixed_risk_mode"] = bool(body["fixed"])
+    if "fixed_usdt" in body:
+        risk["fixed_risk_usdt"] = float(body["fixed_usdt"])
+    cfg["risk"] = risk
+
+    with open(cfg_path, "w") as f:
+        _yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    # Hot-reload into rr_calculator
+    try:
+        import core.rr_calculator as _rr
+        _rr._FIXED_RISK_MODE = bool(risk.get("fixed_risk_mode", False))
+        _rr._FIXED_RISK_USDT = float(risk.get("fixed_risk_usdt", 50))
+    except Exception:
+        pass
+
+    mode = "fixed" if risk.get("fixed_risk_mode") else "compound"
+    amt  = risk.get("fixed_risk_usdt", 50)
+    pct  = risk.get("risk_per_trade", 0.01) * 100
+    return JSONResponse({
+        "ok": True,
+        "mode": mode,
+        "detail": f"${amt:.0f}/trade" if mode == "fixed" else f"{pct:.1f}% of equity",
+    })
+
+
+@app.get("/api/risk-mode")
+async def get_risk_mode() -> JSONResponse:
+    """Return current risk sizing mode."""
+    import yaml as _yaml
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(cfg_path) as f:
+        cfg = _yaml.safe_load(f)
+    risk = cfg.get("risk", {})
+    fixed = bool(risk.get("fixed_risk_mode", False))
+    return JSONResponse({
+        "mode": "fixed" if fixed else "compound",
+        "fixed_risk_usdt": float(risk.get("fixed_risk_usdt", 50)),
+        "risk_per_trade_pct": float(risk.get("risk_per_trade", 0.01)) * 100,
+    })
+
+
 @app.get("/signals/recent")
 async def recent_signals(limit: int = 50) -> JSONResponse:
     try:
@@ -860,6 +916,21 @@ async def dashboard() -> HTMLResponse:
       <button onclick="loadGates()" style="margin-left:12px;padding:4px 14px;background:#374151;color:#e0e0e0;border:1px solid #4b5563;border-radius:4px;cursor:pointer;font-size:0.78rem">&#8635; Refresh</button>
       <span id="gates-ts" style="margin-left:8px;color:#6b7280;font-size:0.72rem"></span>
     </p>
+    <div id="risk-mode-ctrl" style="margin-bottom:16px;padding:12px 16px;background:#12141e;border:1px solid #2a2d3a;border-radius:8px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <span style="font-size:0.82rem;color:#9ca3af;font-weight:600">Live Risk Sizing:</span>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem">
+        <input type="radio" name="risk-mode" value="compound" id="rm-compound" onchange="setRiskMode(false)">
+        <span style="color:#22c55e">Compound</span> <span style="color:#6b7280">(% of equity — grows with wins)</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem">
+        <input type="radio" name="risk-mode" value="fixed" id="rm-fixed" onchange="setRiskMode(true)">
+        <span style="color:#f59e0b">Fixed</span>
+        <span style="color:#6b7280">$</span><input type="number" id="rm-fixed-amt" value="50" min="5" step="5" style="width:65px;background:#1a1d27;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:2px 6px;font-size:0.82rem">
+        <span style="color:#6b7280">/trade</span>
+      </label>
+      <button onclick="saveRiskMode()" style="padding:4px 12px;background:#4c1d95;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.78rem">Save</button>
+      <span id="rm-status" style="font-size:0.75rem;color:#6b7280"></span>
+    </div>
     <div id="gates-list" style="display:flex;flex-direction:column;gap:6px">
       <div style="color:#6b7280;padding:40px;text-align:center">Loading gates...</div>
     </div>
@@ -1773,7 +1844,7 @@ function showTab(name, btn) {
     if (mktTimer) { clearInterval(mktTimer); mktTimer = null; }
   }
   if (name === 'backtest' && !btLoaded) { btLoaded = true; loadBacktest(); }
-  if (name === 'gates') loadGates();
+  if (name === 'gates') { loadGates(); loadRiskMode(); }
 }
 
 (function initHash() {
@@ -1784,6 +1855,42 @@ function showTab(name, btn) {
 // ── Shared helpers ────────────────────────────────────────────────────────────
 async function fetchJSON(url) { const r = await fetch(url); return r.json(); }
 function badge(cls, text) { return `<span class="badge badge-${text}">${text}</span>`; }
+
+// ── Risk mode toggle ─────────────────────────────────────────────────────────
+async function loadRiskMode() {
+  try {
+    const d = await fetchJSON('/api/risk-mode');
+    if (d.mode === 'fixed') {
+      document.getElementById('rm-fixed').checked = true;
+      document.getElementById('rm-fixed-amt').value = d.fixed_risk_usdt || 50;
+    } else {
+      document.getElementById('rm-compound').checked = true;
+    }
+  } catch(e) { console.error('loadRiskMode:', e); }
+}
+function setRiskMode(fixed) {
+  // Just toggles radio — user clicks Save to persist
+}
+async function saveRiskMode() {
+  const fixed = document.getElementById('rm-fixed').checked;
+  const amt   = parseFloat(document.getElementById('rm-fixed-amt').value) || 50;
+  const st    = document.getElementById('rm-status');
+  st.textContent = 'Saving...';
+  try {
+    const r = await fetch('/api/risk-mode', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ fixed, fixed_usdt: amt }),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Failed');
+    st.style.color = '#22c55e';
+    st.textContent = 'Saved: ' + d.detail;
+    loadGates();  // refresh gates to show new mode
+  } catch(e) {
+    st.style.color = '#ef4444';
+    st.textContent = 'Error: ' + e.message;
+  }
+}
 
 // ── Gates panel ──────────────────────────────────────────────────────────────
 async function loadGates() {
@@ -2261,7 +2368,12 @@ function toISTTime(ts) {
   if (!ts) return '—';
   return new Date(typeof ts==='number'?ts:ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 }
-function btTsDate(ms) { return toISTDate(ms); }
+function btTsDate(ms) {
+  if (!ms) return '\u2014';
+  const d = new Date(ms);
+  return d.toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',year:'numeric',month:'short',day:'2-digit'})
+    + ' ' + d.toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:false});
+}
 function btProfitFactor(trades) {
   const w = trades.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0);
   const l = Math.abs(trades.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
@@ -2874,6 +2986,27 @@ def get_gates() -> JSONResponse:
     except Exception as exc:
         gates.append({"gate": "Committed Risk", "status": "ERROR", "detail": str(exc)})
 
+    # 8b. Risk sizing mode
+    try:
+        risk_cfg = cfg.get("risk", {})
+        fixed_mode = bool(risk_cfg.get("fixed_risk_mode", False))
+        if fixed_mode:
+            fixed_amt = float(risk_cfg.get("fixed_risk_usdt", 50))
+            gates.append({
+                "gate": "Risk Sizing",
+                "status": "INFO",
+                "detail": f"FIXED ${fixed_amt:.0f}/trade (no compounding)",
+            })
+        else:
+            pct = float(risk_cfg.get("risk_per_trade", 0.01)) * 100
+            gates.append({
+                "gate": "Risk Sizing",
+                "status": "INFO",
+                "detail": f"COMPOUND {pct:.1f}% of equity/trade (grows with wins)",
+            })
+    except Exception as exc:
+        gates.append({"gate": "Risk Sizing", "status": "ERROR", "detail": str(exc)})
+
     # 9. Cache warmup
     try:
         if _cache:
@@ -3369,15 +3502,79 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                                  f"Detail: {eng_exc}"
                     }
 
+        # Resolve bar_idx → Unix ms timestamp using ohlcv bar data
+        def _bar_ts(sym: str, bar_idx: int) -> int:
+            """Return Unix ms timestamp for bar_idx, or 0 if unavailable."""
+            for tf in ("5m", "15m", "1h"):
+                bars = ohlcv.get(f"{sym}:{tf}")
+                if bars is None or not hasattr(bars, '__len__') or bar_idx >= len(bars):
+                    continue
+                try:
+                    row = bars[bar_idx]
+                    ts = row["ts"] if isinstance(row, dict) else row[5]
+                    return int(ts)
+                except (IndexError, TypeError, KeyError):
+                    continue
+            return 0
+
+        # Stamp exit_ts onto Trade objects so dollar stats can build
+        # proper monthly breakdowns (otherwise bar_idx is tiny int, not ms)
+        for _t in (trades or []):
+            if not getattr(_t, "exit_ts", 0):
+                sym_t = getattr(_t, "symbol", "")
+                idx_t = getattr(_t, "bar_idx", 0)
+                try:
+                    _t.exit_ts = _bar_ts(sym_t, idx_t)
+                except (AttributeError, TypeError):
+                    pass  # immutable object — handled in serialisation
+
         try:
             stats = compute_stats(trades, starting_capital=capital)
         except Exception:
-            # Fallback for engine Trade namedtuples (breakout_retest etc.)
+            # Fallback for engine Trade objects (breakout_retest etc.)
             from backtest.engine import compute_stats as _eng_stats
             from backtest.run import compute_dollar_stats as _dol_stats
             raw = _eng_stats(trades)
             ds  = _dol_stats(trades, capital, risk_pct=risk_pct,
                             sizing_mode=sizing_mode)
+
+            # Reformat by_regime so frontend gets wins/losses/timeouts/win_rate/pnl
+            by_regime_raw = ds.get("by_regime", {})
+            by_regime_fmt = {}
+            for rname, rdata in by_regime_raw.items():
+                n_trades = rdata.get("trades", 0)
+                n_wins   = rdata.get("wins", 0)
+                n_losses = n_trades - n_wins
+                by_regime_fmt[rname] = {
+                    "trades":   n_trades,
+                    "wins":     n_wins,
+                    "losses":   n_losses,
+                    "timeouts": 0,
+                    "win_rate": n_wins / n_trades if n_trades else 0,
+                    "pnl":      round(rdata.get("pnl_r", 0) * capital * risk_pct, 2),
+                }
+
+            # Reformat monthly so frontend gets month/pnl/trades/wins/losses/timeouts/pct/end_eq
+            monthly_raw = ds.get("monthly", [])
+            monthly_fmt = []
+            eq_run = capital
+            for m in monthly_raw:
+                m_trades = m.get("trades", 0)
+                m_wins   = m.get("wins", 0)
+                m_pnl    = m.get("pnl", 0.0)
+                eq_run  += m_pnl
+                monthly_fmt.append({
+                    "month":    m.get("month", "unknown"),
+                    "trades":   m_trades,
+                    "wins":     m_wins,
+                    "losses":   m_trades - m_wins,
+                    "timeouts": 0,
+                    "start_eq": round(eq_run - m_pnl, 2),
+                    "end_eq":   round(eq_run, 2),
+                    "pnl":      round(m_pnl, 2),
+                    "pct":      round(m_pnl / max(eq_run - m_pnl, 1) * 100, 2),
+                })
+
             stats = {
                 "total": {
                     "trades":            raw.get("n", 0),
@@ -3397,25 +3594,10 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                     "longest_loss_streak": ds["max_consec_loss"],
                     "sharpe":              ds.get("sharpe", 0.0),
                 },
-                "monthly":   ds.get("monthly", []),
-                "by_regime": ds.get("by_regime", {}),
+                "monthly":   monthly_fmt,
+                "by_regime": by_regime_fmt,
                 "by_symbol": {},
             }
-        # Resolve bar_idx → Unix ms timestamp using ohlcv bar data
-        def _bar_ts(sym: str, bar_idx: int) -> int:
-            """Return Unix ms timestamp for bar_idx, or 0 if unavailable."""
-            for tf in ("5m", "15m", "1h"):
-                bars = ohlcv.get(f"{sym}:{tf}")
-                if bars is None or not hasattr(bars, '__len__') or bar_idx >= len(bars):
-                    continue
-                try:
-                    row = bars[bar_idx]
-                    # numpy array: row[5]; dict: row["ts"]
-                    ts = row["ts"] if isinstance(row, dict) else row[5]
-                    return int(ts)
-                except (IndexError, TypeError, KeyError):
-                    continue
-            return 0
 
         # Convert trades to JS-compatible dicts with dollar PnL
         from backtest.run import compute_dollar_stats as _ds_fn

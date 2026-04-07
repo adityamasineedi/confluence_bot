@@ -136,6 +136,8 @@ weights:
 # ── Risk management ──────────────────────────────────────────────────────────
 risk:
   risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
+  fixed_risk_mode: true            # true = always risk fixed_risk_usdt; false = compound (% of equity)
+  fixed_risk_usdt: 50              # flat dollar risk per trade when fixed_risk_mode: true
   max_risk_usdt: 5000              # high cap so compounding is never blocked
   max_position_size_usdt: 4000     # keep notional within demo account margin (bal×lev×0.85)
   max_open_positions: 5
