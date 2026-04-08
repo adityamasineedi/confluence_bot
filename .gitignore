@@ -81,3 +81,13 @@ tmp/
 *.tmp
 *.bak
 *.orig
+
+# ── WAL / SHM (SQLite runtime files) ────────────────────────
+*.db-wal
+*.db-shm
+
+# ── Windows batch scripts (machine-specific paths) ──────────
+start_bot.bat
+
+# ── Verification scripts (dev tools, not production) ─────────
+verify_*.py
