@@ -2428,16 +2428,49 @@ function btProfitFactor(trades) {
   const l = Math.abs(trades.filter(t=>t.pnl<0).reduce((s,t)=>s+t.pnl,0));
   return l===0 ? 'inf' : (w/l).toFixed(2);
 }
-function btBucketTable(data) {
-  const rows = Object.entries(data).sort();
+function btBucketTable(data, sortByPnl) {
+  let rows = Object.entries(data);
   if (!rows.length) return '<p style="color:#4b5563;padding:10px">no data</p>';
-  return `<table>
-    <thead><tr><th>Name</th><th>Trades</th><th>W/L/T</th><th>WR</th><th>PnL</th></tr></thead>
-    <tbody>${rows.map(([name,b])=>`<tr>
-      <td>${name}</td><td>${b.trades}</td><td>${b.wins}/${b.losses}/${b.timeouts}</td>
-      <td class="${b.win_rate>=0.4?'pos':'neg'}">${(b.win_rate*100).toFixed(1)}%</td>
-      <td class="${btPnlCls(b.pnl)}">${btPnlFmt(b.pnl)}</td>
-    </tr>`).join('')}</tbody></table>`;
+  if (sortByPnl) rows.sort((a,b) => b[1].pnl - a[1].pnl);
+  else rows.sort();
+  const totalPnl = rows.reduce((s,[,b])=>s+b.pnl,0);
+  const totalTrades = rows.reduce((s,[,b])=>s+b.trades,0);
+  return `<table style="font-size:0.82rem">
+    <thead><tr>
+      <th style="text-align:left">Name</th>
+      <th style="text-align:right">Trades</th>
+      <th style="text-align:center">W / L</th>
+      <th style="text-align:right">Win Rate</th>
+      <th style="text-align:right">PnL</th>
+      <th style="text-align:right">% of Total</th>
+    </tr></thead>
+    <tbody>${rows.map(([name,b])=>{
+      const wr = b.trades ? (b.win_rate*100).toFixed(1) : '0.0';
+      const pctOfTotal = totalPnl ? (b.pnl/totalPnl*100).toFixed(0) : '0';
+      const barW = Math.min(Math.abs(b.pnl/Math.max(Math.abs(totalPnl),1)*100), 100);
+      const barCol = b.pnl >= 0 ? '#22c55e' : '#ef4444';
+      return `<tr>
+        <td style="font-weight:600">${name.replace('USDT','')}</td>
+        <td style="text-align:right">${b.trades}</td>
+        <td style="text-align:center"><span style="color:#22c55e">${b.wins}</span> / <span style="color:#ef4444">${b.losses}</span></td>
+        <td style="text-align:right" class="${b.win_rate>=0.5?'pos':b.win_rate>=0.4?'':'neg'}">${wr}%</td>
+        <td style="text-align:right;font-weight:700" class="${btPnlCls(b.pnl)}">${btPnlFmt(b.pnl)}</td>
+        <td style="text-align:right">
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px">
+            <div style="width:${barW}px;height:8px;background:${barCol};border-radius:2px;min-width:2px"></div>
+            <span style="color:#6b7280;font-size:0.72rem">${pctOfTotal}%</span>
+          </div>
+        </td>
+      </tr>`;
+    }).join('')}
+    <tr style="border-top:2px solid #2a2d3a;font-weight:700">
+      <td>TOTAL</td>
+      <td style="text-align:right">${totalTrades}</td>
+      <td></td><td></td>
+      <td style="text-align:right" class="${btPnlCls(totalPnl)}">${btPnlFmt(totalPnl)}</td>
+      <td style="text-align:right;color:#6b7280">100%</td>
+    </tr>
+    </tbody></table>`;
 }
 function btMonthlyTable(monthly, sc) {
   const annuals = {};
@@ -2466,43 +2499,53 @@ function btMonthlyTable(monthly, sc) {
     <th>PnL</th><th>Equity</th><th>Return%</th></tr></thead>
     <tbody>${monthRows}${annualRows}</tbody></table>`;
 }
-// ── Paginated trade table with filters ──────────────────────────────────────
+// ── Trade History with filters + pagination ─────────────────────────────────
 let _btAllTrades = [];
 let _btPage = 1;
-const _btPerPage = 50;
+const _btPerPage = 25;
 let _btFilterSym = '';
 let _btFilterDir = '';
 let _btFilterOut = '';
+let _btFilterReg = '';
 
 function btTradeTable(trades) {
   _btAllTrades = trades;
   _btPage = 1;
-  return btTradeControls() + btTradeRender();
-}
+  _btFilterSym = _btFilterDir = _btFilterOut = _btFilterReg = '';
 
-function btTradeControls() {
-  const syms = [...new Set(_btAllTrades.map(t=>t.symbol))].sort();
-  const regimes = [...new Set(_btAllTrades.map(t=>t.regime))].sort();
-  return `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
-    <select id="bt-filter-sym" onchange="_btFilterSym=this.value;_btPage=1;btRefreshTable()" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem">
-      <option value="">All Symbols</option>${syms.map(s=>`<option value="${s}">${s}</option>`).join('')}
+  // Summary stats for filtered view
+  const wins = trades.filter(t=>t.pnl>0&&t.outcome!=='CB_SKIP').length;
+  const losses = trades.filter(t=>t.pnl<0).length;
+  const skipped = trades.filter(t=>t.outcome==='CB_SKIP').length;
+  const totalPnl = trades.reduce((s,t)=>s+t.pnl,0);
+
+  const syms = [...new Set(trades.map(t=>t.symbol))].sort();
+  const strats = [...new Set(trades.map(t=>t.regime))].sort();
+  const selStyle = 'background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:5px 8px;font-size:0.8rem;cursor:pointer';
+
+  return `
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 0;border-bottom:1px solid #1e2130">
+    <span style="color:#6b7280;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Filter:</span>
+    <select id="bt-filter-sym" onchange="_btFilterSym=this.value;_btPage=1;btRefreshTable()" style="${selStyle}">
+      <option value="">All Coins (${syms.length})</option>${syms.map(s=>`<option value="${s}">${s.replace('USDT','')}</option>`).join('')}
     </select>
-    <select id="bt-filter-dir" onchange="_btFilterDir=this.value;_btPage=1;btRefreshTable()" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem">
-      <option value="">All Directions</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option>
+    <select id="bt-filter-dir" onchange="_btFilterDir=this.value;_btPage=1;btRefreshTable()" style="${selStyle}">
+      <option value="">Both Dirs</option><option value="LONG">LONG</option><option value="SHORT">SHORT</option>
     </select>
-    <select id="bt-filter-out" onchange="_btFilterOut=this.value;_btPage=1;btRefreshTable()" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem">
-      <option value="">All Outcomes</option><option value="TP">TP</option><option value="SL">SL</option><option value="TIMEOUT">TIMEOUT</option><option value="CB_SKIP">CB_SKIP</option>
+    <select id="bt-filter-out" onchange="_btFilterOut=this.value;_btPage=1;btRefreshTable()" style="${selStyle}">
+      <option value="">All Results</option><option value="TP">TP (Win)</option><option value="SL">SL (Loss)</option><option value="TIMEOUT">Timeout</option><option value="CB_SKIP">CB Skip</option>
     </select>
-    <select id="bt-filter-regime" onchange="_btFilterReg=this.value;_btPage=1;btRefreshTable()" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem">
-      <option value="">All Strategies</option>${regimes.map(r=>`<option value="${r}">${r}</option>`).join('')}
+    <select id="bt-filter-regime" onchange="_btFilterReg=this.value;_btPage=1;btRefreshTable()" style="${selStyle}">
+      <option value="">All Strategies</option>${strats.map(r=>`<option value="${r}">${r}</option>`).join('')}
     </select>
-    <span id="bt-trade-info" style="color:#6b7280;font-size:0.75rem"></span>
-    <button onclick="btExportCSV()" style="margin-left:auto;padding:3px 10px;background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;border-radius:4px;cursor:pointer;font-size:0.75rem">Export CSV</button>
+    <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+      <span id="bt-trade-info" style="color:#6b7280;font-size:0.78rem"></span>
+      <button onclick="btExportCSV()" style="padding:5px 12px;background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;border-radius:4px;cursor:pointer;font-size:0.78rem">Export CSV</button>
+    </div>
   </div>
   <div id="bt-trade-body"></div>
-  <div id="bt-trade-pagination" style="display:flex;gap:6px;justify-content:center;margin-top:10px"></div>`;
+  <div id="bt-trade-pagination" style="display:flex;gap:6px;justify-content:center;padding:12px 0"></div>`;
 }
-let _btFilterReg = '';
 
 function btGetFiltered() {
   return _btAllTrades.filter(t =>
@@ -2517,7 +2560,8 @@ function btRefreshTable() {
   const el = document.getElementById('bt-trade-body');
   if (!el) return;
   el.innerHTML = btTradeRender();
-  document.getElementById('bt-trade-pagination').innerHTML = btPagination();
+  const pgEl = document.getElementById('bt-trade-pagination');
+  if (pgEl) pgEl.innerHTML = btPagination();
 }
 
 function btTradeRender() {
@@ -2525,61 +2569,88 @@ function btTradeRender() {
   const total = filtered.length;
   const pages = Math.ceil(total / _btPerPage);
   if (_btPage > pages) _btPage = pages || 1;
-  const start = (total) - (_btPage * _btPerPage);
+  const start = total - (_btPage * _btPerPage);
   const end = start + _btPerPage;
   const page = filtered.slice(Math.max(start, 0), end).reverse();
 
+  // Filter stats
+  const fWins = filtered.filter(t=>t.pnl>0&&t.outcome!=='CB_SKIP').length;
+  const fLoss = filtered.filter(t=>t.pnl<0).length;
+  const fSkip = filtered.filter(t=>t.outcome==='CB_SKIP').length;
+  const fPnl  = filtered.reduce((s,t)=>s+t.pnl,0);
   const info = document.getElementById('bt-trade-info');
-  if (info) info.textContent = `Showing ${page.length} of ${total} trades (page ${_btPage}/${pages || 1})`;
+  if (info) info.innerHTML = `<span style="color:#22c55e">${fWins}W</span> / <span style="color:#ef4444">${fLoss}L</span>`
+    + (fSkip?` / <span style="color:#6b7280">${fSkip} skip</span>`:'')
+    + ` | PnL <span style="color:${fPnl>=0?'#22c55e':'#ef4444'}">${fPnl>=0?'+':''}$${fPnl.toFixed(2)}</span>`
+    + ` | Page ${_btPage}/${pages||1}`;
 
-  if (!page.length) return '<p style="color:#4b5563;padding:10px">No trades match filters.</p>';
+  if (!page.length) return '<p style="color:#4b5563;padding:20px;text-align:center">No trades match filters.</p>';
 
-  return `<div style="overflow-x:auto"><table><thead><tr>
-    <th>Date</th><th>Symbol</th><th>Dir</th><th>Strategy</th>
-    <th>Qty</th><th>Entry</th><th>Exit</th><th>Notional</th>
-    <th>Risk$</th><th>Outcome</th><th>PnL</th>
-    <th>Taker Fee</th><th>Funding</th><th>Equity</th>
-  </tr></thead><tbody>${page.map(t=>`<tr style="${t.outcome==='CB_SKIP'?'opacity:0.4':''}">
-    <td style="white-space:nowrap">${btTsDate(t.exit_ts)}</td><td>${t.symbol}</td>
-    <td style="color:${t.direction==='LONG'?'#22c55e':'#ef4444'}">${t.direction}</td>
-    <td>${t.regime}</td>
-    <td>${t.qty?(+t.qty).toFixed(4):'\u2014'}</td>
-    <td>${t.entry?(+t.entry).toFixed(2):'\u2014'}</td>
-    <td>${t.exit_price?(+t.exit_price).toFixed(2):'\u2014'}</td>
-    <td>$${t.notional?(+t.notional).toFixed(0):'\u2014'}</td>
-    <td>$${(+t.risk_amount).toFixed(2)}</td>
-    <td><span class="badge badge-${t.outcome}">${t.outcome}</span></td>
-    <td class="${btPnlCls(t.pnl)}">${btPnlFmt(t.pnl)}</td>
-    <td style="color:#6b7280">$${t.taker_fee?(+t.taker_fee).toFixed(3):'\u2014'}</td>
-    <td style="color:#6b7280">$${t.funding_fee?(+t.funding_fee).toFixed(4):'\u2014'}</td>
-    <td>$${t.equity_after?(+t.equity_after).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'\u2014'}</td>
-  </tr>`).join('')}</tbody></table></div>`;
+  return `<div style="overflow-x:auto"><table style="font-size:0.82rem">
+  <thead><tr style="background:#12141e;position:sticky;top:0">
+    <th style="min-width:120px">Date</th>
+    <th>Coin</th>
+    <th>Side</th>
+    <th>Entry</th>
+    <th>Exit</th>
+    <th style="text-align:right">Size</th>
+    <th style="text-align:right">Risk</th>
+    <th style="text-align:center">Result</th>
+    <th style="text-align:right">PnL</th>
+    <th style="text-align:right">Fees</th>
+    <th style="text-align:right">Equity</th>
+  </tr></thead>
+  <tbody>${page.map(t=>{
+    const isSkip = t.outcome==='CB_SKIP';
+    const rowStyle = isSkip ? 'opacity:0.35' : '';
+    const sideCls = t.direction==='LONG' ? 'color:#22c55e' : 'color:#ef4444';
+    const fees = ((+t.taker_fee||0)+(+t.funding_fee||0)).toFixed(3);
+    return `<tr style="${rowStyle}">
+      <td style="white-space:nowrap;color:#9ca3af">${btTsDate(t.exit_ts)}</td>
+      <td style="font-weight:600">${t.symbol.replace('USDT','')}</td>
+      <td style="${sideCls};font-weight:600">${t.direction}</td>
+      <td style="font-family:monospace">${t.entry?(+t.entry).toFixed(t.entry<1?4:t.entry<100?2:1):'\u2014'}</td>
+      <td style="font-family:monospace">${t.exit_price?(+t.exit_price).toFixed(t.exit_price<1?4:t.exit_price<100?2:1):'\u2014'}</td>
+      <td style="text-align:right;color:#6b7280">${t.notional?'$'+(+t.notional).toFixed(0):'\u2014'}</td>
+      <td style="text-align:right">${t.risk_amount?'$'+(+t.risk_amount).toFixed(2):'\u2014'}</td>
+      <td style="text-align:center"><span class="badge badge-${t.outcome}" style="font-size:0.72rem">${t.outcome}</span></td>
+      <td style="text-align:right;font-weight:700" class="${btPnlCls(t.pnl)}">${btPnlFmt(t.pnl)}</td>
+      <td style="text-align:right;color:#4b5563;font-size:0.75rem">$${fees}</td>
+      <td style="text-align:right;color:#9ca3af">$${t.equity_after?(+t.equity_after).toLocaleString('en',{maximumFractionDigits:0}):'\u2014'}</td>
+    </tr>`;
+  }).join('')}</tbody></table></div>`;
 }
 
 function btPagination() {
   const filtered = btGetFiltered();
   const pages = Math.ceil(filtered.length / _btPerPage);
   if (pages <= 1) return '';
+  const btnBase = 'padding:6px 12px;border-radius:4px;cursor:pointer;font-size:0.8rem;border:1px solid #2a2d3a;';
   let html = '';
-  const btnStyle = 'padding:4px 10px;border-radius:4px;cursor:pointer;font-size:0.75rem;border:1px solid #2a2d3a;';
-  if (_btPage > 1) html += `<button onclick="_btPage--;btRefreshTable()" style="${btnStyle}background:#1a1d27;color:#e0e0e0">&laquo; Prev</button>`;
-  // Show page numbers (max 7 around current)
+  if (_btPage > 1)
+    html += `<button onclick="_btPage=1;btRefreshTable()" style="${btnBase}background:#1a1d27;color:#6b7280">First</button>`;
+  if (_btPage > 1)
+    html += `<button onclick="_btPage--;btRefreshTable()" style="${btnBase}background:#1a1d27;color:#e0e0e0">&laquo; Prev</button>`;
   const startP = Math.max(1, _btPage - 3);
   const endP = Math.min(pages, _btPage + 3);
   for (let p = startP; p <= endP; p++) {
     const active = p === _btPage;
-    html += `<button onclick="_btPage=${p};btRefreshTable()" style="${btnStyle}${active?'background:#4c1d95;color:#fff':'background:#1a1d27;color:#6b7280'}">${p}</button>`;
+    html += `<button onclick="_btPage=${p};btRefreshTable()" style="${btnBase}${active?'background:#4c1d95;color:#fff;font-weight:700':'background:#1a1d27;color:#6b7280'}">${p}</button>`;
   }
-  if (_btPage < pages) html += `<button onclick="_btPage++;btRefreshTable()" style="${btnStyle}background:#1a1d27;color:#e0e0e0">Next &raquo;</button>`;
+  if (_btPage < pages)
+    html += `<button onclick="_btPage++;btRefreshTable()" style="${btnBase}background:#1a1d27;color:#e0e0e0">Next &raquo;</button>`;
+  if (_btPage < pages)
+    html += `<button onclick="_btPage=${pages};btRefreshTable()" style="${btnBase}background:#1a1d27;color:#6b7280">Last</button>`;
   return html;
 }
 
 function btExportCSV() {
   const filtered = btGetFiltered();
-  const header = 'Date,Symbol,Direction,Strategy,Qty,Entry,Exit,Notional,Risk,Outcome,PnL,Taker_Fee,Funding_Fee,Equity\\n';
-  const rows = filtered.map(t =>
-    `${btTsDate(t.exit_ts)},${t.symbol},${t.direction},${t.regime},${(+t.qty||0).toFixed(4)},${(+t.entry||0).toFixed(4)},${(+t.exit_price||0).toFixed(4)},${(+t.notional||0).toFixed(2)},${(+t.risk_amount).toFixed(2)},${t.outcome},${(+t.pnl).toFixed(2)},${(+t.taker_fee||0).toFixed(4)},${(+t.funding_fee||0).toFixed(4)},${t.equity_after||''}`
-  ).join('\\n');
+  const header = 'Date,Symbol,Direction,Strategy,Qty,Entry,Exit,Notional,Risk,Outcome,PnL,Fees,Equity\\n';
+  const rows = filtered.map(t => {
+    const fees = ((+t.taker_fee||0)+(+t.funding_fee||0)).toFixed(4);
+    return `${btTsDate(t.exit_ts)},${t.symbol},${t.direction},${t.regime},${(+t.qty||0).toFixed(4)},${(+t.entry||0).toFixed(6)},${(+t.exit_price||0).toFixed(6)},${(+t.notional||0).toFixed(2)},${(+t.risk_amount).toFixed(2)},${t.outcome},${(+t.pnl).toFixed(2)},${fees},${t.equity_after||''}`;
+  }).join('\\n');
   const blob = new Blob([header + rows], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -2840,8 +2911,8 @@ async function runBacktest() {
       <div class="chart-wrap"><canvas id="bar-chart"></canvas></div></div>
   </div>` : ''}
   <div class="two-col">
-    ${Object.keys(byReg).length ? `<div class="bt-panel"><h2>By Regime</h2>${btBucketTable(byReg)}</div>` : ''}
-    ${Object.keys(bySym).length ? `<div class="bt-panel"><h2>By Symbol</h2>${btBucketTable(bySym)}</div>` : ''}
+    ${Object.keys(byReg).length ? `<div class="bt-panel"><h2>By Strategy</h2>${btBucketTable(byReg, true)}</div>` : ''}
+    ${Object.keys(bySym).length ? `<div class="bt-panel"><h2>By Coin</h2>${btBucketTable(bySym, true)}</div>` : ''}
   </div>
   ${monthly.length ? `
   <div class="full">
@@ -3639,7 +3710,12 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 try:
                     _t.exit_ts = _bar_ts(sym_t, idx_t)
                 except (AttributeError, TypeError):
-                    pass  # immutable object — handled in serialisation
+                    pass
+
+        # Filter out trades outside the requested date range
+        # (warmup period can produce trades before from_date)
+        trades = [t for t in (trades or [])
+                  if from_ms <= getattr(t, "exit_ts", from_ms) <= to_ms]
 
         try:
             stats = compute_stats(trades, starting_capital=capital)
@@ -3665,6 +3741,30 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                     "timeouts": 0,
                     "win_rate": n_wins / n_trades if n_trades else 0,
                     "pnl":      round(rdata.get("pnl_usd", 0), 2),
+                }
+
+            # Build by_symbol breakdown from trade-level data
+            _by_sym_raw: dict = {}
+            for _ti, _t in enumerate(sorted(trades, key=lambda x: getattr(x, 'bar_idx', 0))):
+                _sym = getattr(_t, "symbol", "unknown")
+                if _sym not in _by_sym_raw:
+                    _by_sym_raw[_sym] = {"trades": 0, "wins": 0, "pnl_usd": 0.0}
+                _by_sym_raw[_sym]["trades"] += 1
+                _pnl_d = ds.get("trade_pnls", [])[_ti][0] if _ti < len(ds.get("trade_pnls", [])) else 0
+                _by_sym_raw[_sym]["pnl_usd"] += _pnl_d
+                if _pnl_d > 0:
+                    _by_sym_raw[_sym]["wins"] += 1
+            _by_symbol_fmt = {}
+            for _sn, _sd in _by_sym_raw.items():
+                _sn_trades = _sd["trades"]
+                _sn_wins   = _sd["wins"]
+                _by_symbol_fmt[_sn] = {
+                    "trades":   _sn_trades,
+                    "wins":     _sn_wins,
+                    "losses":   _sn_trades - _sn_wins,
+                    "timeouts": 0,
+                    "win_rate": _sn_wins / _sn_trades if _sn_trades else 0,
+                    "pnl":      round(_sd["pnl_usd"], 2),
                 }
 
             # Reformat monthly so frontend gets month/pnl/trades/wins/losses/timeouts/pct/end_eq
@@ -3709,7 +3809,7 @@ async def api_backtest_run(request: Request) -> JSONResponse:
                 },
                 "monthly":   monthly_fmt,
                 "by_regime": by_regime_fmt,
-                "by_symbol": {},
+                "by_symbol": _by_symbol_fmt,
             }
 
         # Convert trades to JS-compatible dicts with dollar PnL

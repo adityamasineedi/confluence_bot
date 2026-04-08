@@ -1541,6 +1541,20 @@ def run_breakout_retest(symbol, data, btc_data,
     _max_bt   = int(_br_cfg.get("max_boundary_touches", 2))
     _bk_conf  = bool(_br_cfg.get("require_breakout_confirm", True))
     _min_body = float(_br_cfg.get("min_retest_body_ratio", 0.40))
+    _crash_pct    = float(_br_cfg.get("crash_cooldown_pct", 1.5)) / 100
+    _crash_hours  = int(_br_cfg.get("crash_cooldown_hours", 4))
+    _max_ent_30m  = int(_br_cfg.get("max_entries_per_30min", 2))
+    _btc_confirm  = bool(_br_cfg.get("btc_confirm_for_alts", True))
+    _choppy_mult  = float(_br_cfg.get("choppy_atr_mult", 2.0))
+    # Live-matching features
+    _risk_cfg     = _CFG.get("risk", {})
+    _max_open     = int(_risk_cfg.get("max_open_positions", 5))
+    _max_same_dir = int(_risk_cfg.get("max_same_direction_positions", 3))
+    _cooldown_ms  = float(_br_cfg.get("cooldown_mins", 15)) * 60 * 1000  # ms
+    _max_day_trades = int(_br_cfg.get("max_trades_per_day", 6))
+    _be_trigger_r = float(_risk_cfg.get("breakeven_trigger_r", 2.0))
+    _be_disabled  = set(s.lower() for s in _risk_cfg.get("breakeven_disabled_strategies", []))
+    _be_active    = "breakout_retest" not in _be_disabled
     n = len(b5m)
     pm = (b5m[:, TS] >= from_ts) & (b5m[:, TS] <= to_ts)
     wm = np.zeros(n, bool); wm[WARMUP:] = True
@@ -1558,6 +1572,28 @@ def run_breakout_retest(symbol, data, btc_data,
                 hbear[idx] = b1h[j, C] < e20[j]
     vm5 = vol_ma(b5m, 20)
     at5 = atr(b5m)
+    # Pre-compute 1H ATR for choppy gate (Fix 4)
+    at1h = atr(b1h) if b1h is not None and len(b1h) > 25 else None
+    at1h_arr = None
+    if b1h is not None and len(b1h) > 25:
+        at1h_arr = np.zeros(len(b1h))
+        for _ai in range(14, len(b1h)):
+            _trs = [max(b1h[_aj,H]-b1h[_aj,L], abs(b1h[_aj,H]-b1h[_aj-1,C]),
+                        abs(b1h[_aj,L]-b1h[_aj-1,C])) for _aj in range(_ai-13, _ai+1)]
+            at1h_arr[_ai] = sum(_trs) / 14
+    # Pre-compute BTC 1H candle changes for crash gate (Fix 1)
+    btc_1h_changes = None
+    if b1h is not None and len(b1h) > 1:
+        btc_1h_changes = np.zeros(len(b1h))
+        for _ci in range(len(b1h)):
+            if b1h[_ci, O] > 0:
+                btc_1h_changes[_ci] = (b1h[_ci, C] - b1h[_ci, O]) / b1h[_ci, O]
+    # Anti-correlation tracker (Fix 2): recent entry timestamps
+    _recent_dir_ts: list[tuple[float, str]] = []
+    # Live-matching state
+    _open_positions: list[dict] = []  # [{sym, dir, entry, stop, tp, entry_ts, be_moved}]
+    _cooldown_until: dict[str, float] = {}  # symbol -> ts_ms when cooldown expires
+    _day_trade_count: dict[str, tuple[str, int]] = {}  # symbol -> (date_str, count)
     trades = []; last_exit = -1
     i = WARMUP
     while i < n - 10:
@@ -1565,12 +1601,67 @@ def run_breakout_retest(symbol, data, btc_data,
             i += 1; continue
         if 14 <= _utc_hour(int(b5m[i, TS])) < 15:
             i += 1; continue
+        cur_ts_ms = float(b5m[i, TS])
+        cur_date = str(int(cur_ts_ms // 86_400_000))  # day key
+
+        # ── Live-match: close positions that have reached their exit bar ──
+        _open_positions = [p for p in _open_positions if p["close_bar"] > i]
+
+        # ── Live-match: max open positions gate ──
+        if len(_open_positions) >= _max_open:
+            i += 1; continue
+
+        # ── Live-match: cooldown gate ──
+        if symbol in _cooldown_until and cur_ts_ms < _cooldown_until[symbol]:
+            i += 1; continue
+
+        # ── Live-match: daily trade cap ──
+        _dtc = _day_trade_count.get(symbol, ("", 0))
+        if _dtc[0] == cur_date and _dtc[1] >= _max_day_trades:
+            i += 1; continue
+        # Fix 4: Choppy market gate
+        if at1h_arr is not None and b1h is not None:
+            j1h = int(np.searchsorted(b1h[:, TS], int(b5m[i, TS]), side='right')) - 1
+            if 25 <= j1h < len(at1h_arr) and at1h_arr[j1h] > 0:
+                avg_24 = np.mean(at1h_arr[max(0,j1h-24):j1h])
+                if avg_24 > 0 and at1h_arr[j1h] > avg_24 * _choppy_mult:
+                    i += 1; continue
         ok, rh, rl = _detect_range(b5m, i, max_boundary_touches=_max_bt)
         if not ok:
             i += 1; continue
         vm = float(vm5[i]) if i < len(vm5) else 0.0
-        bl = _is_breakout_long(b5m[i],  rh, 1.25, vm) and valid[i] and wk_l[i] and hbull[i]
-        bs = _is_breakout_short(b5m[i], rl, 1.25, vm) and valid[i] and wk_s[i] and hbear[i]
+        # ── Live-match: max same direction gate ──
+        _long_count = sum(1 for p in _open_positions if p["dir"] == "LONG")
+        _short_count = sum(1 for p in _open_positions if p["dir"] == "SHORT")
+        _allow_long_dir = _long_count < _max_same_dir
+        _allow_short_dir = _short_count < _max_same_dir
+        bl = _allow_long_dir and _is_breakout_long(b5m[i],  rh, 1.25, vm) and valid[i] and wk_l[i] and hbull[i]
+        bs = _allow_short_dir and _is_breakout_short(b5m[i], rl, 1.25, vm) and valid[i] and wk_s[i] and hbear[i]
+        # Fix 1: Post-crash cooldown — block LONGs after BTC 1H crash
+        if bl and btc_1h_changes is not None and b1h is not None:
+            j1h = int(np.searchsorted(b1h[:, TS], int(b5m[i, TS]), side='right')) - 1
+            if j1h >= _crash_hours:
+                for _ch in range(j1h - _crash_hours, j1h + 1):
+                    if 0 <= _ch < len(btc_1h_changes) and btc_1h_changes[_ch] < -_crash_pct:
+                        bl = False; break
+        # Fix 3: BTC must confirm LONG direction for alt coins (not SHORT)
+        if _btc_confirm and symbol != "BTCUSDT" and bl and b5m is not None:
+            btc_5m = btc_data.get("BTCUSDT:5m") if btc_data else None
+            if btc_5m is not None and len(btc_5m) > 10:
+                bi_btc = int(np.searchsorted(btc_5m[:, TS], int(b5m[i, TS]), side='right')) - 1
+                if bi_btc >= 10:
+                    btc_recent = btc_5m[bi_btc-9:bi_btc+1]
+                    btc_mid = (btc_recent[:, H].max() + btc_recent[:, L].min()) / 2
+                    if btc_5m[bi_btc, C] < btc_mid:
+                        bl = False
+        # Fix 2: Anti-correlation — max entries in same direction per 30 min
+        cur_ts = float(b5m[i, TS])
+        cutoff = cur_ts - 1_800_000  # 30 min in ms
+        _recent_dir_ts[:] = [(t, d) for t, d in _recent_dir_ts if t > cutoff]
+        if bl and sum(1 for _, d in _recent_dir_ts if d == "LONG") >= _max_ent_30m:
+            bl = False
+        if bs and sum(1 for _, d in _recent_dir_ts if d == "SHORT") >= _max_ent_30m:
+            bs = False
         # Exhaustion gate — skip breakout if 4H move already extended
         if bl and _exhausted_4h(b4h, b5m[i, TS], "LONG", _exh_pct, _exh_bars):
             bl = False
@@ -1653,6 +1744,23 @@ def run_breakout_retest(symbol, data, btc_data,
                             direction=direction, bar_idx=eb,
                             entry=entry_sl, stop=stop, tp=tp,
                             outcome=outcome, pnl_r=round(pnl,4)))
+        # Fix 2: Record entry for anti-correlation
+        _recent_dir_ts.append((float(b5m[eb, TS]), direction))
+        # Live-match: track open position (opened at entry, will close at xb)
+        _open_positions.append({
+            "sym": symbol, "dir": direction,
+            "entry": entry_sl, "stop": stop, "tp": tp,
+            "entry_ts": float(b5m[eb, TS]), "close_bar": xb,
+            "be_moved": False,
+        })
+        # Live-match: set cooldown
+        _cooldown_until[symbol] = float(b5m[eb, TS]) + _cooldown_ms
+        # Live-match: increment daily trade count
+        _dtc2 = _day_trade_count.get(symbol, ("", 0))
+        if _dtc2[0] == cur_date:
+            _day_trade_count[symbol] = (cur_date, _dtc2[1] + 1)
+        else:
+            _day_trade_count[symbol] = (cur_date, 1)
         last_exit = xb; i = xb + 1
     return trades
 

@@ -41,7 +41,12 @@ _EXHAUSTION_BARS       = int(  _BR_CFG.get("exhaustion_bars",          6))
 _MAX_BOUNDARY_TOUCHES  = int(  _BR_CFG.get("max_boundary_touches",     2))
 _REQUIRE_BK_CONFIRM    = bool( _BR_CFG.get("require_breakout_confirm", True))
 _MIN_RETEST_BODY_RATIO = float(_BR_CFG.get("min_retest_body_ratio",    0.40))
-_SKIP_HOUR_S           = 14   # skip 14:00–15:00 UTC
+_CRASH_COOL_PCT        = float(_BR_CFG.get("crash_cooldown_pct",       1.5))
+_CRASH_COOL_HOURS      = int(  _BR_CFG.get("crash_cooldown_hours",     4))
+_MAX_ENTRIES_30M       = int(  _BR_CFG.get("max_entries_per_30min",    2))
+_BTC_CONFIRM_ALTS      = bool( _BR_CFG.get("btc_confirm_for_alts",    True))
+_CHOPPY_ATR_MULT       = float(_BR_CFG.get("choppy_atr_mult",         2.0))
+_SKIP_HOUR_S           = 14   # skip 14:00-15:00 UTC
 _SKIP_HOUR_E           = 15
 
 _cd = CooldownStore("BREAKOUT_RETEST")
@@ -52,6 +57,10 @@ _state: dict[str, dict] = {}
 
 # Daily trade counter: symbol → (date_str, count)
 _daily_trades: dict[str, tuple[str, int]] = {}
+
+# Recent entry tracker for anti-correlation gate (Fix 2)
+# list of (timestamp, direction)
+_recent_entries: list[tuple[float, str]] = []
 
 
 def _utc_hour() -> int:
@@ -123,6 +132,77 @@ def _ema(closes: list[float], period: int) -> float:
     for c in closes[period:]:
         e = c * k + e * (1 - k)
     return e
+
+
+def _btc_crashed_recently(cache) -> bool:
+    """Fix 1: Return True if BTC dropped > _CRASH_COOL_PCT in any 1H candle
+    in the last _CRASH_COOL_HOURS hours. Blocks LONG entries after crashes."""
+    bars_1h = cache.get_ohlcv("BTCUSDT", window=_CRASH_COOL_HOURS + 1, tf="1h")
+    if not bars_1h or len(bars_1h) < 2:
+        return False
+    for b in bars_1h[-_CRASH_COOL_HOURS:]:
+        if b["o"] > 0:
+            change = (b["c"] - b["o"]) / b["o"] * 100
+            if change < -_CRASH_COOL_PCT:
+                return True
+    return False
+
+
+def _too_many_recent_entries(direction: str) -> bool:
+    """Fix 2: Return True if we already entered _MAX_ENTRIES_30M trades
+    in the same direction within the last 30 minutes."""
+    import time as _t
+    now = _t.time()
+    cutoff = now - 1800  # 30 minutes
+    count = sum(1 for ts, d in _recent_entries
+                if ts > cutoff and d == direction)
+    return count >= _MAX_ENTRIES_30M
+
+
+def _record_entry(direction: str) -> None:
+    """Record an entry for anti-correlation tracking."""
+    import time as _t
+    _recent_entries.append((_t.time(), direction))
+    # Clean old entries
+    cutoff = _t.time() - 3600
+    _recent_entries[:] = [(ts, d) for ts, d in _recent_entries if ts > cutoff]
+
+
+def _btc_confirms_direction(direction: str, cache) -> bool:
+    """Fix 3: For alt coins, require BTC to hold above/below its own
+    recent range before entering alts in that direction."""
+    if not _BTC_CONFIRM_ALTS:
+        return True
+    bars_btc_5m = cache.get_ohlcv("BTCUSDT", window=20, tf="5m")
+    if not bars_btc_5m or len(bars_btc_5m) < 10:
+        return True
+    # BTC 10-bar range
+    recent = bars_btc_5m[-10:]
+    btc_high = max(b["h"] for b in recent)
+    btc_low  = min(b["l"] for b in recent)
+    btc_now  = bars_btc_5m[-1]["c"]
+    if direction == "LONG":
+        return btc_now > (btc_high + btc_low) / 2  # BTC above midpoint
+    else:
+        return btc_now < (btc_high + btc_low) / 2  # BTC below midpoint
+
+
+def _market_too_choppy(cache, symbol: str) -> bool:
+    """Fix 4: Return True if 1H ATR is > _CHOPPY_ATR_MULT x the 24H average."""
+    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
+    if not bars_1h or len(bars_1h) < 25:
+        return False
+    trs = []
+    for i in range(1, len(bars_1h)):
+        h, l, pc = bars_1h[i]["h"], bars_1h[i]["l"], bars_1h[i-1]["c"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < 2:
+        return False
+    avg_atr = sum(trs[:-1]) / len(trs[:-1])
+    current_atr = trs[-1]
+    if avg_atr > 0 and current_atr > avg_atr * _CHOPPY_ATR_MULT:
+        return True
+    return False
 
 
 def _detect_range(bars_5m: list[dict],
@@ -206,13 +286,18 @@ async def score(symbol: str, cache) -> list[dict]:
     if _daily_count(symbol) >= _MAX_DAY_TRADES:
         return []
 
+    # Fix 4: Choppy market gate
+    if _market_too_choppy(cache, symbol):
+        log.info("BR %s: market too choppy (1H ATR > %.1fx avg) -- skip", symbol, _CHOPPY_ATR_MULT)
+        return []
+
     bars_5m = cache.get_ohlcv(symbol, window=50, tf="5m")
     if not bars_5m or len(bars_5m) < 30:
         log.info("BR %s: insufficient 5m bars (%d)",
                   symbol, len(bars_5m) if bars_5m else 0)
         return []
 
-    # Heartbeat — shows the scorer is running each tick
+    # Heartbeat -- shows the scorer is running each tick
     log.info("BR eval %s  bars=%d  state=%s",
              symbol, len(bars_5m),
              _state.get(symbol, {}).get("state", "IDLE"))
@@ -355,6 +440,9 @@ async def score(symbol: str, cache) -> list[dict]:
         log.info("BR FIRE %s %s  entry=%.4f  sl=%.4f  tp=%.4f  atr=%.4f",
                  symbol, direction, entry, stop, tp, atr_val)
 
+        # Fix 2: Record entry for anti-correlation tracking
+        _record_entry(direction)
+
         return [{
             "symbol":    symbol,
             "regime":    "BREAKOUT_RETEST",
@@ -392,6 +480,26 @@ async def score(symbol: str, cache) -> list[dict]:
         if htf_bull and not htf_bear:
             allow_short = False
         elif htf_bear and not htf_bull:
+            allow_long = False
+
+    # Fix 1: Post-crash cooldown — block LONGs after BTC crash
+    if allow_long and _btc_crashed_recently(cache):
+        log.info("BR %s: BTC crashed > %.1f%% recently -- LONG blocked", symbol, _CRASH_COOL_PCT)
+        allow_long = False
+
+    # Fix 2: Anti-correlation — max entries in same direction per 30 min
+    if allow_long and _too_many_recent_entries("LONG"):
+        log.info("BR %s: too many LONG entries in 30min -- skip", symbol)
+        allow_long = False
+    if allow_short and _too_many_recent_entries("SHORT"):
+        log.info("BR %s: too many SHORT entries in 30min -- skip", symbol)
+        allow_short = False
+
+    # Fix 3: BTC confirmation for alt LONGs only (not SHORTs)
+    # Only blocks LONGs when BTC is dropping — prevents dead cat bounce entries
+    if allow_long and symbol != "BTCUSDT" and _BTC_CONFIRM_ALTS:
+        if not _btc_confirms_direction("LONG", cache):
+            log.info("BR %s: BTC not confirming LONG direction -- skip", symbol)
             allow_long = False
 
     # Breakout detection

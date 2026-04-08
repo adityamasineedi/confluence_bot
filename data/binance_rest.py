@@ -732,119 +732,127 @@ async def place_limit_then_market(
     take_profit: float | None,
     timeout_s: float = 30.0,
 ) -> dict:
-    """Place a LIMIT entry; fall back to MARKET after timeout_s seconds if unfilled.
+    """Place entry order with full protection against ghost trades.
 
-    Strategy:
-      1. Submit GTC LIMIT at limit_price.
-      2. Wait timeout_s seconds.
-      3. Check fill status via REST.
-      4. If unfilled, cancel the LIMIT and place a MARKET order.
-      5. In all paths, place SL + TP conditional orders.
+    Flow:
+      1. Place LIMIT at limit_price
+      2. Wait timeout_s (default 30s)
+      3. Check fill → if unfilled, cancel LIMIT and try MARKET
+      4. Verify position actually exists on exchange
+      5. Only then place SL + TP bracket orders
+      6. If anything fails → cancel ALL orders for this symbol (cleanup)
 
-    Returns the entry order confirmation dict, or {} on failure.
+    Returns order dict with executedQty > 0 on success, or {} on failure.
     """
-    headers   = {"X-MBX-APIKEY": _API_KEY}
+    headers    = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if side == "BUY" else "BUY"
     quantity   = _round_qty(symbol, quantity)
-
-    entry_params: dict = {
-        "symbol":      symbol,
-        "side":        side,
-        "type":        "LIMIT",
-        "quantity":    quantity,
-        "price":       _round_price(symbol, limit_price),
-        "timeInForce": "GTC",
-    }
-
-    url    = f"{_BINANCE_BASE}/fapi/v1/order"
+    url        = f"{_BINANCE_BASE}/fapi/v1/order"
     result: dict = {}
 
     async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
-        # ── Step 1: place LIMIT entry ──────────────────────────────────────────
+        # ── Step 1: place LIMIT entry ─────────────────────────────────────
         try:
+            entry_params: dict = {
+                "symbol": symbol, "side": side, "type": "LIMIT",
+                "quantity": quantity, "price": _round_price(symbol, limit_price),
+                "timeInForce": "GTC",
+            }
             async with session.post(url, params=_sign(entry_params), headers=headers) as resp:
                 resp.raise_for_status()
                 result = await resp.json()
             if isinstance(result.get("code"), int) and result["code"] < 0:
-                log.error("place_limit_then_market entry rejected %s %s: %s", side, symbol, result)
+                log.error("LIMIT entry rejected %s %s: %s", side, symbol, result)
                 return {}
             order_id = result.get("orderId")
-            log.info("LIMIT entry placed %s %s @ %.4f orderId=%s", side, symbol, limit_price, order_id)
+            log.info("LIMIT entry placed %s %s @ %.4f orderId=%s",
+                     side, symbol, limit_price, order_id)
         except Exception as exc:
-            log.error("place_limit_then_market LIMIT failed (%s %s): %s", side, symbol, exc)
+            log.error("LIMIT entry failed (%s %s): %s", side, symbol, exc)
             return {}
 
-        # ── Step 2: wait for fill ──────────────────────────────────────────────
+        # ── Step 2: wait for fill ─────────────────────────────────────────
         await asyncio.sleep(timeout_s)
 
-        # ── Step 3: check fill status (full detail for executedQty) ───────────
+        # ── Step 3: check fill status ─────────────────────────────────────
         order_detail = await _get_order_detail(symbol, order_id)
-        status = order_detail.get("status", "")
+        status     = order_detail.get("status", "")
         filled_qty = float(order_detail.get("executedQty", 0))
-
-        # Update result with actual fill qty from order detail
         result["executedQty"] = filled_qty
 
         if status not in ("FILLED", "PARTIALLY_FILLED"):
-            # ── Step 4: cancel LIMIT and submit MARKET ─────────────────────────
+            # Cancel unfilled LIMIT and try MARKET
             await cancel_order(symbol, order_id)
-            log.info(
-                "LIMIT unfilled after %.0fs (%s) — cancelling and switching to MARKET (%s %s)",
-                timeout_s, status, side, symbol,
-            )
-            mkt_params: dict = {
-                "symbol":   symbol,
-                "side":     side,
-                "type":     "MARKET",
-                "quantity": quantity,
-            }
+            log.info("LIMIT unfilled after %.0fs (%s) — MARKET fallback (%s %s)",
+                     timeout_s, status, side, symbol)
             try:
+                mkt_params: dict = {
+                    "symbol": symbol, "side": side, "type": "MARKET",
+                    "quantity": quantity,
+                }
                 async with session.post(url, params=_sign(mkt_params), headers=headers) as resp:
                     resp.raise_for_status()
                     result = await resp.json()
                 if isinstance(result.get("code"), int) and result["code"] < 0:
-                    log.error("MARKET fallback rejected %s %s: %s", side, symbol, result)
+                    log.error("MARKET rejected %s %s: %s", side, symbol, result)
                     return {}
                 filled_qty = float(result.get("executedQty", 0))
-                log.info("MARKET fallback filled %s %s orderId=%s qty=%.4f",
-                         side, symbol, result.get("orderId"), filled_qty)
+                result["executedQty"] = filled_qty
+                log.info("MARKET filled %s %s qty=%.4f", side, symbol, filled_qty)
             except Exception as exc:
-                log.error("MARKET fallback failed (%s %s): %s", side, symbol, exc)
+                log.error("MARKET failed (%s %s): %s", side, symbol, exc)
                 return {}
 
-        # Guard: no position opened → skip bracket
+        # ── Step 4: verify fill is real ───────────────────────────────────
         if filled_qty <= 0:
-            log.warning("Entry unfilled for %s %s (executedQty=0) — skipping bracket",
-                        side, symbol)
-            return result
+            log.warning("Entry qty=0 for %s %s — no trade", side, symbol)
+            return {}
+
+        # Double-check: does the position actually exist on the exchange?
+        await asyncio.sleep(1)  # small delay for exchange to settle
+        try:
+            pos_amt = await get_position_amt(symbol)
+            if abs(pos_amt) < 0.0001:
+                log.warning("PHANTOM FILL: %s %s reports qty=%.4f but position=0 — "
+                            "cancelling all orders", side, symbol, filled_qty)
+                await cancel_all_orders(symbol)
+                return {}
+            log.info("Position verified: %s %s qty=%.4f", side, symbol, pos_amt)
+        except Exception as exc:
+            log.debug("Position verify failed %s: %s — proceeding", symbol, exc)
 
         bracket_qty = _round_qty(symbol, filled_qty)
         result["executedQty"] = filled_qty
 
         if filled_qty < quantity * 0.95:
-            log.warning("Partial fill %s %s: filled %.4f of %.4f requested",
+            log.warning("Partial fill %s %s: %.4f of %.4f",
                         side, symbol, filled_qty, quantity)
 
-        if bracket_qty < quantity:
-            log.warning("Bracket placed for %.4f (filled) not %.4f (requested) — %s %s",
-                        bracket_qty, quantity, side, symbol)
-
-        # ── Step 5: SL (always) + TP (only when provided) — via Algo Order API
+        # ── Step 5: place SL + TP bracket orders ─────────────────────────
         algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
         bracket_orders: list[tuple[str, dict]] = []
         bracket_orders.append(("SL", _make_sl_params(symbol, close_side, bracket_qty, stop)))
         if take_profit is not None:
             bracket_orders.append(("TP", _make_tp_params(symbol, close_side, bracket_qty, take_profit)))
+
+        bracket_ok = True
         for label, params in bracket_orders:
             try:
                 async with session.post(algo_url, params=_sign(params), headers=headers) as resp:
                     r = await resp.json()
                 if isinstance(r.get("code"), int) and int(r["code"]) < 0:
-                    log.warning("%s rejected %s: code=%s msg=%s", label, symbol, r["code"], r.get("msg"))
+                    log.warning("%s rejected %s: code=%s msg=%s",
+                                label, symbol, r["code"], r.get("msg"))
+                    bracket_ok = False
                 else:
-                    log.debug("%s placed %s algoId=%s", label, symbol, r.get("algoId"))
+                    log.info("%s placed %s algoId=%s", label, symbol, r.get("algoId"))
             except Exception as exc:
-                log.warning("%s placement failed %s: %s", label, symbol, exc)
+                log.warning("%s failed %s: %s", label, symbol, exc)
+                bracket_ok = False
+
+        if not bracket_ok:
+            log.warning("Bracket incomplete for %s — trade monitor will use software SL/TP",
+                        symbol)
 
     return result
 

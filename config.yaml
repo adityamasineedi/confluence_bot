@@ -194,7 +194,7 @@ session_trap:
   max_entries_per_session: 3
   fire_threshold: 0.75
 ema_pullback:
-  enabled: false  # walk-forward: PF 1.06-1.35 marginal, edge too thin after fees
+  enabled: false
   check_interval_secs: 30
   max_positions: 3
   cooldown_mins: 20
@@ -337,7 +337,7 @@ fvg:
   - XRPUSDT
   - LINKUSDT
 microrange:
-  enabled: false  # walk-forward: PF 0.71-0.84 confirmed loser both periods
+  enabled: false
   mc_vol_ratio_max: 0.0
   exclude_symbols:
   - ETHUSDT
@@ -380,6 +380,11 @@ breakout_retest:
   max_boundary_touches: 4
   require_breakout_confirm: true
   min_retest_body_ratio: 0.4
+  crash_cooldown_pct: 1.5
+  crash_cooldown_hours: 4
+  max_entries_per_30min: 2
+  btc_confirm_for_alts: false
+  choppy_atr_mult: 2.0
 long_short_ratio:
   crowded_long_threshold: 1.8
   crowded_short_threshold: 0.6
@@ -435,6 +440,9 @@ symbol_tiers:
     symbols:
     - DOGEUSDT
     - SUIUSDT
+    - ADAUSDT
+    - AVAXUSDT
+    - TAOUSDT
     label: "high volatility \xE2\u20AC\u201D leadlag targets only"
     microrange:
       range_max_pct: 0.012
@@ -615,26 +623,37 @@ strategy_routing:
     PUMP:
     - breakout_retest
   ADAUSDT:
-    # Walk-forward PASS: IN PF 2.56, OUT PF 3.92
-    TREND:    [breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [breakout_retest]
-    CRASH:    [breakout_retest]
-    PUMP:     [breakout_retest]
+    TREND:
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - breakout_retest
+    CRASH:
+    - breakout_retest
+    PUMP:
+    - breakout_retest
   AVAXUSDT:
-    # Walk-forward PASS: IN PF 1.78, OUT PF 2.40
-    TREND:    [breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [breakout_retest]
-    CRASH:    [breakout_retest]
-    PUMP:     [breakout_retest]
+    TREND:
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - breakout_retest
+    CRASH:
+    - breakout_retest
+    PUMP:
+    - breakout_retest
   TAOUSDT:
-    # Walk-forward PASS: IN PF 1.70, OUT PF 1.59
-    TREND:    [breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [breakout_retest]
-    CRASH:    [breakout_retest]
-    PUMP:     []
+    TREND:
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - breakout_retest
+    CRASH:
+    - breakout_retest
+    PUMP: []
   _default:
     TREND: []
     RANGE: []
