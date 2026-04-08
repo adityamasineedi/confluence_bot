@@ -7,6 +7,9 @@ symbols:
 - LINKUSDT
 - DOGEUSDT
 - SUIUSDT
+- ADAUSDT
+- AVAXUSDT
+- TAOUSDT
 timeframes:
 - 1m
 - 5m
@@ -191,7 +194,7 @@ session_trap:
   max_entries_per_session: 3
   fire_threshold: 0.75
 ema_pullback:
-  enabled: true
+  enabled: false  # walk-forward: PF 1.06-1.35 marginal, edge too thin after fees
   check_interval_secs: 30
   max_positions: 3
   cooldown_mins: 20
@@ -334,7 +337,7 @@ fvg:
   - XRPUSDT
   - LINKUSDT
 microrange:
-  enabled: true
+  enabled: false  # walk-forward: PF 0.71-0.84 confirmed loser both periods
   mc_vol_ratio_max: 0.0
   exclude_symbols:
   - ETHUSDT
@@ -611,6 +614,27 @@ strategy_routing:
     - breakout_retest
     PUMP:
     - breakout_retest
+  ADAUSDT:
+    # Walk-forward PASS: IN PF 2.56, OUT PF 3.92
+    TREND:    [breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [breakout_retest]
+    CRASH:    [breakout_retest]
+    PUMP:     [breakout_retest]
+  AVAXUSDT:
+    # Walk-forward PASS: IN PF 1.78, OUT PF 2.40
+    TREND:    [breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [breakout_retest]
+    CRASH:    [breakout_retest]
+    PUMP:     [breakout_retest]
+  TAOUSDT:
+    # Walk-forward PASS: IN PF 1.70, OUT PF 1.59
+    TREND:    [breakout_retest]
+    RANGE:    [breakout_retest]
+    BREAKOUT: [breakout_retest]
+    CRASH:    [breakout_retest]
+    PUMP:     []
   _default:
     TREND: []
     RANGE: []
