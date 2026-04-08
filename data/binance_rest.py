@@ -776,6 +776,9 @@ async def place_limit_then_market(
         status = order_detail.get("status", "")
         filled_qty = float(order_detail.get("executedQty", 0))
 
+        # Update result with actual fill qty from order detail
+        result["executedQty"] = filled_qty
+
         if status not in ("FILLED", "PARTIALLY_FILLED"):
             # ── Step 4: cancel LIMIT and submit MARKET ─────────────────────────
             await cancel_order(symbol, order_id)
@@ -853,6 +856,36 @@ async def cancel_order(symbol: str, order_id: int) -> dict:
     except Exception as exc:
         log.error("cancel_order(%s, %s) failed: %s", symbol, order_id, exc)
         return {}
+
+
+async def cancel_all_orders(symbol: str) -> int:
+    """Cancel ALL open orders (regular + algo) for a symbol. Returns count cancelled."""
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    cancelled = 0
+    # Cancel regular orders
+    try:
+        url = f"{_BINANCE_BASE}/fapi/v1/allOpenOrders"
+        params = _sign({"symbol": symbol})
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.delete(url, params=params, headers=headers) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    cancelled += result.get("code", 0) == 200 or 1
+                    log.info("Cancelled all regular orders for %s", symbol)
+    except Exception as exc:
+        log.debug("cancel_all_orders regular %s: %s", symbol, exc)
+    # Cancel algo orders
+    try:
+        url = f"{_BINANCE_BASE}/fapi/v1/allOpenAlgoOrders"
+        params = _sign({"symbol": symbol})
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.delete(url, params=params, headers=headers) as resp:
+                if resp.status == 200:
+                    cancelled += 1
+                    log.info("Cancelled all algo orders for %s", symbol)
+    except Exception as exc:
+        log.debug("cancel_all_orders algo %s: %s", symbol, exc)
+    return cancelled
 
 
 async def place_trailing_stop(

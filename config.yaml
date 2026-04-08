@@ -1,358 +1,277 @@
-# confluence_bot configuration
-# API keys must NEVER be placed here — use .env / environment variables
-
-# ── Symbols & timeframes ────────────────────────────────────────────────────
 symbols:
-  - BTCUSDT    # tier1 — anchor, all strategies confirmed
-  - ETHUSDT    # tier2 — ema_pullback, leadlag, sweep pending backtest
-  - SOLUSDT    # tier2 — sweep confirmed +11.5%, ema_pullback pending engine fix
-  - BNBUSDT    # tier2 — ema_pullback pending engine fix, leadlag alt target
-  - XRPUSDT    # tier2 NEW — top 3 market cap, ETF narrative, clean trends
-  - LINKUSDT   # tier2 NEW — institutional demand, strong trend following
-  - DOGEUSDT   # tier3 — leadlag alt target only, all direct strategies excluded
-  - SUIUSDT    # tier3 — leadlag alt target only, pending backtest
-  # Removed: ADAUSDT — no confirmed strategy, volume declined
-  # Removed: DOTUSDT — lost ecosystem relevance in 2026
-  # Removed: AVAXUSDT — superseded by SOL, no confirmed strategy
-
+- BTCUSDT
+- ETHUSDT
+- SOLUSDT
+- BNBUSDT
+- XRPUSDT
+- LINKUSDT
+- DOGEUSDT
+- SUIUSDT
 timeframes:
-  - 1m
-  - 5m
-  - 15m
-  - 1h
-  - 4h
-
-# How often (seconds) the main evaluation loop runs
+- 1m
+- 5m
+- 15m
+- 1h
+- 4h
 loop_interval_seconds: 60
-
-# ── Regime detection ─────────────────────────────────────────────────────────
 regime:
-  # ── RegimeDetector (class-based, hysteresis) ─────────────────────────────
-  adx_range_threshold: 20         # all 3 recent ADX readings < this → enter RANGE
-  adx_trend_threshold: 25         # ≥2 of last 3 ADX readings > this → exit RANGE (symmetric hysteresis)
-  regime_min_dwell_bars: 12       # minimum calls before regime change allowed (~4H bars worth of stability)
-  range_size_max_pct: 0.12        # max (high-low)/mid over 20×4H bars to confirm RANGE
-  crash_weekly_drop: -0.12        # 7-day close change < this (−12 %) → crash candidate
-  pump_weekly_gain:   0.12        # 7-day close change > this (+12 %) → pump candidate
-  ema_crash_period: 50            # EMA period for crash baseline (also used for pump)
-  trend_tf: "4h"                  # timeframe used for ADX
-  breakout_window_bars: 6         # bars after range exit during which breakout can fire
-  breakout_margin_pct: 0.010      # price must be 1.0% beyond range boundary to confirm
-
-  # ── Legacy fields (kept for backward compat) ────────────────────────────
+  adx_range_threshold: 20
+  adx_trend_threshold: 25
+  regime_min_dwell_bars: 60
+  range_size_max_pct: 0.12
+  crash_weekly_drop: -0.12
+  pump_weekly_gain: 0.12
+  ema_crash_period: 50
+  trend_tf: 4h
+  breakout_window_bars: 6
+  breakout_margin_pct: 0.01
   crash_drawdown_pct: 15.0
   crash_window_candles: 24
   trend_adx_threshold: 25.0
   range_atr_ratio_max: 0.02
   min_range_candles: 20
-
-# ── Score thresholds ─────────────────────────────────────────────────────────
 thresholds:
   trend_long_fire: 0.65
-  trend_short_fire: 0.75          # re-enabled: requires cvd_bearish + oi_flush + 1 more signal
-  range_long_fire: 0.60
-  range_short_fire: 1.10          # disabled: 25% WR in backtest (consistent money-loser)
-  crash_short_fire: 0.75          # higher bar for crash shorts
-  pump_long_fire: 0.65            # htf+ob or htf+oi = 0.70 → fires; htf alone = 0.40 → blocked
-  breakout_long_fire: 0.60
-  breakout_short_fire: 0.75       # raised: breakout short had 0% WR in backtest
-
-# ── Signal weights (trend LONG) ──────────────────────────────────────────────
-# Backtest validation: htf_structure = +45% edge, vpvr_support = -22% edge
-# oi_funding fired only 2x in backtest (almost never True)
-# options_flow/options_skew/call_skew_roc: Deribit only covers BTC+ETH — zero for alt coins
-# time_distribution: confirmed -33% edge in backtest — fully disabled
-# rsi_divergence: bullish div on 1H — price lower low, RSI higher low (seller exhaustion)
-# ema_pullback: 20 EMA > 50 EMA on 1H + price pulled back to 20 EMA (optimal entry timing)
+  trend_short_fire: 0.75
+  range_long_fire: 0.6
+  range_short_fire: 1.1
+  crash_short_fire: 0.75
+  pump_long_fire: 0.65
+  breakout_long_fire: 0.6
+  breakout_short_fire: 0.75
 weights:
   trend_long:
-    cvd_bullish:    0.20          # reduced slightly to make room for new signals
-    liq_sweep:      0.10          # reduced: synthetic clusters less reliable
-    htf_structure:  0.25          # reduced: shares dominance with new signals
-    vpvr_support:   0.15          # POC reclaim (cross from below + vol confirm)
-                                  # was 0.00 due to wrong backtest logic — restored
-    oi_funding:     0.05          # reduced: fired only 2x in backtest
-    order_block:    0.05          # keep: confluence entry point
-    whale_flow:     0.10          # keep: works all symbols
-    rsi_divergence:    0.15        # bullish divergence — price lower low + RSI higher low on 1H
-    rsi_div_mtf:       0.20        # MTF divergence — 1H + 4H both confirming, higher confidence
-    ema_pullback:      0.10        # 20/50 EMA pullback entry — best trend timing signal
-    ls_crowded_short:  0.10        # Coinglass L/S ratio < 0.6 → crowd overly short → contrarian bullish
-    funding_ramp_bull:    0.10      # Coinglass extreme negative funding → short squeeze fuel
-    funding_extreme_long: 0.10     # extreme negative funding → crowd max short → contrarian LONG
-    fvg_bullish:       0.10        # NEW: Fair Value Gap retest — unfilled 1H imbalance zone
-    bb_squeeze_bull:   0.05        # NEW: Bollinger squeeze release upside — volatility expansion
-
+    cvd_bullish: 0.2
+    liq_sweep: 0.1
+    htf_structure: 0.25
+    vpvr_support: 0.15
+    oi_funding: 0.05
+    order_block: 0.05
+    whale_flow: 0.1
+    rsi_divergence: 0.15
+    rsi_div_mtf: 0.2
+    ema_pullback: 0.1
+    ls_crowded_short: 0.1
+    funding_ramp_bull: 0.1
+    funding_extreme_long: 0.1
+    fvg_bullish: 0.1
+    bb_squeeze_bull: 0.05
   range_long:
-    absorption:      0.20         # primary range long signal, works all symbols
-    wyckoff_spring:  0.20         # ideal range entry, works all symbols
-    rsi_oversold:    0.15         # RSI(14)<35 turning up near range_low
-    perp_basis:      0.10         # absorbed freed weight, works all symbols
-    anchored_vwap:   0.15         # strong live signal
-    vwap_oversold:   0.15         # NEW: price below VWAP-2σ — statistically oversold
-    fvg_bullish:     0.05         # NEW: Fair Value Gap retest — unfilled 1H imbalance
-
+    absorption: 0.2
+    wyckoff_spring: 0.2
+    rsi_oversold: 0.15
+    perp_basis: 0.1
+    anchored_vwap: 0.15
+    vwap_oversold: 0.15
+    fvg_bullish: 0.05
   range_short:
-    ask_absorption: 0.25          # primary signal
-    upthrust:       0.25          # needs both ask_absorption + upthrust ideally
-    perp_basis:     0.10          # absorbed freed weight
-    options_skew:   0.00          # DISABLED: Deribit BTC/ETH only — dead weight for 7/9 symbols
-    anchored_vwap:  0.20          # strong live signal, works all symbols
-    time_distribution: 0.00       # DISABLED: confirmed -33% edge in backtest
-    vwap_overbought: 0.15         # NEW: price above VWAP+2σ — statistically overbought
-    fvg_bearish:     0.05         # NEW: Fair Value Gap retest — unfilled bearish 1H imbalance
-
+    ask_absorption: 0.25
+    upthrust: 0.25
+    perp_basis: 0.1
+    options_skew: 0.0
+    anchored_vwap: 0.2
+    time_distribution: 0.0
+    vwap_overbought: 0.15
+    fvg_bearish: 0.05
   bear:
-    cvd_bearish:     0.35         # dominant bear predictor
-    oi_flush:        0.30         # strong confirmation signal
-    funding_extreme: 0.15         # useful contrarian signal
-    whale_inflow:    0.10         # supplementary
-    rsi_divergence:  0.10         # NEW: bearish divergence — price higher high + RSI lower high on 1H
-    ls_crowded_long: 0.10         # NEW: Coinglass L/S ratio > 1.8 → crowd overly long → contrarian bearish
-    funding_ramp:    0.10         # NEW: Coinglass extreme positive funding → longs overheating
-
+    cvd_bearish: 0.35
+    oi_flush: 0.3
+    funding_extreme: 0.15
+    whale_inflow: 0.1
+    rsi_divergence: 0.1
+    ls_crowded_long: 0.1
+    funding_ramp: 0.1
   crash:
-    dead_cat:       0.30
-    liq_grab_short: 0.30
-    cvd_bearish:    0.20          # raised slightly
-    oi_flush:       0.15
-    whale_inflow:   0.05          # reduced
-
+    dead_cat: 0.3
+    liq_grab_short: 0.3
+    cvd_bearish: 0.2
+    oi_flush: 0.15
+    whale_inflow: 0.05
   pump:
-    htf_structure: 0.40           # reduced: no longer sole gatekeeper (min_ok requires confluence)
-    oi_funding:    0.30           # raised: OI confirms new money entering the pump
-    order_block:   0.30           # raised: entry timing confirmation — avoids local high entries
-
+    htf_structure: 0.4
+    oi_funding: 0.3
+    order_block: 0.3
   breakout_long:
-    htf_structure: 0.45           # dominant signal
-    oi_funding:    0.15           # rarely fires
-    absorption:    0.20           # keep
-    bb_squeeze_bull: 0.20         # NEW: squeeze release = precise breakout timing
-
+    htf_structure: 0.45
+    oi_funding: 0.15
+    absorption: 0.2
+    bb_squeeze_bull: 0.2
   breakout_short:
-    oi_flush:       0.70          # primary: OI flush confirms capitulation
-    ask_absorption: 0.30          # secondary: absorption at resistance confirms supply
-
-# ── Risk management ──────────────────────────────────────────────────────────
+    oi_flush: 0.7
+    ask_absorption: 0.3
 risk:
-  risk_per_trade: 0.01             # 1% of current balance — COMPOUNDING
-  fixed_risk_mode: true            # true = always risk fixed_risk_usdt; false = compound (% of equity)
-  fixed_risk_usdt: 50              # flat dollar risk per trade when fixed_risk_mode: true
-  max_risk_usdt: 5000              # high cap so compounding is never blocked
-  max_position_size_usdt: 4000     # keep notional within demo account margin (bal×lev×0.85)
+  risk_per_trade: 0.01
+  fixed_risk_mode: true
+  fixed_risk_usdt: 50.0
+  max_risk_usdt: 5000
+  max_position_size_usdt: 1000
   max_open_positions: 5
-  max_same_direction_positions: 3  # max 3 longs OR 3 shorts at once — correlation cap
-  rr_ratio: 2.5                    # TP = entry ± stop_dist × 2.5
+  max_same_direction_positions: 3
+  rr_ratio: 2.5
   leverage: 3
   margin_type: ISOLATED
-  # ── Circuit breaker ───────────────────────────────────────────────────────
-  max_daily_loss_pct: 3.0          # halt if daily loss > 3% of growing balance
-  max_consecutive_losses: 6        # halt after 6 consecutive losses
-  post_trade_cooldown_mins: 10     # 10 min cooldown per symbol after any close
-  # ── Breakeven management ────────────────────────────────────────────────
-  breakeven_trigger_r: 2.0         # move SL to entry at +2R (was +1R — too aggressive)
-  breakeven_disabled_strategies:   # strategies backtested WITHOUT BE — do not apply
-    - breakout_retest
-    - microrange
-  # ── Extreme volatility gate ──────────────────────────────────────────────
-  # Halts all new entries when 4H ATR spikes 3× above median (flash crash events).
-  # Catches: COVID March 2020, LUNA May 2022, FTX November 2022.
+  max_daily_loss_pct: 3.0
+  max_daily_loss_usdt: 500
+  max_consecutive_losses: 6
+  post_trade_cooldown_mins: 10
+  breakeven_trigger_r: 2.0
+  breakeven_disabled_strategies:
+  - breakout_retest
+  - microrange
   atr_spike_gate_enabled: true
-  atr_spike_gate_mult: 3.0    # block when current ATR > 3× 20-bar average
-  # ── Dynamic slippage model ──────────────────────────────────────────────
-  # Slippage scales with ATR ratio so position size shrinks automatically
-  # when market conditions are noisy. Set slippage_atr_scale: false to use
-  # the regime base only (disables the ATR multiplier).
+  atr_spike_gate_mult: 3.0
   slippage_atr_scale: true
   slippage_by_regime:
-    TREND:    0.0002   # 0.02% baseline
-    RANGE:    0.0002   # same — tight markets
-    CRASH:    0.0010   # 0.10% — cascade conditions
-    PUMP:     0.0008   # 0.08% — thin ask side
-    BREAKOUT: 0.0005   # 0.05% — momentum entries
+    TREND: 0.0002
+    RANGE: 0.0002
+    CRASH: 0.001
+    PUMP: 0.0008
+    BREAKOUT: 0.0005
   extreme_vol_gate:
     enabled: true
-    lookback_bars: 50       # bars to compute median ATR
-    spike_multiplier: 3.0   # current TR > 3× median = extreme event
-    timeframe: "4h"         # check on 4H bars
-
-# ── Hard filters ─────────────────────────────────────────────────────────────
+    lookback_bars: 50
+    spike_multiplier: 3.0
+    timeframe: 4h
 filters:
-  min_24h_volume_usdt: 50000000   # ignore illiquid markets
-  max_spread_pct: 0.05            # max bid/ask spread as % of price
-  news_blackout_minutes: 15       # no entries within N min of major news
-
-# ── CVD settings ─────────────────────────────────────────────────────────────
+  min_24h_volume_usdt: 50000000
+  max_spread_pct: 0.05
+  news_blackout_minutes: 15
 cvd:
-  slope_window: 20                # candles to compute slope over
+  slope_window: 20
   divergence_window: 50
-  min_delta_ratio: 0.3            # delta / avg_volume threshold
-
-# ── Funding rate ─────────────────────────────────────────────────────────────
+  min_delta_ratio: 0.3
 funding:
-  extreme_positive: 0.001         # 0.1% per 8h (bearish contrarian)
-  extreme_negative: -0.001        # -0.1% (crash panic)
-  neutral_band: 0.0003            # ±0.03% = neutral for range
-
-# ── Funding contrarian ───────────────────────────────────────────────────────
+  extreme_positive: 0.001
+  extreme_negative: -0.001
+  neutral_band: 0.0003
 funding_contrarian:
   enabled: true
-  extreme_positive_pct: 0.0012   # 0.12%/8H threshold for SHORT
-  extreme_negative_pct: -0.0012  # -0.12%/8H threshold for LONG
-  sl_pct: 0.008                  # 0.8% SL
-  tp_pct: 0.016                  # 1.6% TP (2:1 RR)
-  cooldown_hours: 8              # one signal per 8H per symbol
+  extreme_positive_pct: 0.0012
+  extreme_negative_pct: -0.0012
+  sl_pct: 0.008
+  tp_pct: 0.016
+  cooldown_hours: 8
   max_positions: 2
-  check_interval_secs: 300       # check every 5 min (funding updates every 8H)
-
-# ── VPVR ─────────────────────────────────────────────────────────────────────
+  check_interval_secs: 300
 vpvr:
   lookback_candles: 200
-  hvn_tolerance_pct: 0.5          # price within 0.5% of HVN to trigger
-
-# ── Logging ──────────────────────────────────────────────────────────────────
+  hvn_tolerance_pct: 0.5
 logging:
-  db_path: "confluence_bot.db"
-  metrics_host: "0.0.0.0"
+  db_path: confluence_bot.db
+  metrics_host: 0.0.0.0
   metrics_port: 8001
-
-# ── Lead-Lag strategy ────────────────────────────────────────────────────────
-# Fires alt entries when BTC breaks its rolling 1h VWAP with a volume spike.
-# Alts lag BTC by 5-15 min — we capture that catch-up move.
 leadlag:
-  enabled: false   # logic sound, live trade count unconfirmed
-  vwap_window_bars: 12          # 12 × 5m bars = 1h rolling VWAP anchor
-  min_vwap_break_pct: 0.006     # BTC close must be ≥0.6% beyond VWAP  [tuned: was 0.003]
-  vol_spike_mult: 2.0           # current 5m vol / 20-bar avg must exceed this [tuned: was 1.5]
-  max_alt_premove_pct: 0.003    # alt already moved >0.3%? skip it (it priced in)
-  cooldown_mins: 30             # min gap between two trades on the same symbol
-  max_alts_per_signal: 6        # max simultaneous alt entries per BTC breakout (raised: more alts per signal)
-  check_interval_secs: 30       # how often the leadlag loop checks BTC
-  stop_pct: 0.0020              # SL = 0.20% from entry
-  tp_pct:   0.0050              # TP = 0.50% from entry (2.5 RR) — 5R never hits in 30min
-  max_hold_bars: 6              # max 6 × 5m bars = 30 min hold
-  require_trend_aligned: true   # only LONG above BTC 1h EMA20, SHORT below [tuned: new]
-  exclude_symbols:              # never enter these as alts
-    - BTCUSDT
-
-# ── Session open trap ────────────────────────────────────────────────────────
-# Fade the first 15-min fake move at Asia / London / NY opens.
+  enabled: false
+  vwap_window_bars: 12
+  min_vwap_break_pct: 0.006
+  vol_spike_mult: 2.0
+  max_alt_premove_pct: 0.003
+  cooldown_mins: 30
+  max_alts_per_signal: 6
+  check_interval_secs: 30
+  stop_pct: 0.002
+  tp_pct: 0.005
+  max_hold_bars: 6
+  require_trend_aligned: true
+  exclude_symbols:
+  - BTCUSDT
 session_trap:
   enabled: false
-  sessions: [1, 8, 13]
-  min_move_pct: 0.006        # 0.6% minimum fake move (tightened from 0.3%)
-  strong_move_pct: 0.009     # 0.9% = strong tier (tightened from 0.6%)
-  max_range_pct: 0.007       # reject sessions wider than 0.7% (tightened from 1.5%)
+  sessions:
+  - 1
+  - 8
+  - 13
+  min_move_pct: 0.006
+  strong_move_pct: 0.009
+  max_range_pct: 0.007
   sl_buffer_pct: 0.002
   rr_ratio: 1.5
   max_hold_bars: 12
   cooldown_mins: 60
   max_entries_per_session: 3
-  fire_threshold: 0.75       # 3 of 4 (tightened from 0.50)
-
-# ── 15m EMA Pullback strategy ────────────────────────────────────────────────
-# Trend-continuation entries at 15m EMA21 pullback, filtered by 4H direction.
-# Fires 2-5x per symbol per day in trending conditions.
+  fire_threshold: 0.75
 ema_pullback:
   enabled: true
   check_interval_secs: 30
   max_positions: 3
-  cooldown_mins: 20             # 20 min cooldown — one pullback per 20m per symbol
+  cooldown_mins: 20
   fire_threshold: 0.75
-  pullback_touch_pct: 0.002     # price must be within 0.2% of EMA21 (tightened from 0.4%)
-  min_bounce_body_pct: 0.002    # close must be ≥ 0.2% above EMA21 (not just any close)
-  min_ema_dist_pct: 0.002       # separate key for scorer _MIN_EMA_DIST (fixes duplicate key bug)
-  rr_ratio: 1.5                 # revert BTC back to 1.5
-  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
-  sl_atr_mult:                  # ATR multiplier per tier — replaces fixed EMA-distance SL
-    tier1: 1.5                  # BTC: cleanest trend, tightest ok
-    tier2: 2.0                  # XRP, LINK, ETH, SOL: moderate noise
-    tier3: 2.5                  # SUI, DOGE: high volatility floor
-    base:  2.0
-  min_sl_pct: 0.003             # absolute floor — SL never < 0.3% regardless of ATR
-  vol_quiet_mult: 0.8           # tightened from 1.2 — only enter on very quiet pullbacks
-  adx_short_min: 30             # minimum 4H ADX for SHORT entries (weak bears are choppy)
-  adx_long_min: 22              # minimum 4H ADX for LONG entries (bull markets more forgiving)
-  max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — failed setups dragged to 2h)
-  rsi_long_min: 30              # lower bound for LONG RSI (non-overlapping: 30–50)
-  rsi_long_max: 50              # upper bound for LONG RSI
-  rsi_short_min: 50             # lower bound for SHORT RSI (non-overlapping: 50–70)
-  rsi_short_max: 70             # upper bound for SHORT RSI
+  pullback_touch_pct: 0.002
+  min_bounce_body_pct: 0.002
+  min_ema_dist_pct: 0.002
+  rr_ratio: 1.5
+  mc_vol_ratio_max: 0.0
+  sl_atr_mult:
+    tier1: 1.5
+    tier2: 2.0
+    tier3: 2.5
+    base: 2.0
+  min_sl_pct: 0.003
+  vol_quiet_mult: 0.8
+  adx_short_min: 30
+  adx_long_min: 22
+  max_hold_bars: 4
+  rsi_long_min: 30
+  rsi_long_max: 50
+  rsi_short_min: 50
+  rsi_short_max: 70
   exclude_symbols:
-    - BTCUSDT    # regime gating broke it — needs separate investigation
-    - BNBUSDT    # BAD: TREND PF0.69 WR19% -$55
-    - DOGEUSDT   # BAD: TREND PF0.80 WR28% -$45
-# ── HTF Demand / Supply Zone strategy ───────────────────────────────────────
-# 4H origin-of-move zone retests with 1H bullish/bearish confirmation.
-# Highest quality, lowest frequency: 1-3x per symbol per day.
+  - BTCUSDT
+  - BNBUSDT
+  - DOGEUSDT
 zone:
-  enabled: false   # too few backtest trades for statistical significance
-  check_interval_secs: 60       # check every 60s (aligned with 1H bar closes)
-  max_positions: 2              # conservative — these are higher-size entries
-  cooldown_mins: 120            # 2h cooldown — zone retests are rare
-  fire_threshold: 0.75
-  min_impulse_pct: 0.030        # impulse after base must be ≥ 3% (raised from 2%)
-  zone_width_max_pct: 0.015     # zone (high-low)/mid must be ≤ 1.5% (tight zones only)
-  rr_ratio: 1.5                 # TP = risk × 1.5 (lowered from 2.5× — zones timeout too often)
-  max_zone_retests: 1           # only fire on first touch — prior wick into zone invalidates it
-
-# ── OI Spike Fade strategy ───────────────────────────────────────────────────
-# Fades liquidation cascades triggered by sudden OI surges ≥ spike_pct in 2h.
-# Confirmed by wick rejection on the 15m bar + volume spike (liquidation cascade).
-# Skips when OI data unavailable (Binance + Bybit both missing).
-oi_spike:
-  enabled: true    # enabled for paper testing
-  spike_pct: 0.15             # OI must increase ≥ 15% within lookback_hours
-  lookback_hours: 2.0         # compare current OI vs 2h ago
-  wick_pct: 0.005             # lower/upper wick must be ≥ 0.5% of price
-  sl_buffer: 0.002            # SL 0.2% beyond the wick tip
-  atr_mult: 2.0               # TP = entry ± ATR(14, 15m) × atr_mult
-  atr_window: 14
-  ema_period: 21              # 15m EMA21 alignment gate
-  rsi_window: 14
-  vol_mult: 1.5               # volume must be ≥ 1.5× 20-bar average
-  threshold: 0.75             # minimum score to fire (oi_spike 0.40 + rejection 0.35)
+  enabled: false
   check_interval_secs: 60
-  cooldown_mins: 60           # 1h per-symbol cooldown after entry
-  max_positions: 2            # concentrated-risk strategy
+  max_positions: 2
+  cooldown_mins: 120
+  fire_threshold: 0.75
+  min_impulse_pct: 0.03
+  zone_width_max_pct: 0.015
+  rr_ratio: 1.5
+  max_zone_retests: 1
+oi_spike:
+  enabled: false
+  spike_pct: 0.15
+  lookback_hours: 2.0
+  wick_pct: 0.005
+  sl_buffer: 0.002
+  atr_mult: 2.0
+  atr_window: 14
+  ema_period: 21
+  rsi_window: 14
+  vol_mult: 1.5
+  threshold: 0.75
+  check_interval_secs: 60
+  cooldown_mins: 60
+  max_positions: 2
   rr_ratio: 2.0
-
-# ── VWAP Band Reversion strategy ─────────────────────────────────────────────
-# Mean-reversion entries when price touches the ±2σ rolling VWAP band on 15m
-# and closes back inside.  Blocked in strong trends (ADX > 30) where bands
-# expand continuously and reversion fails.  Target = VWAP midline (TP dynamic).
 vwap_band:
-  enabled: false   # marginal PF, needs walk-forward optimization first
-  window_bars: 20             # 20 × 15m = 5h rolling VWAP window
-  band_mult: 2.0              # ±2σ standard deviation bands
-  rsi_long_max: 35            # RSI must be ≤ this for LONG entry (oversold)
-  rsi_short_min: 65           # RSI must be ≥ this for SHORT entry (overbought)
-  adx_max: 30                 # block if 4H ADX > 30 (too trendy for mean reversion)
-  vol_max_mult: 1.5           # volume must be ≤ this × 20-bar avg (not a dump)
-  check_interval_secs: 30     # 15m bars — poll every 30s to catch rejections early
-  cooldown_mins: 30           # per-symbol cooldown after entry
+  enabled: false
+  window_bars: 20
+  band_mult: 2.0
+  rsi_long_max: 35
+  rsi_short_min: 65
+  adx_max: 30
+  vol_max_mult: 1.5
+  check_interval_secs: 30
+  cooldown_mins: 30
   max_positions: 3
-  sl_buffer_pct: 0.002        # legacy — kept for fallback; ATR SL now takes precedence
-  sl_atr_mult:                # ATR multiplier per tier — replaces fixed band-distance SL
-    tier1: 1.2                # BTC: tightest (was 0.32% fixed — now ATR × 1.2)
-    tier2: 1.5                # XRP, LINK: proven too tight at 0.32% vs 0.57% ATR
-    tier3: 2.0                # SUI, DOGE: high volatility floor
-    base:  1.5
-  min_sl_pct: 0.003           # absolute floor — SL never < 0.3% regardless of ATR
-  max_hold_bars: 4              # 4 × 15m = 1h max hold (was 8 — VWAP reversion should happen within 1h)
-  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
-  long_only: true    # backtest confirmed SHORT direction: WR 0.5%, PF 0.01, 196 SL/197 trades
+  sl_buffer_pct: 0.002
+  sl_atr_mult:
+    tier1: 1.2
+    tier2: 1.5
+    tier3: 2.0
+    base: 1.5
+  min_sl_pct: 0.003
+  max_hold_bars: 4
+  mc_vol_ratio_max: 0.0
+  long_only: true
   exclude_symbols:
-    - BTCUSDT    # TREND PF1.07 weak, not worth enabling
-    - ETHUSDT    # TREND PF0.67 BAD
-    - SOLUSDT    # TREND PF0.60 BAD
-    - BNBUSDT    # TREND PF1.00 BAD
-    - DOGEUSDT   # TREND PF0.68 BAD — volume filter made worse
-    # XRPUSDT removed — TREND PF1.40 WR31%, RANGE PF1.48 WR30% ✅
-    # LINKUSDT removed — TREND PF1.50 WR40%, RANGE PF2.25 WR36% ✅
-    # SUIUSDT removed — TREND PF1.52 WR27% ✅
-
-# ── Wyckoff spring strategy ───────────────────────────────────────────────────
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  - DOGEUSDT
 wyckoff_spring:
   enabled: true
   cooldown_mins: 60
@@ -361,9 +280,7 @@ wyckoff_spring:
   fire_threshold: 0.67
   check_interval_secs: 60
   max_positions: 2
-  mc_vol_ratio_max: 2.0    # block when recent 6H vol > 2.0× baseline (backtest: PF 3.99)
-
-# ── Liquidity sweep strategy ─────────────────────────────────────────────────
+  mc_vol_ratio_max: 2.0
 liq_sweep:
   enabled: true
   cooldown_mins: 30
@@ -376,135 +293,106 @@ liq_sweep:
   fire_threshold: 0.75
   check_interval_secs: 60
   max_positions: 2
-  mc_vol_ratio_max: 2.5    # block when recent 6H vol > 2.5× baseline (backtest: PF 2.62)
-  max_entry_drift_pct: 0.003   # skip if price moved > 0.3% from sweep bar close
-
-# ── CME Gap fill strategy ───────────────────────────────────────────���────────
-# BTC only — PF 2.74, 135 trades/3yr. Trades the Friday→Sunday gap fill.
+  mc_vol_ratio_max: 2.5
+  max_entry_drift_pct: 0.003
 cme_gap:
   enabled: true
-  min_gap_pct: 0.003         # gap must be ≥ 0.3% to trade
-  cooldown_hours: 72         # one trade per weekend gap
-  rr_ratio: 1.5              # TP = Friday close, SL = 1% from Sunday open
-  sl_pct: 0.010              # 1% hard SL if gap target is too far
-  max_positions: 1           # one gap trade at a time
-  check_interval_secs: 300   # check every 5 minutes
-
-# ── Session filter ────────────────────────────────────────────────────────────
+  min_gap_pct: 0.003
+  cooldown_hours: 72
+  rr_ratio: 1.5
+  sl_pct: 0.01
+  max_positions: 1
+  check_interval_secs: 300
 session_filter:
   enabled: true
   block_saturday: true
-  dead_zone_start_utc: 22    # was 21 — narrowed by 1 hour
-  dead_zone_end_utc: 24      # was 01 — narrowed from 4h block to 2h block
-  # Previously blocked 21:00–01:00 (4h). Now only 22:00–00:00 (2h) + Saturday
-
-# ── BTC direction gate ────────────────────────────────────────────────────────
+  dead_zone_start_utc: 22
+  dead_zone_end_utc: 24
 btc_direction_gate:
   enabled: true
-  mode: veto          # was: confirm (required BTC same direction — too strict)
-  fall_threshold: -0.0003   # block alt LONG if BTC falling faster than this per hour
-  rise_threshold: +0.0003   # block alt SHORT if BTC rising faster than this per hour
-  # flat BTC = allowed (altcoin season conditions)
-  apply_to: [ema_pullback, vwap_band]
-  skip_for: [BTCUSDT]
-
-# ── Fair Value Gap Fill strategy ─────────────────────────────────────────────
-# Entry into unfilled 1H price imbalance zones (FVGs).
-# Fires when price returns to a virgin gap with HTF alignment + RSI confirmation.
+  mode: veto
+  fall_threshold: -0.0003
+  rise_threshold: 0.0003
+  apply_to:
+  - ema_pullback
+  - vwap_band
+  skip_for:
+  - BTCUSDT
 fvg:
-  enabled: true   # confirmed: BTC PF1.65 WR39%, SOL PF1.64 WR43%, BNB PF2.11 WR44%
-  min_gap_pct: 0.003          # FVG must be ≥ 0.3% wide (filters micro-noise)
-  check_interval_secs: 60     # align with 1H bar close
-  cooldown_mins: 25           # per-symbol cooldown after entry
-  max_positions: 3            # max simultaneous FVG trades
-  rr_ratio: 2.0               # TP = entry ± dist × 2.0
-  sl_buffer_pct: 0.002        # SL 0.2% beyond gap edge
-  lookback_bars: 50           # scan last 50 1H candles for FVGs
-  mc_vol_ratio_max: 2.0    # block when recent 6H vol > 2.0× baseline (backtest: PF 2.80)
-  macro_filter_enabled: true  # 1D EMA200 gate — LONG only above, SHORT only below
-  macro_ema_period: 200       # EMA period for macro direction gate
+  enabled: true
+  min_gap_pct: 0.003
+  check_interval_secs: 60
+  cooldown_mins: 25
+  max_positions: 3
+  rr_ratio: 2.0
+  sl_buffer_pct: 0.002
+  lookback_bars: 50
+  mc_vol_ratio_max: 2.0
+  macro_filter_enabled: true
+  macro_ema_period: 200
   exclude_symbols:
-    - XRPUSDT    # TR:PF0.17 WR7% -$199 — worst result in entire scan
-    - LINKUSDT   # TR:PF0.68 WR24% -$58
-
-# ── Micro Range Flip strategy ────────────────────────────────────────────────
+  - XRPUSDT
+  - LINKUSDT
 microrange:
   enabled: true
-  mc_vol_ratio_max: 0.0          # disabled — not yet backtest-validated
+  mc_vol_ratio_max: 0.0
   exclude_symbols:
-    - ETHUSDT    # TREND PF0.89 BAD, RANGE PF0.80 BAD
-    - SOLUSDT    # TREND PF1.01 marginal, RANGE PF0.94 BAD
-    - BNBUSDT    # TREND PF0.93 BAD, RANGE PF1.14 borderline
-    # XRPUSDT removed — RANGE PF1.32 WR28% confirmed ✅
-    # LINKUSDT removed — RANGE PF1.26 WR33% confirmed ✅
-    # DOGEUSDT confirmed CRASH PF1.97 WR38% — removed from exclude
-    # SUIUSDT confirmed CRASH PF1.91 WR41% — removed from exclude
-  window_bars: 12             # was 10 — longer window = rarer but higher quality boxes
-  range_max_pct: 0.005      # 0.5% max box width (tightened from 1.0%)
-  entry_zone_pct: 0.001     # within 0.1% of boundary (tightened from 0.2%)
-  stop_pct: 0.002           # 0.2% SL — MUST satisfy: stop_pct × 2 ≤ range_max_pct
-                            # invariant check: 0.004 ≤ 0.005 ✓
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  window_bars: 12
+  range_max_pct: 0.005
+  entry_zone_pct: 0.001
+  stop_pct: 0.002
   tp_ratio: 0.55
   max_hold_bars: 3
-  cooldown_mins: 30             # reduced for more opportunities
-  min_box_touches: 2            # NEW: both boundaries must be tested ≥2× (no one-time spikes)
+  cooldown_mins: 30
+  min_box_touches: 2
   max_positions: 3
   max_vol_ratio: 1.3
-  rsi_long_max: 35          # tightened from 40
-  rsi_short_min: 65         # tightened from 60
+  rsi_long_max: 35
+  rsi_short_min: 65
   use_rsi_filter: true
-  fire_threshold: 1.0       # ALL 4 required (tightened from 0.75)
+  fire_threshold: 1.0
   check_interval_secs: 30
   risk_pct: 0.01
-  drawdown_reduce_threshold: 0.15   # halve risk above 15% DD
-  max_drawdown_pause: 0.20          # pause entries above 20% DD
-
-# ── Breakout retest ──────────────────────────────────────────────────────────
-# 5M range breakout + level retest entry.
-# ALL 8 coins PASS, PF 3.0+, WR 67-68%, 24,313 trades/3yr.
+  drawdown_reduce_threshold: 0.15
+  max_drawdown_pause: 0.2
 breakout_retest:
   enabled: true
   range_bars: 8
-  min_width_pct: 0.0010          # was 0.0018 — lower minimum (0.10%)
-  max_width_pct: 0.0200          # was 0.0080 — wider range allowed (2.0%)
-  atr_mult_max: 3.0              # was 1.35 — allow higher ATR in crash
-  vol_spike_mult: 1.10           # was 1.25 — easier volume confirmation
-  retest_bars: 12                # was 8 — give more time for retest
+  min_width_pct: 0.001
+  max_width_pct: 0.02
+  atr_mult_max: 3.0
+  vol_spike_mult: 1.1
+  retest_bars: 12
   sl_atr_mult: 1.3
-  rr_ratio: 2.2                  # TP2 mode — 2.2R matches backtest result
+  rr_ratio: 2.2
   cooldown_mins: 15
-  max_trades_per_day: 6          # was 4 — more trades per day
+  max_trades_per_day: 6
   max_positions: 3
   check_interval_secs: 30
-  exhaustion_pct: 0.025           # skip if 4H already moved > 2.5% in signal direction
-  exhaustion_bars: 6              # look back 6 × 4H bars (24 hours)
-
-# ── Long/Short ratio thresholds (Coinglass) ──────────────────────────────────
+  exhaustion_pct: 0.025
+  exhaustion_bars: 6
+  max_boundary_touches: 4
+  require_breakout_confirm: true
+  min_retest_body_ratio: 0.4
 long_short_ratio:
-  crowded_long_threshold:  1.8   # ratio > this → everyone long → contrarian bearish
-  crowded_short_threshold: 0.6   # ratio < this → everyone short → contrarian bullish
-
-# ── Telegram alerts ───────────────────────────────────────────────────────────
-# Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in environment (.env / shell).
-# The bot silently no-ops when either variable is missing.
+  crowded_long_threshold: 1.8
+  crowded_short_threshold: 0.6
 telegram:
-  # alert_on_signal: true    — alert every time a trade fires (default: always on)
-  # alert_on_regime_change: true — alert when regime switches
   alert_on_signal: true
   alert_on_regime_change: true
-
-# ── Symbol tiers — per-volatility strategy parameter overrides ────────────────
-# Priority: tier config > base strategy config > hardcoded defaults
-# Used by core/symbol_config.py  get_symbol_config(symbol, strategy)
 symbol_tiers:
   tier1:
-    symbols: [BTCUSDT]
-    label: "tight — low volatility, highest liquidity"
+    symbols:
+    - BTCUSDT
+    label: "tight \xE2\u20AC\u201D low volatility, highest liquidity"
     microrange:
       range_max_pct: 0.005
       entry_zone_pct: 0.001
       stop_pct: 0.002
-      tp_ratio: 0.70
+      tp_ratio: 0.7
       max_hold_bars: 3
       rsi_long_max: 35
       rsi_short_min: 65
@@ -516,10 +404,14 @@ symbol_tiers:
       vol_quiet_mult: 0.8
       rr_ratio: 1.5
       max_hold_bars: 8
-
   tier2:
-    symbols: [ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, LINKUSDT]
-    label: "medium volatility — trend following coins"
+    symbols:
+    - ETHUSDT
+    - BNBUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - LINKUSDT
+    label: "medium volatility \xE2\u20AC\u201D trend following coins"
     microrange:
       range_max_pct: 0.008
       entry_zone_pct: 0.002
@@ -536,10 +428,11 @@ symbol_tiers:
       vol_quiet_mult: 1.0
       rr_ratio: 2.0
       max_hold_bars: 8
-
   tier3:
-    symbols: [DOGEUSDT, SUIUSDT]
-    label: "high volatility — leadlag targets only"
+    symbols:
+    - DOGEUSDT
+    - SUIUSDT
+    label: "high volatility \xE2\u20AC\u201D leadlag targets only"
     microrange:
       range_max_pct: 0.012
       entry_zone_pct: 0.003
@@ -556,187 +449,204 @@ symbol_tiers:
       vol_quiet_mult: 1.2
       rr_ratio: 2.0
       max_hold_bars: 10
-
-# ── Dynamic volume momentum thresholds ───────────────────────────────────────
-# All values are base multipliers before tier/TF adjustments are applied.
-# signals/volume_momentum.py reads these at runtime; hardcoded fallbacks exist
-# for every key so removing a key here is safe.
 volume_momentum:
-  # Regime-based spike multipliers (base values before tier/TF adjustment)
   spike_mult:
-    TREND:    1.5
-    RANGE:    1.3
-    CRASH:    2.5
-    PUMP:     2.5
+    TREND: 1.5
+    RANGE: 1.3
+    CRASH: 2.5
+    PUMP: 2.5
     BREAKOUT: 2.0
-  # Tier adjustments (added to regime base spike)
   tier_spike_adj:
-    tier1: -0.2    # BTC — tightest, cleanest volume
-    tier2:  0.0    # no change
-    tier3:  0.4    # high volatility alts — raise noise floor
-  # Timeframe adjustments (added to spike before tier adj)
+    tier1: -0.2
+    tier2: 0.0
+    tier3: 0.4
   tf_spike_adj:
-    5m:   0.3
-    15m:  0.1
-    1h:   0.0
-    4h:  -0.2
-  # Liquidation thresholds (5-min window)
+    5m: 0.3
+    15m: 0.1
+    1h: 0.0
+    4h: -0.2
   liq_adjust:
-    small_usd:  100000   # $100k liquidated → multiply spike_mult by 1.2
-    large_usd:  500000   # $500k liquidated → multiply spike_mult by 1.5
-  # Minimum relative volume (RVOL) to allow entry
+    small_usd: 100000
+    large_usd: 500000
   rvol_min:
-    TREND:    0.7
-    RANGE:    0.6
-    CRASH:    0.9
-    PUMP:     0.9
+    TREND: 0.7
+    RANGE: 0.6
+    CRASH: 0.9
+    PUMP: 0.9
     BREAKOUT: 0.8
-
-# ── Strategy routing table ────────────────────────────────────────────────────
-# Defines which strategies are active per symbol per regime.
-# Falls back to _default if symbol not listed.
-# Individual strategy enabled: false flags are still respected by the router.
-# Strategies without a live scorer yet will be skipped gracefully by the router.
 strategy_routing:
-
   BTCUSDT:
-    # cme_gap: 135 trades, PF 2.74 — highest frequency BTC strategy
-    # liq_sweep: PF 2.46 confirmed LONG + SHORT
-    # wyckoff_spring_v2: PF 3.83 confirmed bull
-    # wyckoff_upthrust_v2: PF 3.33 confirmed bear
-    # fvg: PF 2.50 confirmed
-    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, cme_gap, breakout_retest]
-    RANGE:    [wyckoff_spring_v2, cme_gap, breakout_retest]
-    BREAKOUT: [fvg, cme_gap, breakout_retest]
-    CRASH:    [fvg, liq_sweep, wyckoff_upthrust_v2, cme_gap, breakout_retest]
-    PUMP:     [cme_gap]
-
+    TREND:
+    - fvg
+    - liq_sweep
+    - wyckoff_spring_v2
+    - cme_gap
+    - breakout_retest
+    RANGE:
+    - wyckoff_spring_v2
+    - cme_gap
+    - breakout_retest
+    BREAKOUT:
+    - fvg
+    - cme_gap
+    - breakout_retest
+    CRASH:
+    - fvg
+    - liq_sweep
+    - wyckoff_upthrust_v2
+    - cme_gap
+    - breakout_retest
+    PUMP:
+    - cme_gap
   ETHUSDT:
-    # wyckoff_spring_v2: PF 2.50 bull only
-    # fvg: PF 1.63 confirmed
-    # liq_sweep: PF 1.50 confirmed
-    # CRASH: nothing confirmed — stays empty
-    TREND:    [fvg, liq_sweep, wyckoff_spring_v2, breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [fvg, wyckoff_spring_v2, breakout_retest]
-    CRASH:    [breakout_retest]
-    PUMP:     [fvg, breakout_retest]
-
+    TREND:
+    - fvg
+    - liq_sweep
+    - wyckoff_spring_v2
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - fvg
+    - wyckoff_spring_v2
+    - breakout_retest
+    CRASH:
+    - breakout_retest
+    PUMP:
+    - fvg
+    - breakout_retest
   SOLUSDT:
-    # ema_pullback_short: PF 1.74, 174 trades — BEST SOL strategy
-    # fvg: PF 3.39, 13 trades confirmed
-    # wyckoff_spring_v2: PF 1.50 confirmed
-    # wyckoff_upthrust_v2: PF 4.99 in bear
-    TREND:    [fvg, ema_pullback_short, wyckoff_spring_v2, breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [fvg, ema_pullback_short, breakout_retest]
-    CRASH:    [ema_pullback_short, wyckoff_upthrust_v2, breakout_retest]
-    PUMP:     [fvg, breakout_retest]
-
+    TREND:
+    - fvg
+    - ema_pullback_short
+    - wyckoff_spring_v2
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - fvg
+    - ema_pullback_short
+    - breakout_retest
+    CRASH:
+    - ema_pullback_short
+    - wyckoff_upthrust_v2
+    - breakout_retest
+    PUMP:
+    - fvg
+    - breakout_retest
   BNBUSDT:
-    # wyckoff_spring_v2: PF 5.33 — strongest BNB strategy
-    # liq_sweep: PF 2.81 confirmed LONG
-    # liq_sweep_short: PF 2.22 confirmed SHORT
-    # microrange: PF 1.75 confirmed RANGE + CRASH
-    # wyckoff_upthrust_v2: PF 2.50 confirmed bear
-    TREND:    [wyckoff_spring_v2, liq_sweep, breakout_retest]
-    RANGE:    [microrange, breakout_retest]
-    BREAKOUT: [liq_sweep, wyckoff_spring_v2, breakout_retest]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
-    PUMP:     [liq_sweep, breakout_retest]
-
+    TREND:
+    - wyckoff_spring_v2
+    - liq_sweep
+    - breakout_retest
+    RANGE:
+    - microrange
+    - breakout_retest
+    BREAKOUT:
+    - liq_sweep
+    - wyckoff_spring_v2
+    - breakout_retest
+    CRASH:
+    - liq_sweep_short
+    - wyckoff_upthrust_v2
+    - microrange
+    - breakout_retest
+    PUMP:
+    - liq_sweep
+    - breakout_retest
   XRPUSDT:
-    # XRP: strong trend-following, institutional ETF narrative
-    # fvg REMOVED — PF 0.17 WR 7%, confirmed loser
-    TREND:    [breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [breakout_retest]
-    CRASH:    [breakout_retest]
-    PUMP:     []
-
+    TREND:
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - breakout_retest
+    CRASH:
+    - breakout_retest
+    PUMP: []
   LINKUSDT:
-    # LINK: institutional demand, strong trend-following
-    # fvg REMOVED — PF 0.68 WR 24%, confirmed loser
-    TREND:    [ema_pullback_short, breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [breakout_retest]
-    CRASH:    [ema_pullback_short, breakout_retest]
-    PUMP:     []
-
+    TREND:
+    - ema_pullback_short
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - breakout_retest
+    CRASH:
+    - ema_pullback_short
+    - breakout_retest
+    PUMP: []
   DOGEUSDT:
-    # liq_sweep: PF 7.49 — strongest DOGE strategy
-    # liq_sweep_short: PF 2.56 confirmed
-    # ema_pullback_short: PF 1.64 in bear confirmed
-    # wyckoff_upthrust_v2: PF 9.99 confirmed
-    TREND:    [liq_sweep, ema_pullback_short, breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [liq_sweep, breakout_retest]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, ema_pullback_short, breakout_retest]
-    PUMP:     [liq_sweep, breakout_retest]
-
+    TREND:
+    - liq_sweep
+    - ema_pullback_short
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - liq_sweep
+    - breakout_retest
+    CRASH:
+    - liq_sweep_short
+    - wyckoff_upthrust_v2
+    - ema_pullback_short
+    - breakout_retest
+    PUMP:
+    - liq_sweep
+    - breakout_retest
   SUIUSDT:
-    # liq_sweep_short: PF 2.44 confirmed
-    # wyckoff_upthrust_v2: PF 9.99 confirmed
-    # wyckoff_spring_v2: PF 2.50 (4 trades — small sample)
-    # ema_pullback_short_v2: PF 1.66 in ATH bull
-    # microrange: PF 1.54 in bear confirmed
-    TREND:    [wyckoff_spring_v2, ema_pullback_short_v2, breakout_retest]
-    RANGE:    [breakout_retest]
-    BREAKOUT: [wyckoff_spring_v2, breakout_retest]
-    CRASH:    [liq_sweep_short, wyckoff_upthrust_v2, microrange, breakout_retest]
-    PUMP:     [breakout_retest]
-
+    TREND:
+    - wyckoff_spring_v2
+    - ema_pullback_short_v2
+    - breakout_retest
+    RANGE:
+    - breakout_retest
+    BREAKOUT:
+    - wyckoff_spring_v2
+    - breakout_retest
+    CRASH:
+    - liq_sweep_short
+    - wyckoff_upthrust_v2
+    - microrange
+    - breakout_retest
+    PUMP:
+    - breakout_retest
   _default:
-    TREND:    []
-    RANGE:    []
+    TREND: []
+    RANGE: []
     BREAKOUT: []
-    CRASH:    []
-    PUMP:     []
-
-# ── ATR spike gate ───────────────────────────────────────────────────────────
-# Blocks all scorer entries when current 1H bar ATR is > multiplier × 20-bar avg.
-# Flash crash / news spike bars have terrible fill prices and near-instant stop-outs.
+    CRASH: []
+    PUMP: []
 atr_spike_gate:
   enabled: true
-  multiplier: 3.0    # block when current ATR > 3× 20-bar average
-  tf: "1h"           # timeframe to measure ATR on
-
-# ── Trailing stop (PUMP and BREAKOUT regimes only) ───────────────────────────
-# Replaces fixed TAKE_PROFIT_MARKET with Binance TRAILING_STOP_MARKET so
-# profitable PUMP/BREAKOUT trades trail automatically.
-# callback_pct = ATR% × atr_multiplier, clamped to [min_callback_pct, max_callback_pct].
+  multiplier: 3.0
+  tf: 1h
 trailing_stop:
-  enabled:          true
-  min_callback_pct: 1.5    # minimum trail distance — 0.5% was too tight, normal vol kills it
-  max_callback_pct: 4.0    # maximum trail distance — let big trends breathe
-  atr_multiplier:   2.0    # callback = ATR% × this — wider to survive intra-bar noise
-  activate_after_pct: 0.5  # activationPrice offset from entry (ignored — Binance activates immediately)
-  apply_to: [PUMP, BREAKOUT]
-
-# ── BTC dominance macro filter ───────────────────────────────────────────────
-# BTC dominance rising = money rotating into BTC out of alts → block alt longs.
-# BTC dominance falling = alt season → alt longs are allowed (and noted in logs).
+  enabled: true
+  min_callback_pct: 1.5
+  max_callback_pct: 4.0
+  atr_multiplier: 2.0
+  activate_after_pct: 0.5
+  apply_to:
+  - PUMP
+  - BREAKOUT
 btc_dominance:
-  rising_threshold:   0.003    # +0.3% dominance change (avg of last 3 vs prior 3) = rising
-  falling_threshold: -0.003    # -0.3% change = falling
-  high_dominance_pct: 55.0     # above this % + rising → block alt longs
-  low_dominance_pct:  48.0     # below this % → alt season confirmed
-  fetch_interval_mins: 30      # how often to refresh from CoinGecko
-
-# ── Weekly trend gate ────────────────────────────────────────────────────────
-# Blocks LONG entries when BTC weekly close is below 10W EMA (macro bear).
-# Blocks SHORT entries when BTC weekly close is above 10W EMA (macro bull).
-# Catches regime transitions 2-3 weeks before 4H ADX responds.
+  rising_threshold: 0.003
+  falling_threshold: -0.003
+  high_dominance_pct: 55.0
+  low_dominance_pct: 48.0
+  fetch_interval_mins: 30
 weekly_trend_gate:
   enabled: true
-  ema_period: 10      # 10-week EMA (~50-day)
-  apply_to: [ema_pullback, fvg, vwap_band, liq_sweep, breakout_retest]
-
-# ── Backtest cost simulation ──────────────────────────────────────────────────
-# Applied to every round-trip trade: fees (entry + exit), slippage (entry + exit),
-# and accrued funding based on hold duration.
+  ema_period: 10
+  apply_to:
+  - ema_pullback
+  - fvg
+  - vwap_band
+  - liq_sweep
+  - breakout_retest
 backtest:
-  taker_fee_pct:       0.0005   # 0.05% per side (Binance Futures taker)
-  maker_fee_pct:       0.0002   # 0.02% per side (limit orders — not used by default)
-  slippage_pct:        0.0002   # 0.02% per side (entry + exit market impact)
-  funding_cost_per_8h: 0.0001   # 0.01% per 8h funding period (long-side bias)
+  taker_fee_pct: 0.0005
+  maker_fee_pct: 0.0002
+  slippage_pct: 0.0002
+  funding_cost_per_8h: 0.0001

@@ -216,7 +216,8 @@ def _utc_hour(ts_ms: int) -> int:
 
 def _detect_range(bars, i, n_candles=8,
                   min_width=0.0018, max_width=0.0080,
-                  atr_mult_max=1.35):
+                  atr_mult_max=1.35,
+                  max_boundary_touches=4):
     start = i - n_candles
     if start < 1:
         return False, 0.0, 0.0
@@ -229,6 +230,15 @@ def _detect_range(bars, i, n_candles=8,
     width = (rng_high - rng_low) / mid
     if not (min_width <= width <= max_width):
         return False, 0.0, 0.0
+
+    # Fix 1: Boundary touch count — reject churning ranges
+    upper_touches = int(np.sum(window[:, H] >= rng_high * 0.999))
+    lower_touches = int(np.sum(window[:, L] <= rng_low  * 1.001))
+    if upper_touches > max_boundary_touches and lower_touches > max_boundary_touches:
+        return False, 0.0, 0.0  # range exhausted
+    if upper_touches == 0 or lower_touches == 0:
+        return False, 0.0, 0.0  # not a real range
+
     win  = bars[max(0, i-20):i]
     trs  = [max(win[j,H]-win[j,L], abs(win[j,H]-win[j-1,C]),
                 abs(win[j,L]-win[j-1,C])) for j in range(1,len(win))]
@@ -1528,6 +1538,9 @@ def run_breakout_retest(symbol, data, btc_data,
     _br_cfg = _CFG.get("breakout_retest", {})
     _exh_pct  = float(_br_cfg.get("exhaustion_pct",  0.015))
     _exh_bars = int(_br_cfg.get("exhaustion_bars",  6))
+    _max_bt   = int(_br_cfg.get("max_boundary_touches", 2))
+    _bk_conf  = bool(_br_cfg.get("require_breakout_confirm", True))
+    _min_body = float(_br_cfg.get("min_retest_body_ratio", 0.40))
     n = len(b5m)
     pm = (b5m[:, TS] >= from_ts) & (b5m[:, TS] <= to_ts)
     wm = np.zeros(n, bool); wm[WARMUP:] = True
@@ -1552,7 +1565,7 @@ def run_breakout_retest(symbol, data, btc_data,
             i += 1; continue
         if 14 <= _utc_hour(int(b5m[i, TS])) < 15:
             i += 1; continue
-        ok, rh, rl = _detect_range(b5m, i)
+        ok, rh, rl = _detect_range(b5m, i, max_boundary_touches=_max_bt)
         if not ok:
             i += 1; continue
         vm = float(vm5[i]) if i < len(vm5) else 0.0
@@ -1567,8 +1580,24 @@ def run_breakout_retest(symbol, data, btc_data,
             i += 1; continue
         direction = "LONG" if bl else "SHORT"
         flip = rh if bl else rl
+
+        # Fix 2: Two-bar breakout confirmation
+        if _bk_conf:
+            ci = i + 1
+            if ci >= n:
+                i += 1; continue
+            cb = b5m[ci]
+            if direction == "LONG" and cb[C] <= flip:
+                i += 1; continue  # breakout not confirmed
+            if direction == "SHORT" and cb[C] >= flip:
+                i += 1; continue  # breakout not confirmed
+            # Confirmed — proceed to retest search from bar after confirmation
+            retest_start = ci + 1
+        else:
+            retest_start = i + 1
+
         rf = False; eb = -1
-        for j in range(i+1, min(i+9, n)):
+        for j in range(retest_start, min(retest_start + 8, n)):
             bj = b5m[j]
             if 14 <= _utc_hour(int(bj[TS])) < 15: continue
             if direction == "LONG":
@@ -1581,6 +1610,12 @@ def run_breakout_retest(symbol, data, btc_data,
                 if bj[C] > flip*1.003: break
         if not rf or eb < 0:
             i += 1; continue
+        # Fix 4: Retest bar quality — reject indecision/wick candles
+        rb = b5m[eb]
+        rb_body  = abs(rb[C] - rb[O])
+        rb_range = rb[H] - rb[L]
+        if rb_range > 0 and rb_body / rb_range < _min_body:
+            i += 1; continue  # indecision candle
         # Exhaustion re-check at retest confirmation time
         if _exhausted_4h(b4h, b5m[eb, TS], direction, _exh_pct, _exh_bars):
             i += 1; continue

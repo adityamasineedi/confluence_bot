@@ -82,20 +82,19 @@ def _query_daily_stats() -> tuple[float, int]:
             ).fetchall()
 
             # Fallback min-win when risk_usdt is 0 / NULL
+            # Use $1.00 as absolute minimum — a trade that made > $1 is a real win
             balance = _get_balance()
-            fallback_min_win = balance * _RISK_PER_TRADE * _MIN_WIN_RATIO
+            fallback_min_win = max(balance * _RISK_PER_TRADE * _MIN_WIN_RATIO, 1.0)
 
             consec = 0
             for pnl_val, risk_val in rows:
-                pnl  = float(pnl_val)
-                risk = float(risk_val) if risk_val else 0.0
-                min_win = (risk * _MIN_WIN_RATIO) if risk > 0 else fallback_min_win
-                # Clamp: at least $1 so a $0.10 scratch never passes
-                min_win = max(min_win, 1.0)
-                if pnl < min_win:
-                    consec += 1
-                else:
-                    break   # genuine win — streak ends
+                pnl  = float(pnl_val) if pnl_val else 0.0
+                if pnl > 0:
+                    break   # any positive PnL (including breakeven) = streak ends
+                if pnl == 0.0:
+                    continue  # breakeven — not a loss, skip
+                # pnl < 0 — real loss
+                consec += 1
 
         return daily_pnl, consec
     except Exception as exc:
@@ -120,7 +119,9 @@ def _evaluate() -> bool:
     # If manually reset, only re-trip if NEW losses occurred since reset
     if _reset_override:
         if consec > _consec_at_reset:
-            _reset_override = False  # new loss — allow re-evaluation
+            _reset_override = False  # new loss since reset — allow re-evaluation
+            # But only trip on the NEW losses, not the old ones
+            consec = consec - _consec_at_reset
         else:
             return False  # still within the reset grace period
 

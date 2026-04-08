@@ -36,15 +36,18 @@ _SL_ATR_MULT    = float(_BR_CFG.get("sl_atr_mult",      1.3))
 _RR_RATIO       = float(_BR_CFG.get("rr_ratio",         1.5))
 _COOLDOWN_SECS    = float(_BR_CFG.get("cooldown_mins",    15)) * 60
 _MAX_DAY_TRADES   = int(  _BR_CFG.get("max_trades_per_day", 4))
-_EXHAUSTION_PCT   = float(_BR_CFG.get("exhaustion_pct",   0.025))
-_EXHAUSTION_BARS  = int(  _BR_CFG.get("exhaustion_bars",   6))
-_SKIP_HOUR_S      = 14   # skip 14:00–15:00 UTC
-_SKIP_HOUR_E      = 15
+_EXHAUSTION_PCT        = float(_BR_CFG.get("exhaustion_pct",          0.025))
+_EXHAUSTION_BARS       = int(  _BR_CFG.get("exhaustion_bars",          6))
+_MAX_BOUNDARY_TOUCHES  = int(  _BR_CFG.get("max_boundary_touches",     2))
+_REQUIRE_BK_CONFIRM    = bool( _BR_CFG.get("require_breakout_confirm", True))
+_MIN_RETEST_BODY_RATIO = float(_BR_CFG.get("min_retest_body_ratio",    0.40))
+_SKIP_HOUR_S           = 14   # skip 14:00–15:00 UTC
+_SKIP_HOUR_E           = 15
 
 _cd = CooldownStore("BREAKOUT_RETEST")
 
 # Per-symbol state machine
-# state: "IDLE" | "AWAITING_RETEST"
+# state: "IDLE" | "AWAITING_BREAKOUT_CONFIRM" | "AWAITING_RETEST"
 _state: dict[str, dict] = {}
 
 # Daily trade counter: symbol → (date_str, count)
@@ -165,8 +168,22 @@ def _detect_range(bars_5m: list[dict],
                       symbol, current_atr, _ATR_MULT_MAX, avg_atr)
             return False, 0.0, 0.0
 
-    log.info("BR %s: range valid [%.4f, %.4f] width=%.3f%%",
-              symbol, rng_low, rng_high, width*100)
+    # Fix 1: Boundary touch count gate — reject churning ranges
+    upper_touches = sum(1 for b in window if b["h"] >= rng_high * 0.999)
+    lower_touches = sum(1 for b in window if b["l"] <= rng_low  * 1.001)
+
+    if upper_touches >= _MAX_BOUNDARY_TOUCHES + 1 and lower_touches >= _MAX_BOUNDARY_TOUCHES + 1:
+        log.info("BR %s: range exhausted upper=%d lower=%d touches — skip",
+                  symbol, upper_touches, lower_touches)
+        return False, 0.0, 0.0
+
+    if upper_touches == 0 or lower_touches == 0:
+        log.info("BR %s: not a real range (upper_touches=%d lower_touches=%d)",
+                  symbol, upper_touches, lower_touches)
+        return False, 0.0, 0.0
+
+    log.info("BR %s: range valid [%.4f, %.4f] width=%.3f%% touches=%d/%d",
+              symbol, rng_low, rng_high, width*100, upper_touches, lower_touches)
     return True, rng_high, rng_low
 
 
@@ -213,6 +230,32 @@ async def score(symbol: str, cache) -> list[dict]:
 
     st = _state.get(symbol, {"state": "IDLE"})
 
+    # ── STATE: AWAITING_BREAKOUT_CONFIRM (Fix 2 — two-bar confirmation) ─
+    if st["state"] == "AWAITING_BREAKOUT_CONFIRM":
+        bar = bars_5m[-1]
+        direction = st["direction"]
+        flip      = st["flip_level"]
+        confirmed = False
+        if direction == "LONG":
+            confirmed = bar["c"] > flip
+        else:
+            confirmed = bar["c"] < flip
+
+        if confirmed:
+            _state[symbol] = {
+                "state":       "AWAITING_RETEST",
+                "direction":   direction,
+                "flip_level":  flip,
+                "bars_waited": 0,
+            }
+            log.info("BR %s %s — breakout confirmed on next bar, awaiting retest",
+                     symbol, direction)
+        else:
+            _state[symbol] = {"state": "IDLE"}
+            log.info("BR %s %s — breakout not confirmed next bar (close=%.4f flip=%.4f), reset",
+                     symbol, direction, bar["c"], flip)
+        return []
+
     # ── STATE: AWAITING_RETEST ──────────────────────────────────────────
     if st["state"] == "AWAITING_RETEST":
         bar = bars_5m[-1]
@@ -255,6 +298,15 @@ async def score(symbol: str, cache) -> list[dict]:
 
         if not retest_confirmed:
             _state[symbol] = st
+            return []
+
+        # Fix 4: Retest bar quality — reject indecision/wick candles
+        bar_body  = abs(bar["c"] - bar["o"])
+        bar_range = bar["h"] - bar["l"]
+        if bar_range > 0 and bar_body / bar_range < _MIN_RETEST_BODY_RATIO:
+            log.info("BR %s %s — retest bar indecision (body/range=%.2f < %.2f), skip",
+                     symbol, direction, bar_body / bar_range, _MIN_RETEST_BODY_RATIO)
+            _state[symbol] = st  # keep waiting, don't reset
             return []
 
         # ── RETEST CONFIRMED — build signal ──────────────────────────
@@ -316,14 +368,34 @@ async def score(symbol: str, cache) -> list[dict]:
     vm_val = _vol_ma(bars_5m)
     vol_ok = bar["v"] >= vm_val * _VOL_MULT if vm_val > 0 else True
 
+    # Fix 3: In RANGE regime, only allow HTF-confirmed direction
+    allow_long  = True
+    allow_short = True
+    regime_str = ""
+    if hasattr(cache, "get_regime"):
+        try:
+            regime_str = str(cache.get_regime(symbol)).upper()
+        except Exception:
+            pass
+    if "RANGE" in regime_str:
+        if not htf_bull and not htf_bear:
+            log.info("BR %s: RANGE regime, no HTF direction — skip", symbol)
+            return []
+        if htf_bull and not htf_bear:
+            allow_short = False
+        elif htf_bear and not htf_bull:
+            allow_long = False
+
     # Breakout detection
-    broke_long  = (bar["c"] > rng_high
+    broke_long  = (allow_long
+                   and bar["c"] > rng_high
                    and max(bar["o"], bar["c"]) > rng_high
                    and vol_ok
                    and htf_bull
                    and weekly_allows_long("breakout_retest", cache))
 
-    broke_short = (bar["c"] < rng_low
+    broke_short = (allow_short
+                   and bar["c"] < rng_low
                    and min(bar["o"], bar["c"]) < rng_low
                    and vol_ok
                    and htf_bear
@@ -346,24 +418,28 @@ async def score(symbol: str, cache) -> list[dict]:
                   vol_ok, htf_bull, htf_bear)
         return []
 
+    next_state = "AWAITING_BREAKOUT_CONFIRM" if _REQUIRE_BK_CONFIRM else "AWAITING_RETEST"
+
     if broke_long:
         _state[symbol] = {
-            "state":       "AWAITING_RETEST",
+            "state":       next_state,
             "direction":   "LONG",
             "flip_level":  rng_high,
             "bars_waited": 0,
         }
-        log.info("BR %s LONG breakout above %.4f — waiting for retest",
-                  symbol, rng_high)
+        log.info("BR %s LONG breakout above %.4f — %s",
+                  symbol, rng_high,
+                  "confirming next bar" if _REQUIRE_BK_CONFIRM else "waiting for retest")
 
     elif broke_short:
         _state[symbol] = {
-            "state":       "AWAITING_RETEST",
+            "state":       next_state,
             "direction":   "SHORT",
             "flip_level":  rng_low,
             "bars_waited": 0,
         }
-        log.info("BR %s SHORT breakout below %.4f — waiting for retest",
-                  symbol, rng_low)
+        log.info("BR %s SHORT breakout below %.4f — %s",
+                  symbol, rng_low,
+                  "confirming next bar" if _REQUIRE_BK_CONFIRM else "waiting for retest")
 
     return []   # no signal on breakout bar — wait for retest

@@ -115,14 +115,38 @@ def compute_dollar_stats(trades: list,
                          capital: float,
                          risk_usdt: float = 0.0,
                          risk_pct: float = 0.0,
-                         sizing_mode: str = "compound") -> dict:
+                         sizing_mode: str = "compound",
+                         circuit_breaker: bool = True,
+                         max_position_usdt: float = 0.0) -> dict:
     """Convert R-based trade results to dollar P&L.
 
     sizing_mode:
       "compound" = risk_pct of current equity (grows with wins)
       "fixed"    = risk_pct of starting capital always (constant dollar risk)
     If risk_usdt > 0 and risk_pct == 0: fixed dollar risk every trade.
+
+    max_position_usdt:
+      Cap notional position size. If > 0, reduces risk when the computed
+      position would exceed this notional. Matches live rr_calculator logic.
+
+    circuit_breaker:
+      When True, simulates the live circuit breaker:
+      - Halts trading for the rest of the UTC day if daily loss > 3% of balance
+      - Halts after 6 consecutive losses (resets on next UTC day)
+      Skipped trades are not counted in stats (matches live behavior).
     """
+    import yaml as _yaml_cb
+    _cb_cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    try:
+        with open(_cb_cfg_path) as _cbf:
+            _cb_cfg = _yaml_cb.safe_load(_cbf).get("risk", {})
+    except Exception:
+        _cb_cfg = {}
+    _max_daily_loss_pct = float(_cb_cfg.get("max_daily_loss_pct", 3.0)) / 100
+    _max_consec_losses  = int(_cb_cfg.get("max_consecutive_losses", 6))
+    if max_position_usdt <= 0:
+        max_position_usdt = float(_cb_cfg.get("max_position_size_usdt", 0))
+
     empty = {
         "starting_capital": capital,
         "final_balance":    capital,
@@ -154,7 +178,41 @@ def compute_dollar_stats(trades: list,
     consec_wins = consec_loss = 0
     max_cw = max_cl = 0
 
+    # Circuit breaker state
+    cb_daily_pnl      = 0.0
+    cb_daily_start_bal = capital
+    cb_current_day     = ""
+    cb_consec_losses   = 0
+    cb_tripped         = False
+    cb_skipped         = 0
+
     for trade in sorted(trades, key=lambda t: t.bar_idx):
+        # ── Circuit breaker day tracking ─────────────────────────────
+        if circuit_breaker:
+            ts = getattr(trade, "exit_ts", 0)
+            if not ts or ts < 1e9:
+                # No timestamp — use bar_idx as rough proxy (won't group by day)
+                trade_day = ""
+            else:
+                trade_day = datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+
+            # New UTC day — reset daily PnL and daily-loss trip
+            # NOTE: consecutive losses do NOT reset on new day (matches live CB)
+            # They only reset when a real win occurs
+            if trade_day and trade_day != cb_current_day:
+                cb_current_day     = trade_day
+                cb_daily_pnl       = 0.0
+                cb_daily_start_bal = balance
+                cb_tripped         = False  # daily loss trip resets
+
+            # Check if circuit breaker is tripped — still add to trade_pnls
+            # with zero values so indices stay aligned with sorted trades
+            if cb_tripped:
+                cb_skipped += 1
+                trade_pnls.append((0.0, 0.0))
+                balance_history.append(balance)  # equity unchanged
+                continue
+
         if risk_pct > 0:
             if sizing_mode == "fixed":
                 current_risk = round(capital * risk_pct, 2)
@@ -162,6 +220,19 @@ def compute_dollar_stats(trades: list,
                 current_risk = round(balance * risk_pct, 2)
         else:
             current_risk = risk_usdt
+
+        # Cap risk by max_position_usdt (matches live rr_calculator)
+        # position_notional = current_risk / sl_pct
+        # if notional > cap: current_risk = cap * sl_pct
+        if max_position_usdt > 0:
+            entry_price = getattr(trade, "entry", 0)
+            stop_price  = getattr(trade, "stop", 0)
+            if entry_price > 0 and stop_price > 0:
+                sl_pct = abs(entry_price - stop_price) / entry_price
+                if sl_pct > 0:
+                    notional = current_risk / sl_pct
+                    if notional > max_position_usdt:
+                        current_risk = round(max_position_usdt * sl_pct, 2)
 
         dollar_pnl = round(trade.pnl_r * current_risk, 2)
         balance    = round(balance + dollar_pnl, 2)
@@ -178,14 +249,33 @@ def compute_dollar_stats(trades: list,
             max_dd_usd = drawdown_usd
             max_dd_pct = drawdown_pct
 
-        if dollar_pnl > 0:
+        # Only negative PnL counts as a loss — breakeven is not a loss
+        is_real_win = dollar_pnl > 0
+
+        if is_real_win:
             consec_wins += 1
             consec_loss  = 0
             max_cw = max(max_cw, consec_wins)
+            if circuit_breaker:
+                cb_consec_losses = 0
         else:
             consec_loss += 1
             consec_wins  = 0
             max_cl = max(max_cl, consec_loss)
+            if circuit_breaker:
+                cb_consec_losses += 1
+
+        # ── Circuit breaker trip check ───────────────────────────────
+        if circuit_breaker:
+            cb_daily_pnl += dollar_pnl
+            # Trip 1: daily loss exceeds threshold
+            if (cb_daily_start_bal > 0
+                    and cb_daily_pnl < 0
+                    and abs(cb_daily_pnl) / cb_daily_start_bal > _max_daily_loss_pct):
+                cb_tripped = True
+            # Trip 2: consecutive losses (persists across days, resets on real win)
+            if cb_consec_losses >= _max_consec_losses:
+                cb_tripped = True
 
     pnls_only = [p for p, _ in trade_pnls]
     wins   = [p for p in pnls_only if p > 0]
@@ -195,14 +285,55 @@ def compute_dollar_stats(trades: list,
     sharpe = _sharpe(trades, capital, risk_pct if risk_pct > 0 else
                      (risk_usdt / capital if capital > 0 else 0.01))
 
-    # ── Monthly breakdown ────────────────────────────────────────────
+    # ── Monthly breakdown (uses trade_pnls which only contains accepted trades) ──
+    # Build accepted_trades list matching trade_pnls indices
+    sorted_all = sorted(trades, key=lambda t: t.bar_idx)
+    accepted_trades = []
+    _skip_idx = 0
+    if circuit_breaker:
+        # Replay the skip logic to identify which trades were accepted
+        _cb2_day = ""
+        _cb2_pnl = 0.0
+        _cb2_bal = capital
+        _cb2_cl  = 0
+        _cb2_trip = False
+        for t in sorted_all:
+            ts2 = getattr(t, "exit_ts", 0)
+            if ts2 and ts2 > 1e9:
+                td2 = datetime.utcfromtimestamp(ts2 / 1000).strftime("%Y-%m-%d")
+            else:
+                td2 = ""
+            if td2 and td2 != _cb2_day:
+                _cb2_day = td2
+                _cb2_pnl = 0.0
+                _cb2_bal = capital  # approximate
+                _cb2_cl = 0
+                _cb2_trip = False
+            if _cb2_trip:
+                continue
+            accepted_trades.append(t)
+            # Replay PnL for trip checks
+            idx = len(accepted_trades) - 1
+            if idx < len(trade_pnls):
+                d_pnl = trade_pnls[idx][0]
+                _cb2_pnl += d_pnl
+                if d_pnl <= 0:
+                    _cb2_cl += 1
+                else:
+                    _cb2_cl = 0
+                if _cb2_bal > 0 and _cb2_pnl < 0 and abs(_cb2_pnl) / _cb2_bal > _max_daily_loss_pct:
+                    _cb2_trip = True
+                if _cb2_cl >= _max_consec_losses:
+                    _cb2_trip = True
+    else:
+        accepted_trades = sorted_all
+
     monthly: dict[str, dict] = {}
     eq = capital
-    sorted_trades = sorted(trades, key=lambda t: t.bar_idx)
-    for i, t in enumerate(sorted_trades):
+    for i, t in enumerate(accepted_trades):
         ts = getattr(t, "exit_ts", 0) or getattr(t, "bar_idx", 0)
         month_key = "unknown"
-        if ts > 1e9:  # looks like unix ms
+        if ts > 1e9:
             dt = datetime.utcfromtimestamp(ts / 1000)
             month_key = dt.strftime("%Y-%m")
         pnl_d = trade_pnls[i][0] if i < len(trade_pnls) else 0.0
@@ -216,6 +347,7 @@ def compute_dollar_stats(trades: list,
 
     monthly_list = [
         {"month": k, "trades": v["trades"],
+         "wins": v["wins"],
          "pnl": round(v["pnl"], 2),
          "wr": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0}
         for k, v in sorted(monthly.items())
@@ -223,14 +355,16 @@ def compute_dollar_stats(trades: list,
 
     # ── By regime / strategy breakdown ───────────────────────────────
     by_regime: dict[str, dict] = {}
-    for t in trades:
+    for i, t in enumerate(accepted_trades):
         regime = getattr(t, "strategy", "unknown")
         if regime not in by_regime:
-            by_regime[regime] = {"trades": 0, "wins": 0, "pnl_r": 0.0}
+            by_regime[regime] = {"trades": 0, "wins": 0, "pnl_r": 0.0, "pnl_usd": 0.0}
         by_regime[regime]["trades"] += 1
         pnl_r = getattr(t, "pnl_r", 0)
         by_regime[regime]["pnl_r"] += pnl_r
-        if pnl_r > 0:
+        pnl_d = trade_pnls[i][0] if i < len(trade_pnls) else 0.0
+        by_regime[regime]["pnl_usd"] += pnl_d
+        if pnl_d > 0:
             by_regime[regime]["wins"] += 1
 
     return {
@@ -254,6 +388,8 @@ def compute_dollar_stats(trades: list,
         "monthly":          monthly_list,
         "by_regime":        by_regime,
         "sizing_mode":      sizing_mode,
+        "circuit_breaker":  circuit_breaker,
+        "cb_skipped":       cb_skipped,
     }
 
 

@@ -20,9 +20,21 @@ import urllib.request
 
 log = logging.getLogger(__name__)
 
-_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID",   "")
 _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
+# Lazy-loaded — ensures .env is read even if module is imported early
+_TOKEN:   str = ""
+_CHAT_ID: str = ""
+_LOADED:  bool = False
+
+
+def _ensure_loaded() -> None:
+    global _TOKEN, _CHAT_ID, _LOADED
+    if _LOADED:
+        return
+    _LOADED  = True
+    _TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID",   "")
 
 # Regime → emoji
 _REGIME_EMOJI = {
@@ -36,6 +48,7 @@ _DIR_EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
 
 
 def _enabled() -> bool:
+    _ensure_loaded()
     return bool(_TOKEN and _CHAT_ID)
 
 

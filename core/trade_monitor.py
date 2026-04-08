@@ -661,6 +661,88 @@ def _calc_net_pnl(trade: dict, exit_price: float) -> float:
 
 # ── Main coroutine ────────────────────────────────────────────────────────────
 
+async def _close_orphaned_trades(cache) -> None:
+    """Run once at startup — close any OPEN trades where price has blown past SL.
+
+    This catches positions orphaned by bot restarts where the exchange SL
+    order was lost or the trade monitor wasn't running when SL was hit.
+    """
+    trades = await asyncio.to_thread(_load_open_trades)
+    if not trades:
+        return
+
+    closed = 0
+    for trade in trades:
+        symbol    = trade["symbol"]
+        direction = trade["direction"]
+        entry     = float(trade["entry"])
+        sl        = float(trade["stop_loss"])
+        size      = float(trade.get("size", 0))
+
+        price = cache.get_last_price(symbol) if cache else 0
+        if not price:
+            continue
+
+        # Check if SL was blown
+        sl_blown = False
+        if direction == "LONG" and price < sl:
+            sl_blown = True
+        elif direction == "SHORT" and price > sl:
+            sl_blown = True
+
+        if not sl_blown:
+            continue
+
+        sl_dist_pct = abs(price - sl) / sl * 100
+        log.warning(
+            "ORPHANED TRADE: %s %s entry=%.4f SL=%.4f price=%.4f (%.1f%% past SL) — force closing",
+            direction, symbol, entry, sl, price, sl_dist_pct,
+        )
+
+        # Cancel any stale exchange orders (TP/SL left over)
+        if not _PAPER_MODE:
+            try:
+                from data.binance_rest import cancel_all_orders
+                await cancel_all_orders(symbol)
+                log.info("Orphan cleanup: cancelled stale exchange orders for %s", symbol)
+            except Exception as exc:
+                log.debug("Orphan cleanup: cancel orders failed %s: %s", symbol, exc)
+
+        # Close at current price (SL was already blown)
+        pnl = _calc_net_pnl(entry, price, size, direction)
+        try:
+            from core.executor import close_deal
+            await close_deal(symbol, direction, exit_price=price, pnl_usdt=pnl)
+        except Exception as exc:
+            log.error("Failed to close orphaned trade %s %s: %s", direction, symbol, exc)
+            # Fallback: update DB directly
+            try:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat()
+                with sqlite3.connect(_DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE trades SET status='FILLED', exit_price=?, pnl_usdt=?, "
+                        "closed_ts=? WHERE id=?",
+                        (price, round(pnl, 2), now, trade["id"]),
+                    )
+                log.info("Orphaned trade closed in DB: %s %s pnl=%.2f", direction, symbol, pnl)
+            except Exception as db_exc:
+                log.error("DB fallback close also failed: %s", db_exc)
+
+        try:
+            from notifications.telegram import send_trade_close
+            await send_trade_close(trade, "ORPHAN_SL", price, pnl)
+        except Exception:
+            pass
+
+        closed += 1
+
+    if closed:
+        log.warning("Startup orphan check: closed %d trades with blown SL", closed)
+    else:
+        log.info("Startup orphan check: all open trades OK")
+
+
 async def monitor_trades(cache) -> None:
     """
     Continuously polls open trades and closes them when TP/SL is hit.
@@ -670,6 +752,12 @@ async def monitor_trades(cache) -> None:
         "Trade monitor started  paper=%s  poll=%.0fs",
         _PAPER_MODE, _POLL_INTERVAL_S,
     )
+
+    # Run orphan check once at startup
+    try:
+        await _close_orphaned_trades(cache)
+    except Exception as exc:
+        log.error("Orphan check failed: %s", exc)
 
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
