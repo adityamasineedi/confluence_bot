@@ -172,6 +172,12 @@ async def score(symbol: str, cache) -> list[dict]:
     bars_1h = cache.get_ohlcv(symbol, window=_LOOKBACK + 5, tf="1h")
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_PERIOD + 5, tf="4h")
 
+    # Patch last 4H bar with live price to prevent stale EMA
+    if bars_4h:
+        _live = cache.get_closes(symbol, window=1, tf="1m")
+        if _live:
+            bars_4h[-1] = {**bars_4h[-1], "c": _live[-1]}
+
     if not bars_1h or len(bars_1h) < 10:
         return []
 

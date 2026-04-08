@@ -864,10 +864,10 @@ async def dashboard() -> HTMLResponse:
     <div style="display:flex;flex-direction:column;gap:4px">
       <label style="font-size:0.68rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Symbol</label>
       <select id="bt-sym" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;padding:6px 10px;font-size:0.83rem;min-width:130px">
-        <option value="ALL">ALL (8 coins)</option>
+        <option value="ALL">ALL (11 coins)</option>
         <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option>
         <option>BNBUSDT</option><option>XRPUSDT</option><option>LINKUSDT</option>
-        <option>DOGEUSDT</option><option>SUIUSDT</option>
+        <option>DOGEUSDT</option><option>SUIUSDT</option><option>ADAUSDT</option><option>AVAXUSDT</option><option>TAOUSDT</option>
       </select>
     </div>
     <div style="display:flex;flex-direction:column;gap:4px">
@@ -1844,7 +1844,7 @@ async def dashboard() -> HTMLResponse:
 </div>
 
 <script>
-const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT'];
+const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT','ADAUSDT','AVAXUSDT','TAOUSDT'];
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 let mktLoaded = false, btLoaded = false, mktTimer = null;
@@ -2534,18 +2534,26 @@ function btTradeRender() {
 
   if (!page.length) return '<p style="color:#4b5563;padding:10px">No trades match filters.</p>';
 
-  return `<table><thead><tr>
+  return `<div style="overflow-x:auto"><table><thead><tr>
     <th>Date</th><th>Symbol</th><th>Dir</th><th>Strategy</th>
-    <th>Score</th><th>Risk$</th><th>Outcome</th><th>PnL</th><th>Equity</th>
+    <th>Qty</th><th>Entry</th><th>Exit</th><th>Notional</th>
+    <th>Risk$</th><th>Outcome</th><th>PnL</th>
+    <th>Taker Fee</th><th>Funding</th><th>Equity</th>
   </tr></thead><tbody>${page.map(t=>`<tr style="${t.outcome==='CB_SKIP'?'opacity:0.4':''}">
     <td style="white-space:nowrap">${btTsDate(t.exit_ts)}</td><td>${t.symbol}</td>
     <td style="color:${t.direction==='LONG'?'#22c55e':'#ef4444'}">${t.direction}</td>
-    <td>${t.regime}</td><td>${(+t.score).toFixed(2)}</td>
-    <td>$${(+t.risk_amount).toFixed(1)}</td>
+    <td>${t.regime}</td>
+    <td>${t.qty?(+t.qty).toFixed(4):'\u2014'}</td>
+    <td>${t.entry?(+t.entry).toFixed(2):'\u2014'}</td>
+    <td>${t.exit_price?(+t.exit_price).toFixed(2):'\u2014'}</td>
+    <td>$${t.notional?(+t.notional).toFixed(0):'\u2014'}</td>
+    <td>$${(+t.risk_amount).toFixed(2)}</td>
     <td><span class="badge badge-${t.outcome}">${t.outcome}</span></td>
     <td class="${btPnlCls(t.pnl)}">${btPnlFmt(t.pnl)}</td>
-    <td>$${t.equity_after?(+t.equity_after).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'}</td>
-  </tr>`).join('')}</tbody></table>`;
+    <td style="color:#6b7280">$${t.taker_fee?(+t.taker_fee).toFixed(3):'\u2014'}</td>
+    <td style="color:#6b7280">$${t.funding_fee?(+t.funding_fee).toFixed(4):'\u2014'}</td>
+    <td>$${t.equity_after?(+t.equity_after).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'\u2014'}</td>
+  </tr>`).join('')}</tbody></table></div>`;
 }
 
 function btPagination() {
@@ -2568,9 +2576,9 @@ function btPagination() {
 
 function btExportCSV() {
   const filtered = btGetFiltered();
-  const header = 'Date,Symbol,Direction,Strategy,Score,Risk,Outcome,PnL,Equity\\n';
+  const header = 'Date,Symbol,Direction,Strategy,Qty,Entry,Exit,Notional,Risk,Outcome,PnL,Taker_Fee,Funding_Fee,Equity\\n';
   const rows = filtered.map(t =>
-    `${btTsDate(t.exit_ts)},${t.symbol},${t.direction},${t.regime},${(+t.score).toFixed(2)},${(+t.risk_amount).toFixed(2)},${t.outcome},${(+t.pnl).toFixed(2)},${t.equity_after||''}`
+    `${btTsDate(t.exit_ts)},${t.symbol},${t.direction},${t.regime},${(+t.qty||0).toFixed(4)},${(+t.entry||0).toFixed(4)},${(+t.exit_price||0).toFixed(4)},${(+t.notional||0).toFixed(2)},${(+t.risk_amount).toFixed(2)},${t.outcome},${(+t.pnl).toFixed(2)},${(+t.taker_fee||0).toFixed(4)},${(+t.funding_fee||0).toFixed(4)},${t.equity_after||''}`
   ).join('\\n');
   const blob = new Blob([header + rows], {type:'text/csv'});
   const a = document.createElement('a');
@@ -3424,7 +3432,7 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         from_ms = _date_ms(from_date)
         to_ms   = _date_ms(to_date) + 86_400_000
 
-        _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT"]
+        _ALL_SYMS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","LINKUSDT","DOGEUSDT","SUIUSDT","ADAUSDT","AVAXUSDT","TAOUSDT"]
         symbols   = _ALL_SYMS if symbol == "ALL" else [symbol]
 
         # Always fetch BTCUSDT for strategies that need it as a reference
@@ -3712,6 +3720,10 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         sorted_trades = sorted(trades or [], key=lambda t: getattr(t, 'bar_idx', 0))
         equity = capital
         trades_serializable = []
+        # Load cost constants for fee/funding calculation
+        from backtest.engine import FEE_RT as _fee_rt, SLIP_FRAC as _slip
+        from backtest.engine import FUNDING_PER_BAR_1H as _fund_1h, FUNDING_PER_BAR_5M as _fund_5m
+
         for i, t in enumerate(sorted_trades):
             pnl_val, risk_val = pnl_pairs[i] if i < len(pnl_pairs) else (0.0, 0.0)
             cb_skip = (pnl_val == 0.0 and risk_val == 0.0
@@ -3722,19 +3734,61 @@ async def api_backtest_run(request: Request) -> JSONResponse:
             d_raw = t.__dict__ if hasattr(t, "__dict__") else (
                     t._asdict() if hasattr(t, "_asdict") else
                     dict(t) if isinstance(t, dict) else {})
+
+            # Compute detailed trade metrics
+            entry_p   = d_raw.get("entry", 0)
+            stop_p    = d_raw.get("stop", 0)
+            tp_p      = d_raw.get("tp", 0)
+            direction = d_raw.get("direction", "")
+            outcome   = d_raw.get("outcome", "")
+            sl_dist   = abs(entry_p - stop_p) if entry_p and stop_p else 0
+            qty       = risk_val / sl_dist if sl_dist > 0 else 0
+            notional  = qty * entry_p if entry_p else 0
+
+            # Exit price from outcome
+            if outcome == "TP":
+                exit_p = tp_p
+            elif outcome == "SL":
+                exit_p = stop_p
+            else:
+                # TIMEOUT: approximate from pnl_r
+                pnl_r = d_raw.get("pnl_r", 0)
+                if direction == "LONG" and sl_dist > 0:
+                    exit_p = entry_p + pnl_r * sl_dist
+                elif direction == "SHORT" and sl_dist > 0:
+                    exit_p = entry_p - pnl_r * sl_dist
+                else:
+                    exit_p = entry_p
+
+            # Fees: taker fee on entry + exit notional
+            taker_fee = (qty * entry_p + qty * exit_p) * _slip * 2 if qty > 0 else 0
+            # Funding: estimate hold bars from strategy type
+            strat = d_raw.get("strategy", "")
+            if "breakout_retest" in strat:
+                hold_bars = 24  # ~2h on 5M bars typical
+                funding = qty * entry_p * _fund_5m * hold_bars
+            else:
+                hold_bars = 12  # ~12h on 1H bars typical
+                funding = qty * entry_p * _fund_1h * hold_bars
+
             trades_serializable.append({
                 "symbol":       d_raw.get("symbol", ""),
-                "direction":    d_raw.get("direction", ""),
+                "direction":    direction,
                 "regime":       d_raw.get("strategy", d_raw.get("regime", "")),
-                "outcome":      "CB_SKIP" if cb_skip else d_raw.get("outcome", ""),
+                "outcome":      "CB_SKIP" if cb_skip else outcome,
                 "score":        d_raw.get("pnl_r", 0),
                 "pnl_r":        d_raw.get("pnl_r", 0),
                 "pnl":          round(pnl_val, 2),
                 "risk_amount":  round(risk_val, 2),
                 "equity_after": equity,
-                "entry":        d_raw.get("entry", 0),
-                "stop":         d_raw.get("stop", 0),
-                "tp":           d_raw.get("tp", 0),
+                "entry":        round(entry_p, 6),
+                "exit_price":   round(exit_p, 6),
+                "stop":         round(stop_p, 6),
+                "tp":           round(tp_p, 6),
+                "qty":          round(qty, 4),
+                "notional":     round(notional, 2),
+                "taker_fee":    round(taker_fee, 4),
+                "funding_fee":  round(funding, 4),
                 "bar_idx":      d_raw.get("bar_idx", 0),
                 "exit_ts":      _bar_ts(d_raw.get("symbol", ""), d_raw.get("bar_idx", 0)),
             })
@@ -4474,8 +4528,10 @@ async def signal_readiness() -> JSONResponse:
     if _cache is None:
         return JSONResponse([])
 
-    symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT',
-               'XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT']
+    import yaml as _yr
+    _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(_cfg_path) as _fr:
+        symbols = _yr.safe_load(_fr).get("symbols", [])
     result = []
 
     for sym in symbols:
@@ -4684,7 +4740,7 @@ async def _market_legacy() -> HTMLResponse:
 </div>
 
 <script>
-const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT'];
+const SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT','ADAUSDT','AVAXUSDT','TAOUSDT'];
 
 function fmt(n, dec=2) { return (+n).toLocaleString('en',{minimumFractionDigits:dec,maximumFractionDigits:dec}); }
 function fmtPct(v) { return (v>=0?'+':'')+fmt(v,2)+'%'; }

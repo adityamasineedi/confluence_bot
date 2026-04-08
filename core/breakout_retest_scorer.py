@@ -219,6 +219,14 @@ async def score(symbol: str, cache) -> list[dict]:
 
     bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
 
+    # Patch last 4H bar close with live price — prevents stale EMA
+    # during intra-candle drops (4H bar only updates on close, so mid-candle
+    # the scorer sees the previous close, not the current price)
+    if bars_4h:
+        live_closes = cache.get_closes(symbol, window=1, tf="1m")
+        if live_closes:
+            bars_4h[-1] = {**bars_4h[-1], "c": live_closes[-1]}
+
     # HTF EMA20 direction (4H — more stable than 1H)
     htf_bull = True
     htf_bear = True

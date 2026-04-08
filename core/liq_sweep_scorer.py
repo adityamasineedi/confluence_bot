@@ -163,6 +163,9 @@ def _htf_bullish(symbol: str, cache) -> bool:
     bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
     if not bars_4h or len(bars_4h) < 22:
         return False
+    _live = cache.get_closes(symbol, window=1, tf="1m")
+    if _live:
+        bars_4h[-1] = {**bars_4h[-1], "c": _live[-1]}
     closes = [b["c"] for b in bars_4h]
     k = 2.0 / (21 + 1)
     ema = sum(closes[:21]) / 21
@@ -175,6 +178,9 @@ def _htf_bearish(symbol: str, cache) -> bool:
     bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
     if not bars_4h or len(bars_4h) < 22:
         return False
+    _live = cache.get_closes(symbol, window=1, tf="1m")
+    if _live:
+        bars_4h[-1] = {**bars_4h[-1], "c": _live[-1]}
     closes = [b["c"] for b in bars_4h]
     k = 2.0 / (21 + 1)
     ema = sum(closes[:21]) / 21

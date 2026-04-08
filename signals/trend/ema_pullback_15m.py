@@ -186,6 +186,10 @@ def _htf_bullish(symbol: str, cache) -> bool:
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_SLOW + 5, tf="4h")
     if len(bars_4h) < _EMA_SLOW:
         return False
+    # Patch last 4H bar with live price to prevent stale EMA
+    _live = cache.get_closes(symbol, window=1, tf="1m")
+    if _live:
+        bars_4h[-1] = {**bars_4h[-1], "c": _live[-1]}
     closes_4h = [b["c"] for b in bars_4h]
     ema50_4h  = _ema(closes_4h, _EMA_SLOW)
     ema21_4h  = _ema(closes_4h, _EMA_FAST)
@@ -215,6 +219,9 @@ def _htf_bearish(symbol: str, cache) -> bool:
     bars_4h = cache.get_ohlcv(symbol, window=_EMA_SLOW + 5, tf="4h")
     if len(bars_4h) < _EMA_SLOW:
         return False
+    _live = cache.get_closes(symbol, window=1, tf="1m")
+    if _live:
+        bars_4h[-1] = {**bars_4h[-1], "c": _live[-1]}
     closes_4h  = [b["c"] for b in bars_4h]
     ema50_4h   = _ema(closes_4h, _EMA_SLOW)
     ema21_4h   = _ema(closes_4h, _EMA_FAST)

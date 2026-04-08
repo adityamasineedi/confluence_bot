@@ -33,6 +33,9 @@ _PRICE_DECIMALS: dict[str, int] = {
     "LINKUSDT": 3,
     "DOGEUSDT": 5,
     "SUIUSDT":  4,
+    "ADAUSDT":  4,
+    "AVAXUSDT": 2,
+    "TAOUSDT":  2,
 }
 
 # Binance Futures quantity step decimals (from LOT_SIZE stepSize)
@@ -41,10 +44,13 @@ _QTY_DECIMALS: dict[str, int] = {
     "ETHUSDT":  3,
     "SOLUSDT":  1,
     "BNBUSDT":  2,
-    "XRPUSDT":  0,   # whole numbers only
+    "XRPUSDT":  0,
     "LINKUSDT": 1,
-    "DOGEUSDT": 0,   # whole numbers only
-    "SUIUSDT":  0,   # whole numbers only
+    "DOGEUSDT": 0,
+    "SUIUSDT":  0,
+    "ADAUSDT":  0,
+    "AVAXUSDT": 1,
+    "TAOUSDT":  2,
 }
 
 

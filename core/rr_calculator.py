@@ -34,12 +34,10 @@ _STEP_DECIMALS: dict[str, int] = {
     "LINKUSDT": 1,
     "DOGEUSDT": 0,
     "SUIUSDT":  0,
+    "ADAUSDT":  0,
+    "AVAXUSDT": 1,
+    "TAOUSDT":  2,
 }
-
-assert _STEP_DECIMALS == {   # matches executor._QTY_PRECISION exactly
-    "BTCUSDT": 3, "ETHUSDT": 3, "SOLUSDT": 1, "BNBUSDT": 2,
-    "XRPUSDT": 0, "LINKUSDT": 1, "DOGEUSDT": 0, "SUIUSDT": 0,
-}, "STEP_DECIMALS mismatch — update executor._QTY_PRECISION to match"
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:

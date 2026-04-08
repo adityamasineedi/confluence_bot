@@ -36,6 +36,9 @@ _QTY_PRECISION = {
     "LINKUSDT": 1,
     "DOGEUSDT": 0,
     "SUIUSDT":  0,
+    "ADAUSDT":  0,
+    "AVAXUSDT": 1,
+    "TAOUSDT":  2,
 }
 _PRICE_PRECISION = {
     "BTCUSDT":  1,
@@ -409,10 +412,16 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         )
         if not order:
             return None
+        # Verify the order actually filled — don't log ghost trades
+        filled_qty = float(order.get("executedQty", 0))
+        if filled_qty <= 0:
+            log.warning("Order returned but executedQty=0 for %s %s — not logging as trade",
+                        direction, symbol)
+            return None
         order["entry"]       = entry
         order["stop"]        = stop
         order["take_profit"] = effective_tp
-        order["qty"]         = qty
+        order["qty"]         = filled_qty  # use actual fill qty, not requested
         order["regime"]      = regime
 
     # Log, notify, mark active
