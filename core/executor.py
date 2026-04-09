@@ -163,9 +163,16 @@ async def execute_signal(score_dict: dict, cache) -> dict | None:
     # Gate: no duplicate open position — hold lock during check+claim only,
     # never during I/O so other signals can proceed concurrently.
     deal_key = (symbol, direction)
+    opposite = "SHORT" if direction == "LONG" else "LONG"
     async with _deal_lock:
         if deal_key in _active_deals or deal_key in _pending_deals:
             log.debug("Skipping %s %s — already active or pending", direction, symbol)
+            return None
+        # Block opposite direction on same symbol — prevents hedged positions
+        # that cancel each other out and waste fees
+        if (symbol, opposite) in _active_deals or (symbol, opposite) in _pending_deals:
+            log.debug("Skipping %s %s — opposite position %s already open on %s",
+                      direction, symbol, opposite, symbol)
             return None
         if len(_active_deals) + len(_pending_deals) >= _MAX_OPEN:
             log.debug("Skipping %s %s — max positions (%d) reached", direction, symbol, _MAX_OPEN)
@@ -198,32 +205,36 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     regime    = score_dict["regime"]
 
     # Gate: DB-level open trade check — cross-process safe (catches duplicate instances)
+    # Also blocks opposite direction on same symbol (prevents hedged positions)
     import sqlite3 as _sqlite3
     _db_path = os.environ.get("DB_PATH", "confluence_bot.db")
     try:
         with _sqlite3.connect(_db_path) as _conn:
             _open_row = _conn.execute(
-                "SELECT id FROM trades WHERE symbol=? AND direction=? AND status='OPEN' LIMIT 1",
-                (symbol, direction),
+                "SELECT id, direction FROM trades WHERE symbol=? AND status='OPEN' LIMIT 1",
+                (symbol,),
             ).fetchone()
         if _open_row:
-            log.info("Skipping %s %s — OPEN trade already in DB (id=%s)",
-                     direction, symbol, _open_row[0])
+            log.info("Skipping %s %s — OPEN trade already in DB for %s (id=%s dir=%s)",
+                     direction, symbol, symbol, _open_row[0], _open_row[1])
             async with _deal_lock:
                 _pending_deals.discard(deal_key)
-                _active_deals.add(deal_key)   # re-sync in-memory state
+                _active_deals.add((symbol, _open_row[1]))   # re-sync with actual DB direction
             return None
     except Exception as _exc:
         log.debug("DB open trade pre-check failed: %s", _exc)
 
     # Gate: verify no open position on exchange (guards against _active_deals desync)
+    # Blocks BOTH same-direction AND opposite-direction — one position per symbol
     from data.exchange_router import get_position_amt
     pos_amt = await get_position_amt(symbol)
-    if (direction == "LONG" and pos_amt > 0) or (direction == "SHORT" and pos_amt < 0):
-        log.info("Skipping %s %s — open position already exists on exchange (amt=%.4f)", direction, symbol, pos_amt)
+    if abs(pos_amt) > 0.0001:
+        existing_dir = "LONG" if pos_amt > 0 else "SHORT"
+        log.info("Skipping %s %s — position already exists on exchange (%s amt=%.4f)",
+                 direction, symbol, existing_dir, pos_amt)
         async with _deal_lock:
             _pending_deals.discard(deal_key)
-            _active_deals.add(deal_key)   # re-sync
+            _active_deals.add((symbol, existing_dir))   # re-sync with actual direction
         return None
 
     from .rr_calculator import compute, position_size
