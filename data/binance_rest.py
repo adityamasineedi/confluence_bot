@@ -519,6 +519,42 @@ async def get_position_amt(symbol: str) -> float:
     return 0.0
 
 
+async def fetch_all_positions() -> list[dict]:
+    """Fetch all open positions from Binance Futures.
+
+    Returns list of dicts with: symbol, direction, size, entry, mark_price,
+    unrealized_pnl, leverage, margin_type.
+    Only returns positions with non-zero size.
+    """
+    url = f"{_BINANCE_BASE}/fapi/v2/positionRisk"
+    params = _sign({})
+    headers = {"X-MBX-APIKEY": _API_KEY}
+    try:
+        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+            async with session.get(url, params=params, headers=headers) as resp:
+                resp.raise_for_status()
+                positions = await resp.json()
+        result = []
+        for p in positions:
+            amt = float(p.get("positionAmt", 0))
+            if abs(amt) < 1e-8:
+                continue
+            result.append({
+                "symbol": p.get("symbol", ""),
+                "direction": "LONG" if amt > 0 else "SHORT",
+                "size": abs(amt),
+                "entry": float(p.get("entryPrice", 0)),
+                "mark_price": float(p.get("markPrice", 0)),
+                "unrealized_pnl": float(p.get("unRealizedProfit", 0)),
+                "leverage": int(p.get("leverage", 1)),
+                "margin_type": p.get("marginType", "").upper(),
+            })
+        return result
+    except Exception as exc:
+        log.warning("fetch_all_positions failed: %s", exc)
+        return []
+
+
 async def refresh_account_balance() -> float:
     """Fetch balance from Binance and update cache + DB immediately.
 
@@ -848,9 +884,8 @@ async def place_limit_then_market(
         # ── Step 1: place LIMIT entry ─────────────────────────────────────
         try:
             entry_params: dict = {
-                "symbol": symbol, "side": side, "type": "LIMIT",
-                "quantity": quantity, "price": _round_price(symbol, limit_price),
-                "timeInForce": "GTC",
+                "symbol": symbol, "side": side, "type": "MARKET",
+                "quantity": quantity,
             }
             async with session.post(url, params=_sign(entry_params), headers=headers) as resp:
                 resp.raise_for_status()
@@ -865,8 +900,8 @@ async def place_limit_then_market(
             log.error("LIMIT entry failed (%s %s): %s", side, symbol, exc)
             return {}
 
-        # ── Step 2: wait for fill ─────────────────────────────────────────
-        await asyncio.sleep(timeout_s)
+        # ── Step 2: wait for fill (market = instant)
+        await asyncio.sleep(2)
 
         # ── Step 3: check fill status ─────────────────────────────────────
         order_detail = await _get_order_detail(symbol, order_id)

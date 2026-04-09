@@ -257,6 +257,48 @@ async def open_trades() -> JSONResponse:
         return JSONResponse([])
 
 
+@app.get("/positions/exchange")
+async def exchange_positions() -> JSONResponse:
+    """Return all positions on exchange, marking which are tracked by the bot."""
+    try:
+        from data.exchange_router import fetch_all_positions
+        all_pos = await fetch_all_positions()
+
+        # Load bot-tracked symbols from DB
+        tracked_symbols: set[str] = set()
+        try:
+            with _get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT symbol, direction FROM trades WHERE status='OPEN'"
+                ).fetchall()
+            for r in rows:
+                tracked_symbols.add(f"{r['symbol']}_{r['direction']}")
+        except Exception:
+            pass
+
+        result = []
+        for pos in all_pos:
+            key = f"{pos['symbol']}_{pos['direction']}"
+            pos["tracked"] = key in tracked_symbols
+            # Unrealized PnL %
+            entry = pos.get("entry", 0)
+            if entry > 0:
+                mark = pos.get("mark_price", 0)
+                if pos["direction"] == "LONG":
+                    pos["unrealized_pct"] = round((mark - entry) / entry * 100, 2)
+                else:
+                    pos["unrealized_pct"] = round((entry - mark) / entry * 100, 2)
+            else:
+                pos["unrealized_pct"] = 0.0
+            pos["unrealized_pnl"] = round(pos.get("unrealized_pnl", 0), 2)
+            result.append(pos)
+        return JSONResponse(result)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse([])
+
+
 @app.get("/debug/{symbol}")
 def debug_symbol(symbol: str) -> JSONResponse:
     """
@@ -919,6 +961,16 @@ async def dashboard() -> HTMLResponse:
     <table>
       <thead><tr><th>Since</th><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Entry</th><th>Mark</th><th>SL</th><th>TP</th><th>Size</th><th>Unrealized PnL</th><th>SL Dist</th><th>TP Dist</th></tr></thead>
       <tbody id="open-trades-body"><tr><td colspan="12" style="color:#4b5563">loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+  <!-- Exchange Positions (all positions on exchange, including untracked) -->
+  <section style="padding-top:20px">
+    <h2>Exchange Positions <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— all positions on exchange, updates every 5s</span></h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Symbol</th><th>Dir</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unrealized PnL</th><th>Leverage</th><th>Margin</th><th>Status</th></tr></thead>
+      <tbody id="exchange-positions-body"><tr><td colspan="9" style="color:#4b5563">loading…</td></tr></tbody>
     </table>
     </div>
   </section>
@@ -2119,13 +2171,14 @@ async function loadGates() {
 
 // ── SIGNALS / TRADES / REGIMES (shared refresh) ───────────────────────────────
 async function refreshTradelog() {
-  const [stats, liveSignals, firedSignals, trades, readiness, openTrades] = await Promise.all([
+  const [stats, liveSignals, firedSignals, trades, readiness, openTrades, exchangePos] = await Promise.all([
     fetchJSON('/stats/summary'),
     fetchJSON('/signals/live'),
     fetchJSON('/signals/recent?limit=20'),
     fetchJSON('/trades/recent?limit=20'),
     fetchJSON('/signals/readiness'),
     fetchJSON('/trades/open'),
+    fetchJSON('/positions/exchange'),
   ]);
   // Account balance
   const balEl = document.getElementById('stat-balance');
@@ -2184,6 +2237,44 @@ async function refreshTradelog() {
     </tr>`;
   } else {
     openBody.innerHTML = '<tr><td colspan="12" style="color:#4b5563;padding:16px;text-align:center">No open positions</td></tr>';
+  }
+
+  // Exchange positions (all positions on exchange)
+  const exPosBody = document.getElementById('exchange-positions-body');
+  const exPosArr = Array.isArray(exchangePos) ? exchangePos : [];
+  if (exPosArr.length) {
+    let totalExPnl = 0;
+    exPosBody.innerHTML = exPosArr.map(p => {
+      const pnl = p.unrealized_pnl || 0;
+      const pnlPct = p.unrealized_pct || 0;
+      totalExPnl += pnl;
+      const pnlColor = pnl > 0 ? '#22c55e' : pnl < 0 ? '#ef4444' : '#6b7280';
+      const statusBadge = p.tracked
+        ? '<span style="background:#14532d;color:#22c55e;padding:2px 8px;border-radius:4px;font-size:0.72rem;font-weight:600">BOT</span>'
+        : '<span style="background:#78350f;color:#fbbf24;padding:2px 8px;border-radius:4px;font-size:0.72rem;font-weight:600">MANUAL</span>';
+      return `<tr style="${p.tracked ? '' : 'background:#1c1407'}">
+        <td><b>${p.symbol}</b></td>
+        <td>${badge('dir', p.direction)}</td>
+        <td>${(+p.size).toFixed(4)}</td>
+        <td>${(+p.entry).toFixed(4)}</td>
+        <td style="font-weight:600;color:#60a5fa">${(+p.mark_price).toFixed(4)}</td>
+        <td style="color:${pnlColor};font-weight:700">
+          ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          <span style="font-size:0.7rem;font-weight:400"> (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
+        </td>
+        <td>${p.leverage}x</td>
+        <td style="font-size:0.78rem;color:#6b7280">${p.margin_type}</td>
+        <td>${statusBadge}</td>
+      </tr>`;
+    }).join('');
+    const totExColor = totalExPnl > 0 ? '#22c55e' : totalExPnl < 0 ? '#ef4444' : '#6b7280';
+    exPosBody.innerHTML += `<tr style="border-top:2px solid #2a2d3a">
+      <td colspan="5" style="text-align:right;font-weight:600;color:#6b7280">Total Unrealized</td>
+      <td style="color:${totExColor};font-weight:700;font-size:1rem">${totalExPnl >= 0 ? '+' : ''}${totalExPnl.toFixed(2)} USDT</td>
+      <td colspan="3"></td>
+    </tr>`;
+  } else {
+    exPosBody.innerHTML = '<tr><td colspan="9" style="color:#4b5563;padding:16px;text-align:center">No positions on exchange</td></tr>';
   }
 
   // Signal Readiness panel

@@ -853,7 +853,9 @@ async def monitor_trades(cache) -> None:
 
         trades = await asyncio.to_thread(_load_open_trades)
         if not trades:
+            log.info("Trade monitor: 0 open trades in DB")
             continue
+        log.info("Trade monitor: checking %d open trades", len(trades))
 
         async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
             for trade in trades:

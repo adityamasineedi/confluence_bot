@@ -215,6 +215,44 @@ async def get_position_amt(symbol: str) -> float:
     return 0.0
 
 
+async def fetch_all_positions() -> list[dict]:
+    """Fetch all open positions from the active exchange.
+
+    Returns list of dicts with: symbol, direction, size, entry, mark_price,
+    unrealized_pnl, leverage, margin_type.
+    """
+    if _use_binance():
+        from data.binance_rest import fetch_all_positions as _fetch
+        return await _fetch()
+
+    ex = _ex()
+    try:
+        positions = await ex.fetch_positions()
+        result = []
+        for pos in positions:
+            contracts = float(pos.get("contracts", 0))
+            if contracts <= 0:
+                continue
+            side = pos.get("side", "")
+            sym_raw = pos.get("info", {}).get("symbol", "") or pos.get("symbol", "")
+            # ccxt symbol "BTC/USDT:USDT" → "BTCUSDT"
+            sym = sym_raw.replace("/", "").replace(":USDT", "")
+            result.append({
+                "symbol": sym,
+                "direction": "LONG" if side == "long" else "SHORT",
+                "size": contracts,
+                "entry": float(pos.get("entryPrice", 0)),
+                "mark_price": float(pos.get("markPrice", 0)),
+                "unrealized_pnl": float(pos.get("unrealizedPnl", 0)),
+                "leverage": int(pos.get("leverage", 1)),
+                "margin_type": pos.get("marginMode", "").upper(),
+            })
+        return result
+    except Exception as exc:
+        log.warning("ccxt fetch_all_positions failed: %s", exc)
+        return []
+
+
 async def place_limit_then_market(
     symbol: str,
     side: str,
