@@ -312,14 +312,15 @@ async def score(symbol: str, cache) -> list[dict]:
         if live_closes:
             bars_4h[-1] = {**bars_4h[-1], "c": live_closes[-1]}
 
-    # HTF EMA20 direction (4H — more stable than 1H)
+    # HTF EMA20 direction (1H — matches backtest engine, more responsive than 4H)
+    bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
     htf_bull = True
     htf_bear = True
-    if bars_4h and len(bars_4h) >= 21:
-        closes_4h = [b["c"] for b in bars_4h]
-        ema20_4h  = _ema(closes_4h, 20)
-        htf_bull  = closes_4h[-1] > ema20_4h
-        htf_bear  = closes_4h[-1] < ema20_4h
+    if bars_1h and len(bars_1h) >= 21:
+        closes_1h = [b["c"] for b in bars_1h]
+        ema20_1h  = _ema(closes_1h, 20)
+        htf_bull  = closes_1h[-1] > ema20_1h
+        htf_bear  = closes_1h[-1] < ema20_1h
 
     st = _state.get(symbol, {"state": "IDLE"})
 
