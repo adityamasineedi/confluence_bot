@@ -663,10 +663,12 @@ def _calc_net_pnl(trade: dict, exit_price: float) -> float:
 # ── Main coroutine ────────────────────────────────────────────────────────────
 
 async def _close_orphaned_trades(cache) -> None:
-    """Run once at startup — close any OPEN trades where price has blown past SL.
+    """Run once at startup — close trades where position no longer exists on exchange.
 
-    This catches positions orphaned by bot restarts where the exchange SL
-    order was lost or the trade monitor wasn't running when SL was hit.
+    Catches:
+    1. Positions closed manually on Binance while bot was offline
+    2. SL hit while bot was offline (exchange SL order triggered)
+    3. Any DB OPEN trade with no matching exchange position
     """
     trades = await asyncio.to_thread(_load_open_trades)
     if not trades:
@@ -677,58 +679,69 @@ async def _close_orphaned_trades(cache) -> None:
         symbol    = trade["symbol"]
         direction = trade["direction"]
         entry     = float(trade["entry"])
-        sl        = float(trade["stop_loss"])
-        size      = float(trade.get("size", 0))
 
+        # Check if position actually exists on exchange
+        if not _PAPER_MODE:
+            from data.exchange_router import get_position_amt
+            try:
+                pos_amt = await get_position_amt(symbol)
+            except Exception:
+                pos_amt = None  # network error — skip, don't force close
+
+            if pos_amt is not None and abs(pos_amt) < 0.0001:
+                # Position is FLAT on exchange but OPEN in DB → close it
+                price = cache.get_last_price(symbol) if cache else 0
+                if not price:
+                    price = entry  # fallback
+
+                pnl = _calc_net_pnl(trade, price)
+                log.warning(
+                    "ORPHAN: %s %s has no position on exchange — closing in DB at %.4f  pnl=%.2f",
+                    direction, symbol, price, pnl,
+                )
+
+                # Cancel any stale exchange orders (TP/SL left over)
+                try:
+                    from data.exchange_router import cancel_all_orders
+                    await cancel_all_orders(symbol)
+                except Exception:
+                    pass
+
+                row_claimed = await asyncio.to_thread(_close_trade_db, trade, price)
+                if row_claimed:
+                    from core.executor import close_deal
+                    close_deal(symbol, direction)
+
+                try:
+                    from notifications.telegram import send_trade_close
+                    await send_trade_close(trade, "ORPHAN", price, pnl)
+                except Exception:
+                    pass
+
+                closed += 1
+                continue
+
+        # Paper mode or position check skipped: fall back to blown-SL check
+        sl = float(trade["stop_loss"])
         price = cache.get_last_price(symbol) if cache else 0
         if not price:
             continue
 
-        # Check if SL was blown
-        sl_blown = False
-        if direction == "LONG" and price < sl:
-            sl_blown = True
-        elif direction == "SHORT" and price > sl:
-            sl_blown = True
-
+        sl_blown = (direction == "LONG" and price < sl) or \
+                   (direction == "SHORT" and price > sl)
         if not sl_blown:
             continue
 
-        sl_dist_pct = abs(price - sl) / sl * 100
+        pnl = _calc_net_pnl(trade, price)
         log.warning(
-            "ORPHANED TRADE: %s %s entry=%.4f SL=%.4f price=%.4f (%.1f%% past SL) — force closing",
-            direction, symbol, entry, sl, price, sl_dist_pct,
+            "ORPHAN (SL blown): %s %s entry=%.4f SL=%.4f price=%.4f  pnl=%.2f",
+            direction, symbol, entry, sl, price, pnl,
         )
 
-        # Cancel any stale exchange orders (TP/SL left over)
-        if not _PAPER_MODE:
-            try:
-                from data.exchange_router import cancel_all_orders
-                await cancel_all_orders(symbol)
-                log.info("Orphan cleanup: cancelled stale exchange orders for %s", symbol)
-            except Exception as exc:
-                log.debug("Orphan cleanup: cancel orders failed %s: %s", symbol, exc)
-
-        # Close at current price (SL was already blown)
-        pnl = _calc_net_pnl(entry, price, size, direction)
-        try:
+        row_claimed = await asyncio.to_thread(_close_trade_db, trade, price)
+        if row_claimed:
             from core.executor import close_deal
-            await close_deal(symbol, direction, exit_price=price, pnl_usdt=pnl)
-        except Exception as exc:
-            log.error("Failed to close orphaned trade %s %s: %s", direction, symbol, exc)
-            # Fallback: update DB directly
-            try:
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc).isoformat()
-                with sqlite3.connect(_DB_PATH) as conn:
-                    conn.execute(
-                        "UPDATE trades SET status='FILLED', exit_price=?, pnl_usdt=?, "
-                        "closed_ts=? WHERE id=?",
-                        (price, round(pnl, 2), now, trade["id"]),
-                    )
-                log.info("Orphaned trade closed in DB: %s %s pnl=%.2f", direction, symbol, pnl)
-            except Exception as db_exc:
-                log.error("DB fallback close also failed: %s", db_exc)
+            close_deal(symbol, direction)
 
         try:
             from notifications.telegram import send_trade_close
@@ -739,7 +752,7 @@ async def _close_orphaned_trades(cache) -> None:
         closed += 1
 
     if closed:
-        log.warning("Startup orphan check: closed %d trades with blown SL", closed)
+        log.warning("Startup orphan check: closed %d orphaned trades", closed)
     else:
         log.info("Startup orphan check: all open trades OK")
 
@@ -813,6 +826,23 @@ async def monitor_trades(cache) -> None:
                         result = _check_paper_order(trade, cache)
                     else:
                         result = await _check_live_order(trade, session)
+
+                    # Continuous reconciliation: if _check_live_order sees no
+                    # TP/SL trigger but the position is actually flat on the
+                    # exchange, close it. This catches manually closed trades.
+                    if result is None and not _PAPER_MODE:
+                        try:
+                            from data.exchange_router import get_position_amt
+                            pos_amt = await get_position_amt(trade["symbol"])
+                            if abs(pos_amt) < 0.0001:
+                                price = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
+                                log.warning(
+                                    "RECON: %s %s position flat on exchange but OPEN in DB — closing at %.4f",
+                                    trade["direction"], trade["symbol"], price,
+                                )
+                                result = ("MANUAL_CLOSE", price)
+                        except Exception as recon_exc:
+                            log.debug("Reconciliation check failed %s: %s", trade["symbol"], recon_exc)
 
                     if result is None:
                         continue
