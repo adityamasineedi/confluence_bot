@@ -1049,29 +1049,57 @@ async def cancel_all_orders(symbol: str) -> int:
     """Cancel ALL open orders (regular + algo) for a symbol. Returns count cancelled."""
     headers = {"X-MBX-APIKEY": _API_KEY}
     cancelled = 0
-    # Cancel regular orders
-    try:
-        url = f"{_BINANCE_BASE}/fapi/v1/allOpenOrders"
-        params = _sign({"symbol": symbol})
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
-            async with session.delete(url, params=params, headers=headers) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    cancelled += result.get("code", 0) == 200 or 1
-                    log.info("Cancelled all regular orders for %s", symbol)
-    except Exception as exc:
-        log.debug("cancel_all_orders regular %s: %s", symbol, exc)
-    # Cancel algo orders
-    try:
-        url = f"{_BINANCE_BASE}/fapi/v1/allOpenAlgoOrders"
-        params = _sign({"symbol": symbol})
-        async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+    async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
+        # 1. Cancel regular orders (batch)
+        try:
+            url = f"{_BINANCE_BASE}/fapi/v1/allOpenOrders"
+            params = _sign({"symbol": symbol})
             async with session.delete(url, params=params, headers=headers) as resp:
                 if resp.status == 200:
                     cancelled += 1
-                    log.info("Cancelled all algo orders for %s", symbol)
-    except Exception as exc:
-        log.debug("cancel_all_orders algo %s: %s", symbol, exc)
+                    log.info("Cancelled all regular orders for %s", symbol)
+        except Exception as exc:
+            log.debug("cancel_all_orders regular %s: %s", symbol, exc)
+
+        # 2. Cancel algo orders — try batch first, fall back to individual cancel
+        try:
+            url = f"{_BINANCE_BASE}/fapi/v1/allOpenAlgoOrders"
+            params = _sign({"symbol": symbol})
+            async with session.delete(url, params=params, headers=headers) as resp:
+                result = await resp.json()
+                if resp.status == 200 and result.get("code", 0) != -5000:
+                    cancelled += 1
+                    log.info("Cancelled all algo orders (batch) for %s", symbol)
+                else:
+                    # Batch cancel not supported (demo API) — cancel individually
+                    list_params = _sign({"symbol": symbol})
+                    async with session.get(
+                        f"{_BINANCE_BASE}/fapi/v1/openAlgoOrders",
+                        params=list_params, headers=headers,
+                    ) as lr:
+                        algo_data = await lr.json()
+                    algo_orders = algo_data.get("orders", []) if isinstance(algo_data, dict) else []
+                    for ao in algo_orders:
+                        if ao.get("symbol") != symbol:
+                            continue
+                        aid = ao.get("algoId")
+                        if not aid:
+                            continue
+                        try:
+                            cp = _sign({"symbol": symbol, "algoId": aid})
+                            async with session.delete(
+                                f"{_BINANCE_BASE}/fapi/v1/algoOrder",
+                                params=cp, headers=headers,
+                            ) as cr:
+                                await cr.json()
+                            cancelled += 1
+                        except Exception:
+                            pass
+                    if algo_orders:
+                        log.info("Cancelled %d algo orders (individual) for %s",
+                                 len(algo_orders), symbol)
+        except Exception as exc:
+            log.debug("cancel_all_orders algo %s: %s", symbol, exc)
     return cancelled
 
 

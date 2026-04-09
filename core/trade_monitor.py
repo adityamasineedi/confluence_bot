@@ -947,6 +947,15 @@ async def monitor_trades(cache) -> None:
                     from core.executor import close_deal
                     close_deal(trade["symbol"], trade["direction"])
                     if not _PAPER_MODE:
+                        # Cancel remaining bracket orders (if SL hit, cancel TP and vice versa)
+                        try:
+                            from data.exchange_router import cancel_all_orders
+                            await cancel_all_orders(trade["symbol"])
+                            log.info("Cleaned up remaining orders for %s after %s",
+                                     trade["symbol"], outcome)
+                        except Exception as cancel_exc:
+                            log.warning("Failed to cancel remaining orders %s: %s",
+                                        trade["symbol"], cancel_exc)
                         from data.exchange_router import refresh_account_balance
                         await refresh_account_balance()
                     else:
