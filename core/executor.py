@@ -445,12 +445,38 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         order["qty"]         = filled_qty  # use actual fill qty, not requested
         order["regime"]      = regime
 
-    # Log, notify, mark active
-    try:
-        from logging_.logger import TradeLogger
-        await TradeLogger().log_trade(score_dict, order)
-    except Exception as exc:
-        log.warning("TradeLogger.log_trade failed: %s", exc)
+    # Log trade to DB — CRITICAL: if this fails, we have a position on exchange
+    # with no DB record. Retry once, then force a raw INSERT as last resort.
+    _trade_logged = False
+    for _attempt in range(2):
+        try:
+            from logging_.logger import TradeLogger
+            await TradeLogger().log_trade(score_dict, order)
+            _trade_logged = True
+            break
+        except Exception as exc:
+            log.error("TradeLogger.log_trade attempt %d failed: %s", _attempt + 1, exc)
+    if not _trade_logged:
+        # Emergency: raw DB insert so the trade monitor can track this position
+        try:
+            import sqlite3 as _sq3
+            _db = os.environ.get("DB_PATH", "confluence_bot.db")
+            from datetime import datetime, timezone
+            _now = datetime.now(timezone.utc).isoformat()
+            with _sq3.connect(_db) as _c:
+                _c.execute(
+                    "INSERT INTO trades(symbol,direction,regime,entry,stop_loss,take_profit,"
+                    "size,status,ts,order_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (symbol, direction, regime, entry, stop, order.get("take_profit", 0),
+                     order.get("qty", 0), "OPEN", _now, str(order.get("orderId", ""))),
+                )
+            log.warning("Emergency trade insert succeeded for %s %s", direction, symbol)
+        except Exception as raw_exc:
+            log.critical(
+                "CRITICAL: Position opened on exchange but DB insert FAILED for %s %s — "
+                "manual intervention required. Order: %s  Error: %s",
+                direction, symbol, order, raw_exc,
+            )
 
     try:
         from notifications.telegram import send_signal_alert

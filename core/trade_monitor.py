@@ -757,6 +757,70 @@ async def _close_orphaned_trades(cache) -> None:
         log.info("Startup orphan check: all open trades OK")
 
 
+_FULL_RECON_INTERVAL_S = 300  # full reconciliation every 5 minutes
+
+
+async def _full_reconciliation(cache) -> None:
+    """Compare ALL DB OPEN trades against actual exchange positions.
+
+    Catches any desync: manual closes, partial fills, ghost trades.
+    Runs periodically (every 5 min) as a safety net behind the per-trade checks.
+    """
+    if _PAPER_MODE:
+        return
+
+    trades = await asyncio.to_thread(_load_open_trades)
+    if not trades:
+        return
+
+    from data.exchange_router import get_position_amt
+    closed = 0
+    for trade in trades:
+        symbol    = trade["symbol"]
+        direction = trade["direction"]
+        trade_id  = trade["id"]
+
+        if trade_id in _closing_trade_ids:
+            continue
+
+        try:
+            pos_amt = await get_position_amt(symbol)
+        except Exception:
+            continue  # network error — skip this cycle
+
+        # Position flat on exchange but OPEN in DB
+        if abs(pos_amt) < 0.0001:
+            price = cache.get_last_price(symbol) if cache else 0
+            if not price:
+                price = float(trade["entry"])
+
+            pnl = _calc_net_pnl(trade, price)
+            log.warning(
+                "FULL_RECON: %s %s position flat on exchange — closing in DB at %.4f pnl=%.2f",
+                direction, symbol, price, pnl,
+            )
+
+            _closing_trade_ids.add(trade_id)
+            row_claimed = await asyncio.to_thread(_close_trade_db, trade, price)
+            if row_claimed:
+                from core.executor import close_deal
+                close_deal(symbol, direction)
+                try:
+                    from data.exchange_router import cancel_all_orders
+                    await cancel_all_orders(symbol)
+                except Exception:
+                    pass
+                try:
+                    from notifications.telegram import send_trade_close
+                    await send_trade_close(trade, "RECON_CLOSE", price, pnl)
+                except Exception:
+                    pass
+                closed += 1
+
+    if closed:
+        log.warning("Full reconciliation: closed %d desync'd trades", closed)
+
+
 async def monitor_trades(cache) -> None:
     """
     Continuously polls open trades and closes them when TP/SL is hit.
@@ -773,8 +837,19 @@ async def monitor_trades(cache) -> None:
     except Exception as exc:
         log.error("Orphan check failed: %s", exc)
 
+    import time as _time
+    _last_full_recon = _time.monotonic()
+
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
+
+        # Periodic full reconciliation (every 5 min)
+        if _time.monotonic() - _last_full_recon >= _FULL_RECON_INTERVAL_S:
+            _last_full_recon = _time.monotonic()
+            try:
+                await _full_reconciliation(cache)
+            except Exception as recon_exc:
+                log.error("Full reconciliation error: %s", recon_exc)
 
         trades = await asyncio.to_thread(_load_open_trades)
         if not trades:

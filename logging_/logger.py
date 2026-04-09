@@ -32,8 +32,36 @@ class TradeLogger:
     def _init_db(self) -> None:
         with open(_SCHEMA_PATH) as f:
             ddl = f.read()
-        with sqlite3.connect(self.db_path) as conn:
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(ddl)
+            conn.close()
+        except sqlite3.DatabaseError as exc:
+            # DB corrupted — back it up and start fresh
+            _log.error("DB corrupted (%s) — backing up and creating fresh DB", exc)
+            import shutil
+            backup = self.db_path + ".corrupt." + datetime.now().strftime("%Y%m%d_%H%M%S")
+            try:
+                shutil.move(self.db_path, backup)
+                _log.info("Corrupt DB backed up to %s", backup)
+            except Exception:
+                try:
+                    os.remove(self.db_path)
+                except Exception:
+                    pass
+            # Remove WAL/SHM files too
+            for ext in ("-wal", "-shm"):
+                try:
+                    os.remove(self.db_path + ext)
+                except FileNotFoundError:
+                    pass
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.executescript(ddl)
+            conn.close()
 
     def _prune(self, days: int = 7) -> None:
         try:

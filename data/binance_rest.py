@@ -755,7 +755,20 @@ async def place_order(
                     log.info("Emergency flatten %s %s: %s", close_side, symbol,
                              flat_data.get("orderId", flat_data))
                 except Exception as flat_exc:
-                    log.error("Emergency flatten failed %s: %s", symbol, flat_exc)
+                    log.critical(
+                        "NAKED POSITION: %s %s qty=%.4f — flatten failed: %s. "
+                        "MANUAL CLOSE REQUIRED on exchange immediately.",
+                        side, symbol, bracket_qty, flat_exc,
+                    )
+                    try:
+                        from notifications.telegram import send_text
+                        import asyncio as _aio
+                        _aio.create_task(send_text(
+                            f"🚨 NAKED POSITION: {side} {symbol} qty={bracket_qty} — "
+                            f"no SL, flatten failed. Close manually NOW."
+                        ))
+                    except Exception:
+                        pass
                 return {}
 
             # 3. Take profit — via Algo Order API (soft failure OK, software TP covers it)
@@ -980,7 +993,20 @@ async def place_limit_then_market(
                 log.info("Emergency flatten %s %s: %s", close_side, symbol,
                          flat_data.get("orderId", flat_data))
             except Exception as flat_exc:
-                log.error("Emergency flatten failed %s: %s", symbol, flat_exc)
+                log.critical(
+                    "NAKED POSITION: %s %s qty=%.4f — flatten failed: %s. "
+                    "MANUAL CLOSE REQUIRED on exchange immediately.",
+                    side, symbol, bracket_qty, flat_exc,
+                )
+                try:
+                    from notifications.telegram import send_text
+                    import asyncio as _aio
+                    _aio.create_task(send_text(
+                        f"🚨 NAKED POSITION: {side} {symbol} qty={bracket_qty} — "
+                        f"no SL, flatten failed. Close manually NOW."
+                    ))
+                except Exception:
+                    pass
             return {}
 
         # ── Step 6: place TP — algo order only (soft failure OK) ─────
