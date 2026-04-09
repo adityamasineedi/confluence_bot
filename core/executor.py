@@ -217,7 +217,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         log.debug("DB open trade pre-check failed: %s", _exc)
 
     # Gate: verify no open position on exchange (guards against _active_deals desync)
-    from data.binance_rest import get_position_amt
+    from data.exchange_router import get_position_amt
     pos_amt = await get_position_amt(symbol)
     if (direction == "LONG" and pos_amt > 0) or (direction == "SHORT" and pos_amt < 0):
         log.info("Skipping %s %s — open position already exists on exchange (amt=%.4f)", direction, symbol, pos_amt)
@@ -270,20 +270,41 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         entry, stop, tp = compute(symbol, direction, cache)
 
     if regime == "BREAKOUT_RETEST":
-        # Recalculate SL/TP relative to actual fill price, not flip level
-        br_flip = score_dict.get("br_flip", stop)
-        original_sl_dist = abs(br_flip - score_dict.get("br_stop", stop))
-        if original_sl_dist < entry * 0.005:
-            original_sl_dist = entry * 0.005   # enforce 0.5% minimum
+        br_stop_raw = score_dict.get("br_stop", 0.0)
+        if br_stop_raw:
+            # Normal path: scorer emitted levels (Fix 2 in place)
+            original_sl_dist = abs(entry - br_stop_raw)
+        else:
+            # Emergency fallback: recalculate from ATR
+            from core.rr_calculator import _atr as _rr_atr
+            bars_15m = cache.get_ohlcv(symbol, window=20, tf="15m")
+            atr_15m  = _rr_atr(bars_15m)
+            original_sl_dist = max(atr_15m * 1.3, entry * 0.010)
+            log.warning(
+                "BR recalc fallback triggered for %s %s — br_stop missing",
+                direction, symbol,
+            )
+
+        # Hard floor: 1.0% minimum for all coins (was 0.5%)
+        min_dist = entry * 0.010
+        if original_sl_dist < min_dist:
+            log.warning(
+                "BR SL dist %.5f below 1%% floor for %s — clamping",
+                original_sl_dist, symbol,
+            )
+            original_sl_dist = min_dist
+
+        BR_RR = float(_cfg.get("breakout_retest", {}).get("rr_ratio", 1.5))
         if direction == "LONG":
             stop = entry - original_sl_dist
-            tp   = entry + original_sl_dist * _MIN_RR.get(regime, 1.5)
+            tp   = entry + original_sl_dist * BR_RR
         else:
             stop = entry + original_sl_dist
-            tp   = entry - original_sl_dist * _MIN_RR.get(regime, 1.5)
+            tp   = entry - original_sl_dist * BR_RR
+
         log.debug(
-            "BR recalc from actual entry: entry=%.4f stop=%.4f tp=%.4f dist=%.4f",
-            entry, stop, tp, original_sl_dist,
+            "BR levels: entry=%.4f stop=%.4f tp=%.4f dist=%.5f rr=%.1f",
+            entry, stop, tp, original_sl_dist, BR_RR,
         )
 
     if entry == 0.0 or stop == 0.0 or tp == 0.0:
@@ -305,9 +326,9 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         )
         return None
 
-    if abs(entry - stop) / entry < 0.0015:
+    if abs(entry - stop) / entry < 0.005:
         log.warning(
-            "STOP TOO TIGHT: %s %s dist=%.4f%% < 0.15%% minimum — skipping",
+            "STOP TOO TIGHT: %s %s dist=%.4f%% < 0.5%% minimum — skipping",
             direction, symbol, abs(entry - stop) / entry * 100,
         )
         return None
@@ -381,7 +402,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         # position exists — it only fires once the position is open.
         effective_tp: float | None = tp
         if use_trailing:
-            from data.binance_rest import place_trailing_stop
+            from data.exchange_router import place_trailing_stop
             atr_pct      = abs(stop_dist / entry) * 100
             callback_pct = max(_TRAIL_MIN_CB, min(_TRAIL_MAX_CB, atr_pct * _TRAIL_ATR_MULT))
             trail_side   = "SELL" if side == "BUY" else "BUY"
@@ -401,7 +422,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
                 )
                 # effective_tp remains at 5× tp computed above
 
-        from data.binance_rest import place_limit_then_market
+        from data.exchange_router import place_limit_then_market
         order = await place_limit_then_market(
             symbol      = symbol,
             side        = side,

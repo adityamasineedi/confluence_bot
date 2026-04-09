@@ -95,15 +95,51 @@ def run_checks_sync() -> tuple[bool, list[tuple[bool, str]]]:
     return all_ok, results
 
 
+_last_heartbeat_date: str = ""
+
+
 async def run_silent_check() -> None:
     """
     Async wrapper called from main.py every 5 minutes.
     Sends a Telegram alert if health fails (with cooldown to avoid spam).
+    Also sends a daily heartbeat at ~00:05 UTC so you know the bot is alive.
     """
-    global _last_alert_ts
+    global _last_alert_ts, _last_heartbeat_date
     import time
 
     all_ok, results = await asyncio.to_thread(run_checks_sync)
+
+    # Daily heartbeat — once per day around 00:00 UTC
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if today != _last_heartbeat_date:
+        _last_heartbeat_date = today
+        try:
+            with sqlite3.connect(_DB_PATH) as conn:
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE status IN ('CLOSED','FILLED') AND pnl_usdt != 0"
+                ).fetchone()[0]
+                wins = conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE status IN ('CLOSED','FILLED') AND pnl_usdt > 0"
+                ).fetchone()[0]
+                pnl = conn.execute(
+                    "SELECT COALESCE(SUM(pnl_usdt),0) FROM trades WHERE status IN ('CLOSED','FILLED')"
+                ).fetchone()[0]
+                open_t = conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE status='OPEN'"
+                ).fetchone()[0]
+            wr = f"{wins/total*100:.1f}%" if total else "N/A"
+            heartbeat = (
+                f"\U0001F49A <b>Daily Heartbeat</b> — {today}\n\n"
+                f"Bot is running\n"
+                f"Trades: {total} ({wins}W/{total-wins}L) WR {wr}\n"
+                f"PnL: ${pnl:+.2f}\n"
+                f"Open: {open_t}\n"
+                + "\n".join(f"{'OK' if ok else 'WARN'}: {msg}" for ok, msg in results)
+            )
+            from notifications.telegram import send_text
+            await send_text(heartbeat)
+        except Exception:
+            pass
 
     if all_ok:
         return  # everything fine — no noise

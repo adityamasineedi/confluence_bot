@@ -1,21 +1,38 @@
 # confluence_bot
 
-Multi-regime, multi-direction crypto futures trading bot.
-Python 3.11 · async/await throughout · no pandas · no TA-Lib.
+Multi-regime, multi-exchange crypto futures trading bot.
+Python 3.11 · async/await throughout · no pandas · no TA-Lib · ccxt for multi-exchange.
 
 ---
 
-## Regimes & directions
+## Exchanges
 
-| Regime | Directions | Scorers |
-|--------|-----------|---------|
-| TREND  | LONG / SHORT | `core/scorer.py`, `core/bear_scorer.py` |
-| RANGE  | LONG / SHORT | `core/range_scorer.py`, `core/range_short_scorer.py` |
-| CRASH  | SHORT only   | `core/crash_scorer.py` |
+| Exchange | Live Orders | SL/TP | Connectivity Test | Via |
+|----------|-------------|-------|-------------------|-----|
+| Binance Futures | yes | 3-tier (algo → STOP_MARKET → abort) | yes | `binance_rest.py` |
+| Bitget | yes | yes | yes | ccxt |
+| BingX | yes | yes | yes | ccxt |
+| Bybit | yes | yes | yes | ccxt |
+| OKX | yes | yes | yes | ccxt |
+
+Configure exchanges via the **dashboard UI** (Exchanges tab at `http://localhost:8001`)
+or via environment variables. API keys stored locally in `exchanges.json` (gitignored).
+
+---
+
+## Regimes & strategies
+
+| Regime | Directions | Active Scorers |
+|--------|-----------|----------------|
+| TREND | LONG / SHORT | fvg, ema_pullback, wyckoff_spring, liq_sweep, breakout_retest, cme_gap |
+| RANGE | LONG / SHORT | wyckoff_spring, microrange, breakout_retest, cme_gap |
+| BREAKOUT | LONG / SHORT | fvg, liq_sweep, breakout_retest, cme_gap |
+| CRASH | SHORT only | fvg, liq_sweep, wyckoff_upthrust, ema_pullback_short, breakout_retest |
+| PUMP | LONG only | fvg, liq_sweep, cme_gap, breakout_retest |
 
 Regime classification runs every loop tick via `core/regime_detector.py`
-(ADX-14 on 4H for TREND, max-drawdown on 1H for CRASH, default RANGE).
-Direction routing is handled by `core/direction_router.py`.
+(4H ADX + weekly return, with hysteresis).
+Weekly trend gate blocks LONGs below 10W EMA and SHORTs above 10W EMA.
 
 ---
 
@@ -27,116 +44,72 @@ confluence_bot/
 ├── config.yaml                 all thresholds, weights, risk params
 ├── requirements.txt
 ├── .env.example                template for API keys
+├── .env.local                  local dev config (paper mode, separate DB)
+├── exchanges.json              exchange API keys (gitignored)
 │
 ├── signals/
-│   ├── trend/                  TREND LONG signals
-│   │   ├── cvd.py              check_cvd_bullish, check_cvd_divergence
-│   │   ├── liquidity.py        check_liq_sweep
-│   │   ├── oi_funding.py       check_oi_funding
-│   │   ├── vpvr.py             check_vpvr_support
-│   │   ├── htf_structure.py    check_htf_structure
-│   │   ├── order_block.py      check_order_block
-│   │   ├── options.py          check_options_flow
-│   │   └── whale_flow.py       check_whale_flow
-│   │
-│   ├── range/                  RANGE signals (both directions)
-│   │   ├── absorption.py       check_absorption, check_absorption_ratio
-│   │   ├── ask_absorption.py   check_ask_absorption
-│   │   ├── wyckoff_spring.py   check_wyckoff_spring
-│   │   ├── upthrust.py         check_upthrust
-│   │   ├── perp_basis.py       check_perp_basis
-│   │   ├── options_skew.py     check_options_skew
-│   │   ├── anchored_vwap.py    check_anchored_vwap
-│   │   ├── time_distribution.py check_time_distribution
-│   │   └── call_skew_roc.py    check_call_skew_roc
-│   │
-│   ├── bear/                   TREND SHORT signals
-│   │   ├── cvd_bearish.py      check_cvd_bearish
-│   │   ├── bear_ob.py          check_bear_ob
-│   │   ├── oi_flush.py         check_oi_flush
-│   │   ├── htf_lower_high.py   check_htf_lower_high
-│   │   ├── funding_extreme.py  check_funding_extreme
-│   │   └── whale_inflow.py     check_whale_inflow
-│   │
-│   └── crash/                  CRASH SHORT signals
-│       ├── dead_cat.py         check_dead_cat
-│       └── liq_grab_short.py   check_liq_grab_short
+│   ├── trend/                  cvd, fvg, vpvr, htf_structure, liquidity,
+│   │                           oi_funding, order_block, whale_flow,
+│   │                           rsi_divergence, ema_cross, long_short_ratio,
+│   │                           bb_squeeze, ema_pullback_15m, irb, distribution
+│   ├── range/                  absorption, wyckoff_spring, upthrust,
+│   │                           ask_absorption, perp_basis, anchored_vwap,
+│   │                           vwap_bands, rsi_oversold
+│   ├── bear/                   cvd_bearish, funding_ramp
+│   ├── crash/                  dead_cat, liq_grab_short
+│   ├── volume_momentum.py
+│   └── microrange/detector.py
 │
 ├── core/
-│   ├── regime_detector.py      detect_regime(), get_trend_bias(), get_adx_info()
-│   ├── direction_router.py     route_direction()
-│   ├── scorer.py               TREND LONG  async score()
-│   ├── bear_scorer.py          TREND SHORT async score()
-│   ├── range_scorer.py         RANGE LONG  async score()
-│   ├── range_short_scorer.py   RANGE SHORT async score()
-│   ├── crash_scorer.py         CRASH SHORT async score()
-│   ├── filter.py               passes_trend_long_filters()
-│   ├── range_filter.py         passes_range_filters()
-│   ├── executor.py             execute_signal()
-│   └── rr_calculator.py        compute(), position_size()
+│   ├── regime_detector.py      5-regime detection with hysteresis
+│   ├── weekly_trend_gate.py    BTC 10W EMA macro gate
+│   ├── direction_router.py     LONG/SHORT/NONE per regime
+│   ├── strategy_router.py      symbol × regime → active strategies
+│   ├── filter.py               8-gate hard filter
+│   ├── fvg_scorer.py           FVG entries with IRB + key level boost
+│   ├── ema_pullback_scorer.py  EMA21 pullback (LONG + SHORT)
+│   ├── microrange_scorer.py    5M tight box mean-reversion
+│   ├── wyckoff_scorer.py       Wyckoff spring LONG, wick-based SL
+│   ├── liq_sweep_scorer.py     equal highs/lows stop hunt
+│   ├── breakout_retest_scorer.py  5M range breakout + level retest
+│   ├── executor.py             bracket orders, 3-tier SL, dynamic slippage
+│   ├── exchange_manager.py     multi-exchange config storage + test
+│   ├── rr_calculator.py        position size with committed risk
+│   ├── circuit_breaker.py      daily loss + streak halt
+│   ├── trade_monitor.py        TP/SL detection, breakeven move
+│   ├── cooldown_store.py       per-symbol cooldown tracking
+│   └── symbol_config.py        per-coin tier + dynamic params
 │
 ├── data/
-│   ├── cache.py                Cache — in-memory store, all market data
+│   ├── cache.py                in-memory store, all market data
 │   ├── binance_ws.py           kline + aggTrade WebSocket streams
-│   ├── binance_rest.py         historical klines, order placement
-│   ├── coinglass.py            OI, funding, liquidations
-│   ├── cryptoquant.py          exchange inflow/outflow
-│   ├── deribit.py              options IV, skew, P/C ratio
+│   ├── binance_rest.py         Binance Futures REST (OI, funding, orders)
+│   ├── exchange_router.py      unified order API → binance_rest or ccxt
+│   ├── coinglass.py            liquidation data
+│   ├── cryptoquant.py          exchange flow (whale signals)
+│   ├── deribit.py              options IV/skew
 │   └── coinbase_rest.py        spot price for basis calculation
 │
 ├── logging_/
 │   ├── schema.sql              SQLite: signals, trades, regimes tables
 │   ├── logger.py               TradeLogger (async SQLite writes)
-│   └── metrics_api.py          FastAPI: /health /signals/recent /stats/summary
+│   └── metrics_api.py          FastAPI dashboard with 9 tabs (port 8001)
 │
-├── n8n/
-│   └── confluence_workflow.json  webhook → Telegram alert workflow
+├── backtest/
+│   ├── fetch.py                download Binance historical OHLCV
+│   ├── engine.py               vectorized numpy backtest
+│   └── run.py                  CLI: python backtest/run.py --symbol BNBUSDT --strategy fvg
+│
+├── notifications/
+│   ├── telegram.py             trade alerts, regime changes
+│   └── telegram_commands.py    /market, /status, /help commands
 │
 ├── ops/
-│   ├── confluence.service      systemd unit file
-│   └── health_check.py         liveness check script
+│   ├── health_check.py         liveness check + daily heartbeat
+│   └── deploy_vps.sh           VPS deployment (systemd service)
 │
 └── tests/
-    ├── test_signals.py         pytest unit tests (MockCache, no external deps)
-    └── backtest_signals.py     offline replay harness (BacktestCache)
-```
-
----
-
-## Code conventions
-
-All signal functions follow the same signature:
-
-```python
-def check_X(symbol: str, cache) -> bool:
-    ...
-```
-
-All scorers follow:
-
-```python
-async def score(symbol: str, cache) -> dict:
-    # returns: {symbol, regime, direction, score, signals, fire}
-```
-
-Cache reads (synchronous, lock-free):
-
-```python
-cache.get_closes(symbol, window, tf)      # list[float]
-cache.get_ohlcv(symbol, window, tf)       # list[dict]  {o,h,l,c,v,ts}
-cache.get_ohlcv_since(symbol, ts, tf)     # list[dict]
-cache.get_cvd(symbol, window, tf)         # list[float]
-cache.get_vol_ma(symbol, window, tf)      # float
-cache.get_oi(symbol, offset_hours)        # float | None
-cache.get_funding_rate(symbol)            # float | None
-cache.get_liq_clusters(symbol)            # list[dict]
-cache.get_range_high(symbol)              # float | None
-cache.get_range_low(symbol)               # float | None
-cache.get_basis_history(symbol, n)        # list[float]
-cache.get_skew_history(symbol, n)         # list[float]
-cache.get_agg_trades(symbol, window_secs) # list[dict]
-cache.get_exchange_inflow(symbol)         # float | None
-cache.get_inflow_ma(symbol, days)         # float | None
+    └── test_signals.py         pytest unit tests (MockCache)
 ```
 
 ---
@@ -144,8 +117,8 @@ cache.get_inflow_ma(symbol, days)         # float | None
 ## Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env
@@ -154,7 +127,43 @@ cp .env.example .env
 python main.py
 ```
 
-Metrics API (once running):  `http://localhost:8000/health`
+Dashboard (once running): `http://localhost:8001`
+
+---
+
+## Local development (without affecting VPS)
+
+```bash
+cp .env.local .env
+python main.py
+```
+
+`.env.local` sets:
+- `PAPER_MODE=1` — no real orders placed
+- `DB_PATH=confluence_bot_local.db` — separate database from production
+- `METRICS_PORT=8002` — no port conflict with VPS
+- `TELEGRAM_CHAT_ID=` — no alert spam
+
+---
+
+## Exchange configuration
+
+**Option 1 — Dashboard UI:**
+1. Open `http://localhost:8001` → Exchanges tab
+2. Add exchange (Binance/Bitget/BingX/Bybit/OKX) with API key + secret
+3. Click **Test** to verify connectivity and see USDT balance
+4. Click **Set Active** → restart bot
+
+**Option 2 — Environment variables (Binance only):**
+```
+BINANCE_API_KEY=your_key
+BINANCE_SECRET=your_secret
+```
+
+**Testnet:** Check the "Testnet" box in the UI, or set:
+```
+BINANCE_BASE_URL=https://testnet.binancefuture.com
+```
 
 ---
 
@@ -162,12 +171,29 @@ Metrics API (once running):  `http://localhost:8000/health`
 
 | Variable | Purpose |
 |---|---|
-| `BINANCE_API_KEY` / `BINANCE_SECRET` | Futures trading |
+| `PAPER_MODE` | `1` = no real orders (default: `0`) |
+| `BINANCE_API_KEY` / `BINANCE_SECRET` | Futures trading (or use dashboard UI) |
+| `BINANCE_BASE_URL` | Override base URL (e.g. testnet) |
 | `COINGLASS_API_KEY` | OI, funding, liquidations |
-| `CRYPTOQUANT_API_KEY` | Exchange flow data |
-| `DERIBIT_CLIENT_ID` / `DERIBIT_CLIENT_SECRET` | Options data |
-| `COINBASE_API_KEY` / `COINBASE_API_SECRET` | Spot price reference |
+| `TELEGRAM_CHAT_ID` | Telegram alerts |
 | `DB_PATH` | SQLite file path (default: `confluence_bot.db`) |
+| `METRICS_PORT` | Dashboard port override (default: `8001`) |
+
+---
+
+## Risk management
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `fixed_risk_usdt` | 50 | Per-trade risk in USDT |
+| `max_open_positions` | 5 | |
+| `max_same_direction_positions` | 3 | Correlated-exposure cap |
+| `leverage` | 3 | ISOLATED margin |
+| `max_daily_loss_pct` | 3.0% | Circuit breaker triggers |
+| `max_consecutive_losses` | 6 | Circuit breaker triggers |
+| `post_trade_cooldown_mins` | 10 | Per-symbol cooldown |
+| `atr_spike_gate` | enabled | Blocks entries during flash crashes |
+| `weekly_trend_gate` | enabled | Macro regime filter |
 
 ---
 
@@ -177,8 +203,10 @@ Metrics API (once running):  `http://localhost:8000/health`
 pytest tests/test_signals.py -v
 ```
 
-Backtest replay (requires historical JSON data):
+## Backtest
 
 ```bash
-python tests/backtest_signals.py BTCUSDT data/btc_1h.json
+python backtest/run.py --symbol BNBUSDT --strategy fvg
 ```
+
+Pass criteria: PF >= 1.50, WR >= 38%, trades >= 20.

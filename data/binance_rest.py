@@ -76,9 +76,24 @@ _OKX_SYMBOL_MAP: dict[str, str] = {
     "XRPUSDT":  "XRP-USDT-SWAP",
 }
 
-# Read API credentials from environment — never hardcode
+# Read API credentials from environment — never hardcode.
+# Can be overridden at runtime via configure_credentials() when using
+# the exchange manager UI.
 _API_KEY = os.environ.get("BINANCE_API_KEY", "")
 _SECRET  = os.environ.get("BINANCE_SECRET", "")
+
+
+def configure_credentials(api_key: str, api_secret: str,
+                          base_url: str | None = None) -> None:
+    """Override module-level API credentials (called from exchange manager)."""
+    global _API_KEY, _SECRET, _BINANCE_BASE, _IS_DEMO
+    _API_KEY = api_key
+    _SECRET = api_secret
+    if base_url:
+        _BINANCE_BASE = base_url
+        _IS_DEMO = "demo-fapi" in _BINANCE_BASE
+    log.info("Binance credentials configured via exchange manager (key=%s...)",
+             api_key[:6] if len(api_key) > 6 else "***")
 
 
 # ── Signed request helper ─────────────────────────────────────────────────────
@@ -672,24 +687,90 @@ async def place_order(
             sl_params = _make_sl_params(symbol, close_side, bracket_qty, stop)
             tp_params = _make_tp_params(symbol, close_side, bracket_qty, take_profit)
             algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
+            sl_placed = False
+            tp_placed = False
 
-            # 2. Stop loss (with retry) — via Algo Order API
+            # 2. Stop loss — TIER 1: algo order (preferred)
             sl_resp = await _place_with_retry(
                 session, algo_url, sl_params, headers, f"SL {symbol}"
             )
-            if isinstance(sl_resp.get("code"), int) and int(sl_resp["code"]) < 0:
-                log.warning("SL order rejected %s: code=%s msg=%s — software SL/TP will protect position",
-                            symbol, sl_resp["code"], sl_resp.get("msg", "?"))
-            elif sl_resp.get("algoId"):
-                log.debug("SL placed %s: algoId=%s", symbol, sl_resp.get("algoId"))
+            if sl_resp.get("algoId"):
+                sl_placed = True
+                log.info("SL placed (algo) %s: algoId=%s", symbol, sl_resp["algoId"])
+            else:
+                sl_code = sl_resp.get("code", "?")
+                sl_msg = sl_resp.get("msg", "?")
+                log.warning("SL algo rejected %s: code=%s msg=%s — trying STOP_MARKET fallback",
+                            symbol, sl_code, sl_msg)
 
-            # 3. Take profit (with retry) — via Algo Order API
+                # TIER 2: standard STOP_MARKET fallback
+                try:
+                    sm_params = _sign({
+                        "symbol":      symbol,
+                        "side":        close_side,
+                        "type":        "STOP_MARKET",
+                        "quantity":    bracket_qty,
+                        "stopPrice":   _round_price(symbol, stop),
+                        "reduceOnly":  "true",
+                        "workingType": "MARK_PRICE",
+                    })
+                    async with session.post(
+                        f"{_BINANCE_BASE}/fapi/v1/order",
+                        params=sm_params, headers=headers,
+                    ) as sm_resp:
+                        sm_data = await sm_resp.json()
+                    if sm_data.get("orderId") and not (
+                        isinstance(sm_data.get("code"), int) and sm_data["code"] < 0
+                    ):
+                        sl_placed = True
+                        log.info("SL placed (STOP_MARKET fallback) %s: orderId=%s",
+                                 symbol, sm_data["orderId"])
+                    else:
+                        log.warning("SL STOP_MARKET also rejected %s: code=%s msg=%s",
+                                    symbol, sm_data.get("code", "?"), sm_data.get("msg", "?"))
+                except Exception as sm_exc:
+                    log.warning("SL STOP_MARKET fallback error %s: %s", symbol, sm_exc)
+
+            # TIER 3: emergency abort if SL could not be placed by any method
+            if not sl_placed:
+                log.error(
+                    "ABORT %s %s: could not place SL by any method — "
+                    "cancelling entry to avoid naked position", side, symbol,
+                )
+                await cancel_all_orders(symbol)
+                # Flatten any open position from the entry fill
+                try:
+                    flatten_params = _sign({
+                        "symbol":     symbol,
+                        "side":       close_side,
+                        "type":       "MARKET",
+                        "quantity":   bracket_qty,
+                        "reduceOnly": "true",
+                    })
+                    async with session.post(
+                        f"{_BINANCE_BASE}/fapi/v1/order",
+                        params=flatten_params, headers=headers,
+                    ) as flat_resp:
+                        flat_data = await flat_resp.json()
+                    log.info("Emergency flatten %s %s: %s", close_side, symbol,
+                             flat_data.get("orderId", flat_data))
+                except Exception as flat_exc:
+                    log.error("Emergency flatten failed %s: %s", symbol, flat_exc)
+                return {}
+
+            # 3. Take profit — via Algo Order API (soft failure OK, software TP covers it)
             tp_resp = await _place_with_retry(
                 session, algo_url, tp_params, headers, f"TP {symbol}"
             )
-            if isinstance(tp_resp.get("code"), int) and int(tp_resp["code"]) < 0:
-                log.warning("TP order rejected %s: code=%s msg=%s — software SL/TP will protect position",
+            if tp_resp.get("algoId"):
+                tp_placed = True
+                log.info("TP placed (algo) %s: algoId=%s", symbol, tp_resp["algoId"])
+            elif isinstance(tp_resp.get("code"), int) and int(tp_resp["code"]) < 0:
+                log.warning("TP order rejected %s: code=%s msg=%s — software TP will protect position",
                             symbol, tp_resp["code"], tp_resp.get("msg", "?"))
+
+            result["sl_placed_on_exchange"] = sl_placed
+            result["tp_placed_on_exchange"] = tp_placed
 
         if bracket_qty < orig_qty:
             log.warning("Bracket placed for %.4f (filled) not %.4f (requested) — %s %s",
@@ -828,31 +909,97 @@ async def place_limit_then_market(
             log.warning("Partial fill %s %s: %.4f of %.4f",
                         side, symbol, filled_qty, quantity)
 
-        # ── Step 5: place SL + TP bracket orders ─────────────────────────
+        # ── Step 5: place SL — three-tier with emergency abort ────────
         algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
-        bracket_orders: list[tuple[str, dict]] = []
-        bracket_orders.append(("SL", _make_sl_params(symbol, close_side, bracket_qty, stop)))
-        if take_profit is not None:
-            bracket_orders.append(("TP", _make_tp_params(symbol, close_side, bracket_qty, take_profit)))
+        sl_placed = False
+        tp_placed = False
 
-        bracket_ok = True
-        for label, params in bracket_orders:
+        # TIER 1: algo order (preferred)
+        sl_params = _make_sl_params(symbol, close_side, bracket_qty, stop)
+        try:
+            async with session.post(algo_url, params=_sign(sl_params), headers=headers) as resp:
+                sl_resp = await resp.json()
+            if sl_resp.get("algoId"):
+                sl_placed = True
+                log.info("SL placed (algo) %s: algoId=%s", symbol, sl_resp["algoId"])
+            else:
+                log.warning("SL algo rejected %s: code=%s msg=%s — trying STOP_MARKET fallback",
+                            symbol, sl_resp.get("code", "?"), sl_resp.get("msg", "?"))
+        except Exception as exc:
+            log.warning("SL algo error %s: %s — trying STOP_MARKET fallback", symbol, exc)
+
+        # TIER 2: standard STOP_MARKET fallback
+        if not sl_placed:
             try:
-                async with session.post(algo_url, params=_sign(params), headers=headers) as resp:
-                    r = await resp.json()
-                if isinstance(r.get("code"), int) and int(r["code"]) < 0:
-                    log.warning("%s rejected %s: code=%s msg=%s",
-                                label, symbol, r["code"], r.get("msg"))
-                    bracket_ok = False
+                sm_params = _sign({
+                    "symbol":      symbol,
+                    "side":        close_side,
+                    "type":        "STOP_MARKET",
+                    "quantity":    bracket_qty,
+                    "stopPrice":   _round_price(symbol, stop),
+                    "reduceOnly":  "true",
+                    "workingType": "MARK_PRICE",
+                })
+                async with session.post(
+                    f"{_BINANCE_BASE}/fapi/v1/order",
+                    params=sm_params, headers=headers,
+                ) as sm_resp:
+                    sm_data = await sm_resp.json()
+                if sm_data.get("orderId") and not (
+                    isinstance(sm_data.get("code"), int) and sm_data["code"] < 0
+                ):
+                    sl_placed = True
+                    log.info("SL placed (STOP_MARKET fallback) %s: orderId=%s",
+                             symbol, sm_data["orderId"])
                 else:
-                    log.info("%s placed %s algoId=%s", label, symbol, r.get("algoId"))
-            except Exception as exc:
-                log.warning("%s failed %s: %s", label, symbol, exc)
-                bracket_ok = False
+                    log.warning("SL STOP_MARKET also rejected %s: code=%s msg=%s",
+                                symbol, sm_data.get("code", "?"), sm_data.get("msg", "?"))
+            except Exception as sm_exc:
+                log.warning("SL STOP_MARKET fallback error %s: %s", symbol, sm_exc)
 
-        if not bracket_ok:
-            log.warning("Bracket incomplete for %s — trade monitor will use software SL/TP",
-                        symbol)
+        # TIER 3: emergency abort — no SL means naked position
+        if not sl_placed:
+            log.error(
+                "ABORT %s %s: could not place SL by any method — "
+                "cancelling entry to avoid naked position", side, symbol,
+            )
+            await cancel_all_orders(symbol)
+            try:
+                flatten_params = _sign({
+                    "symbol":     symbol,
+                    "side":       close_side,
+                    "type":       "MARKET",
+                    "quantity":   bracket_qty,
+                    "reduceOnly": "true",
+                })
+                async with session.post(
+                    f"{_BINANCE_BASE}/fapi/v1/order",
+                    params=flatten_params, headers=headers,
+                ) as flat_resp:
+                    flat_data = await flat_resp.json()
+                log.info("Emergency flatten %s %s: %s", close_side, symbol,
+                         flat_data.get("orderId", flat_data))
+            except Exception as flat_exc:
+                log.error("Emergency flatten failed %s: %s", symbol, flat_exc)
+            return {}
+
+        # ── Step 6: place TP — algo order only (soft failure OK) ─────
+        if take_profit is not None:
+            tp_params = _make_tp_params(symbol, close_side, bracket_qty, take_profit)
+            try:
+                async with session.post(algo_url, params=_sign(tp_params), headers=headers) as resp:
+                    tp_resp = await resp.json()
+                if tp_resp.get("algoId"):
+                    tp_placed = True
+                    log.info("TP placed (algo) %s: algoId=%s", symbol, tp_resp["algoId"])
+                elif isinstance(tp_resp.get("code"), int) and int(tp_resp["code"]) < 0:
+                    log.warning("TP order rejected %s: code=%s msg=%s — software TP will protect position",
+                                symbol, tp_resp["code"], tp_resp.get("msg", "?"))
+            except Exception as exc:
+                log.warning("TP failed %s: %s — software TP will protect position", symbol, exc)
+
+        result["sl_placed_on_exchange"] = sl_placed
+        result["tp_placed_on_exchange"] = tp_placed
 
     return result
 

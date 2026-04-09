@@ -2,6 +2,8 @@
 .env
 *.env
 !.env.example          # keep the template — it has no real keys
+exchanges.json         # exchange API keys — never commit
+.env.local             # local dev overrides
 
 # ── Database (live trading data — never commit) ───────────────
 *.db

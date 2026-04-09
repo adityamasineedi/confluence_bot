@@ -3,7 +3,9 @@
 ## Project
 Multi-regime crypto futures trading bot.
 Language: Python 3.11, async/await throughout.
-Exchange: Binance Futures (ISOLATED margin, 3× leverage).
+Exchanges: Binance Futures, Bitget, BingX, Bybit, OKX (via ccxt).
+Active exchange configurable via dashboard UI (Exchanges tab).
+Default: Binance Futures (ISOLATED margin, 3× leverage).
 Coins: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT,
        LINKUSDT, DOGEUSDT, SUIUSDT
 
@@ -56,6 +58,10 @@ session_trap — disabled (not validated via backtest)
 1. FVG _touched TTL — _touched set grew forever blocking valid re-entries; now expires after 7 days
 2. Liq sweep entry drift gate — late entries destroyed edge; now rejects if price moved > 0.3% from sweep bar close
 3. Regime string standardisation — LIQSWEEP → liq_sweep; mismatched executor preset levels/min RR
+4. BR naked position — SL algo order silently rejected on demo/live; added 3-tier SL (algo → STOP_MARKET → abort+flatten)
+5. BR missing preset levels — scorer now emits br_stop/br_tp/br_flip so executor uses preset path (no more broken recalc)
+6. BR tight stop — executor recalc anchored to stop instead of entry giving dist=0; now uses entry anchor + ATR fallback + 1% floor
+7. Tight-stop gate — raised from 0.15% to 0.5% minimum SL distance for all strategies
 
 ### Build order for remaining scorers:
 1. cme_gap_scorer.py          ← $1,739/yr impact (stub exists)
@@ -66,14 +72,15 @@ session_trap — disabled (not validated via backtest)
 - Signal functions: def check_X(symbol: str, cache) -> bool
 - Scorer output: dict with keys:
     symbol, regime, direction, score, signals(dict), fire(bool)
-    plus strategy-specific: fvg_stop/fvg_tp, ep_stop/ep_tp etc.
+    plus strategy-specific: fvg_stop/fvg_tp, ep_stop/ep_tp,
+    br_stop/br_tp/br_flip, ls_stop/ls_tp, ws_stop/ws_tp etc.
 - Cache API: cache.get_ohlcv(symbol, window, tf) → list[dict]
              cache.get_closes(symbol, window, tf) → list[float]
              cache.get_key_levels(symbol) → {pdh,pdl,pwh,pwl}
              cache.near_key_level(symbol, price, tol) → bool
 - All config from config.yaml via yaml.safe_load
-- API keys always from os.environ — never in source code
-- No pandas. No TA-Lib. Pure Python + numpy only.
+- API keys from os.environ OR exchange manager UI (exchanges.json)
+- No pandas. No TA-Lib. Pure Python + numpy + ccxt only.
 - Handle None and empty list gracefully — return False, never raise
 
 ## Architecture
@@ -104,8 +111,10 @@ core/
   microrange_scorer.py     — 5M tight box mean-reversion
   wyckoff_scorer.py        — Wyckoff spring LONG, wick-based SL
   liq_sweep_scorer.py      — equal highs/lows stop hunt, LONG + SHORT
+  breakout_retest_scorer.py — 5M range breakout + level retest
   vol_ratio.py             — shared 6H/48H vol ratio gate for scorers
-  executor.py              — bracket orders, dynamic slippage
+  executor.py              — bracket orders, dynamic slippage, 3-tier SL
+  exchange_manager.py      — multi-exchange API key storage + connectivity test
   rr_calculator.py         — position size with committed risk
   circuit_breaker.py       — daily loss + streak halt
   trade_monitor.py         — TP/SL detection, breakeven move
@@ -115,7 +124,8 @@ core/
 data/
   cache.py          — in-memory store, get_key_levels() for PDH/PDL
   binance_ws.py     — klines + aggTrades WebSocket
-  binance_rest.py   — OI, funding, history, order placement
+  binance_rest.py   — Binance OI, funding, history, order placement
+  exchange_router.py — unified order API: routes to binance_rest or ccxt
   coinglass.py      — liquidation data
   cryptoquant.py    — exchange flow (whale signals)
   deribit.py        — options IV/skew
@@ -129,7 +139,36 @@ backtest/
 logging_/
   logger.py      — async SQLite trade + signal logging
   schema.sql     — DB schema
-  metrics_api.py — FastAPI dashboard (port 8001)
+  metrics_api.py — FastAPI dashboard (port 8001) with tabs:
+                   Signals, Trades, Regimes, Market, Backtest,
+                   Debug, Strategies, Gates, Exchanges
+
+ops/
+  health_check.py  — liveness check, daily heartbeat via Telegram
+  deploy_vps.sh    — VPS deployment script (systemd service)
+
+## Multi-exchange support
+Exchanges configured via dashboard UI (Exchanges tab) or env vars.
+Configs stored in exchanges.json (gitignored, base64-encoded secrets).
+
+| Exchange | Orders | SL/TP | Balance | Via |
+|----------|--------|-------|---------|-----|
+| Binance  | yes    | 3-tier (algo→STOP_MARKET→abort) | yes | binance_rest.py |
+| Bitget   | yes    | yes   | yes     | ccxt |
+| BingX    | yes    | yes   | yes     | ccxt |
+| Bybit    | yes    | yes   | yes     | ccxt |
+| OKX      | yes    | yes   | yes     | ccxt |
+
+Order flow: executor.py → exchange_router.py → binance_rest (Binance) or ccxt (others)
+Binance keeps its own battle-tested REST client; all other exchanges use ccxt unified API.
+
+## Local development (without affecting VPS)
+cp .env.local .env && python main.py
+Key settings in .env.local:
+  PAPER_MODE=1            — no real orders
+  DB_PATH=confluence_bot_local.db  — separate DB
+  METRICS_PORT=8002       — no port conflict
+  TELEGRAM_CHAT_ID=       — no alert spam
 
 ## Risk management (config.yaml)
 max_risk_usdt: 5              — raise to 1% of account for live

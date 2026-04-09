@@ -21,6 +21,7 @@ import yaml
 import aiohttp
 
 from data.binance_rest import _round_price, _make_sl_params
+from data.exchange_router import get_exchange as _get_active_exchange
 
 log = logging.getLogger(__name__)
 
@@ -702,7 +703,7 @@ async def _close_orphaned_trades(cache) -> None:
         # Cancel any stale exchange orders (TP/SL left over)
         if not _PAPER_MODE:
             try:
-                from data.binance_rest import cancel_all_orders
+                from data.exchange_router import cancel_all_orders
                 await cancel_all_orders(symbol)
                 log.info("Orphan cleanup: cancelled stale exchange orders for %s", symbol)
             except Exception as exc:
@@ -791,7 +792,7 @@ async def monitor_trades(cache) -> None:
                                 from core.executor import close_deal
                                 close_deal(trade["symbol"], trade["direction"])
                                 if not _PAPER_MODE:
-                                    from data.binance_rest import refresh_account_balance
+                                    from data.exchange_router import refresh_account_balance
                                     await refresh_account_balance()
                                 # Use actual market price, not entry — entry gives ~$0 PnL
                                 flip_exit = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
@@ -841,7 +842,7 @@ async def monitor_trades(cache) -> None:
                     from core.executor import close_deal
                     close_deal(trade["symbol"], trade["direction"])
                     if not _PAPER_MODE:
-                        from data.binance_rest import refresh_account_balance
+                        from data.exchange_router import refresh_account_balance
                         await refresh_account_balance()
                     else:
                         # Paper mode: compound by adding PnL to cached balance

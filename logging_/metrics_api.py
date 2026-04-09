@@ -213,21 +213,48 @@ async def stats_summary() -> dict:
 
 @app.get("/trades/open")
 async def open_trades() -> JSONResponse:
-    """Return all currently open trades keyed by symbol."""
+    """Return all currently open trades with live mark price and unrealized PnL."""
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT symbol, direction, entry, stop_loss, take_profit, size, ts, regime "
+                "SELECT id, symbol, direction, entry, stop_loss, take_profit, size, ts, regime "
                 "FROM trades WHERE status='OPEN' ORDER BY ts DESC"
             ).fetchall()
-        by_sym: dict[str, dict] = {}
+        result: list[dict] = []
         for r in rows:
-            sym = r["symbol"]
-            if sym not in by_sym:          # keep most recent open per symbol
-                by_sym[sym] = dict(r)
-        return JSONResponse(by_sym)
+            t = dict(r)
+            sym = t["symbol"]
+            entry = float(t["entry"])
+            size = float(t["size"])
+            direction = t["direction"]
+            # Live mark price from cache
+            mark = 0.0
+            if _cache:
+                mark = _cache.get_last_price(sym) or 0.0
+            t["mark_price"] = round(mark, 6) if mark else 0.0
+            # Unrealized PnL
+            if mark > 0 and entry > 0 and size > 0:
+                if direction == "LONG":
+                    t["unrealized_pnl"] = round((mark - entry) * size, 2)
+                else:
+                    t["unrealized_pnl"] = round((entry - mark) * size, 2)
+                t["unrealized_pct"] = round(
+                    ((mark - entry) / entry * 100) if direction == "LONG"
+                    else ((entry - mark) / entry * 100), 2)
+            else:
+                t["unrealized_pnl"] = 0.0
+                t["unrealized_pct"] = 0.0
+            # Distance to SL/TP as %
+            sl = float(t.get("stop_loss", 0) or 0)
+            tp = float(t.get("take_profit", 0) or 0)
+            if mark > 0 and sl > 0:
+                t["sl_distance_pct"] = round(abs(mark - sl) / mark * 100, 2)
+            if mark > 0 and tp > 0:
+                t["tp_distance_pct"] = round(abs(tp - mark) / mark * 100, 2)
+            result.append(t)
+        return JSONResponse(result)
     except Exception:
-        return JSONResponse({})
+        return JSONResponse([])
 
 
 @app.get("/debug/{symbol}")
@@ -495,6 +522,70 @@ def signals_live() -> JSONResponse:
         })
 
     return JSONResponse(result)
+
+
+# ── Exchange management API ──────────────────────────────────────────────────
+
+@app.get("/api/exchanges")
+async def list_exchanges() -> JSONResponse:
+    from core.exchange_manager import list_exchanges_safe
+    return JSONResponse(list_exchanges_safe())
+
+
+@app.post("/api/exchanges")
+async def add_exchange(request: Request) -> JSONResponse:
+    from core.exchange_manager import add_exchange as _add
+    body = await request.json()
+    name = body.get("name", "").strip()
+    exchange = body.get("exchange", "").strip().lower()
+    api_key = body.get("api_key", "").strip()
+    api_secret = body.get("api_secret", "").strip()
+    passphrase = body.get("passphrase", "").strip()
+    testnet = bool(body.get("testnet", False))
+    if not name or not exchange or not api_key or not api_secret:
+        return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
+    try:
+        entry = _add(name, exchange, api_key, api_secret, passphrase, testnet)
+        return JSONResponse({"ok": True, "id": entry["id"]})
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.delete("/api/exchanges/{ex_id}")
+async def delete_exchange(ex_id: str) -> JSONResponse:
+    from core.exchange_manager import delete_exchange as _del
+    if _del(ex_id):
+        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+
+@app.post("/api/exchanges/{ex_id}/activate")
+async def activate_exchange(ex_id: str) -> JSONResponse:
+    from core.exchange_manager import set_active
+    if set_active(ex_id):
+        return JSONResponse({"ok": True})
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+
+@app.post("/api/exchanges/{ex_id}/test")
+async def test_exchange_conn(ex_id: str) -> JSONResponse:
+    from core.exchange_manager import test_exchange
+    result = await test_exchange(ex_id)
+    return JSONResponse(result)
+
+
+@app.get("/api/trading-mode")
+async def get_trading_mode() -> JSONResponse:
+    paper = os.environ.get("PAPER_MODE", "0") == "1"
+    from core.exchange_manager import get_active_exchange
+    ex = get_active_exchange()
+    return JSONResponse({
+        "paper_mode": paper,
+        "active_exchange": ex["name"] if ex else None,
+        "exchange_type": ex["exchange"] if ex else None,
+        "testnet": ex.get("testnet", False) if ex else False,
+        "has_env_keys": bool(os.environ.get("BINANCE_API_KEY")),
+    })
 
 
 # ── Live dashboard ─────────────────────────────────────────────────────────────
@@ -768,6 +859,7 @@ async def dashboard() -> HTMLResponse:
     <button class="tab" onclick="showTab('debug',this)">&#128269; Debug</button>
     <button class="tab" onclick="showTab('strategies',this)">&#128218; Strategies</button>
     <button class="tab" onclick="showTab('gates',this)">&#128683; Gates</button>
+    <button class="tab" onclick="showTab('exchanges',this)">&#128279; Exchanges</button>
   </nav>
   <span id="cvd-warmup" style="font-size:0.75rem;margin-left:8px">…</span>
   <span class="hdr-right" id="hdr-right">loading…</span>
@@ -820,12 +912,25 @@ async def dashboard() -> HTMLResponse:
 
 <!-- ── TRADES ────────────────────────────────────────────── -->
 <div id="panel-trades" class="panel">
+  <!-- Open Positions (live) -->
   <section style="padding-top:20px">
-    <h2>Recent Trades</h2>
+    <h2>Open Positions <span style="font-size:0.7rem;color:#4b5563;font-weight:400">— live mark price, updates every 5s</span></h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Since</th><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Entry</th><th>Mark</th><th>SL</th><th>TP</th><th>Size</th><th>Unrealized PnL</th><th>SL Dist</th><th>TP Dist</th></tr></thead>
+      <tbody id="open-trades-body"><tr><td colspan="12" style="color:#4b5563">loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+  <!-- Trade History -->
+  <section>
+    <h2>Trade History</h2>
+    <div style="overflow-x:auto">
     <table>
       <thead><tr><th>Date/Time</th><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th><th>Size</th><th>PnL</th><th>Status</th></tr></thead>
       <tbody id="trades-body"><tr><td colspan="10" style="color:#4b5563">loading…</td></tr></tbody>
     </table>
+    </div>
   </section>
 </div>
 
@@ -1843,6 +1948,74 @@ async def dashboard() -> HTMLResponse:
   </div>
 </div>
 
+<!-- ── EXCHANGES ────────────────────────────────────────── -->
+<div id="panel-exchanges" class="panel">
+  <div style="padding:20px;max-width:900px;margin:0 auto">
+    <h2 style="margin:0 0 6px 0;color:#a78bfa;font-size:1rem">&#128279; Exchange Configuration</h2>
+    <p style="color:#9ca3af;font-size:0.82rem;margin:0 0 20px 0">
+      Add exchange API keys to connect and trade. Keys are stored locally (base64-encoded) in <code style="background:#12141e;padding:1px 5px;border-radius:3px;font-size:0.72rem;color:#34d399">exchanges.json</code>.
+    </p>
+
+    <!-- Trading Mode -->
+    <div id="ex-mode-bar" style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <span style="font-size:0.82rem;color:#9ca3af;font-weight:600">Trading Mode:</span>
+      <span id="ex-mode-label" style="font-size:0.9rem;font-weight:700;padding:4px 12px;border-radius:6px">...</span>
+      <span id="ex-mode-detail" style="font-size:0.78rem;color:#6b7280"></span>
+    </div>
+
+    <!-- Add Exchange Form -->
+    <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:20px;margin-bottom:20px">
+      <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Add Exchange</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="display:block;font-size:0.72rem;color:#6b7280;margin-bottom:4px">Name (label)</label>
+          <input id="ex-name" type="text" placeholder="e.g. Binance Main" style="width:100%;padding:8px 10px;background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;font-size:0.85rem">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.72rem;color:#6b7280;margin-bottom:4px">Exchange</label>
+          <select id="ex-exchange" style="width:100%;padding:8px 10px;background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;font-size:0.85rem" onchange="exExchangeChanged()">
+            <option value="binance">Binance Futures</option>
+            <option value="bybit">Bybit</option>
+            <option value="okx">OKX</option>
+            <option value="bitget">Bitget</option>
+            <option value="bingx">BingX</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:0.72rem;color:#6b7280;margin-bottom:4px">API Key</label>
+          <input id="ex-apikey" type="text" placeholder="Paste API key" style="width:100%;padding:8px 10px;background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;font-size:0.85rem;font-family:monospace">
+        </div>
+        <div>
+          <label style="display:block;font-size:0.72rem;color:#6b7280;margin-bottom:4px">API Secret</label>
+          <input id="ex-secret" type="password" placeholder="Paste API secret" style="width:100%;padding:8px 10px;background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;font-size:0.85rem;font-family:monospace">
+        </div>
+        <div id="ex-passphrase-row" style="display:none">
+          <label style="display:block;font-size:0.72rem;color:#6b7280;margin-bottom:4px">Passphrase (OKX only)</label>
+          <input id="ex-passphrase" type="password" placeholder="OKX passphrase" style="width:100%;padding:8px 10px;background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:6px;font-size:0.85rem;font-family:monospace">
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.82rem;padding-bottom:8px">
+            <input id="ex-testnet" type="checkbox" style="accent-color:#a78bfa">
+            <span style="color:#fbbf24">Testnet</span>
+          </label>
+        </div>
+      </div>
+      <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+        <button onclick="exAdd()" style="padding:8px 24px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600">+ Add Exchange</button>
+        <span id="ex-add-status" style="font-size:0.78rem;color:#6b7280"></span>
+      </div>
+    </div>
+
+    <!-- Exchange List -->
+    <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:20px">
+      <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Configured Exchanges</h3>
+      <div id="ex-list" style="display:flex;flex-direction:column;gap:10px">
+        <div style="color:#4b5563;padding:20px;text-align:center">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT','ADAUSDT','AVAXUSDT','TAOUSDT'];
 
@@ -1868,6 +2041,7 @@ function showTab(name, btn) {
   }
   if (name === 'backtest' && !btLoaded) { btLoaded = true; loadBacktest(); }
   if (name === 'gates') { loadGates(); loadRiskMode(); }
+  if (name === 'exchanges') { exLoad(); }
 }
 
 (function initHash() {
@@ -1964,11 +2138,53 @@ async function refreshTradelog() {
   pnlEl.textContent = (stats.total_pnl_usdt >= 0 ? '+' : '') + stats.total_pnl_usdt.toFixed(2);
   pnlEl.className = 'val ' + (stats.total_pnl_usdt >= 0 ? 'green' : 'red');
   document.getElementById('stat-fired').textContent = stats.fired_today;
-  // Open positions count
-  const openCount = Array.isArray(openTrades) ? openTrades.length : 0;
+  // Open positions count + live PnL table
+  const openArr = Array.isArray(openTrades) ? openTrades : [];
+  const openCount = openArr.length;
   const openEl = document.getElementById('stat-open');
   openEl.textContent = openCount + ' / 5';
   openEl.className = 'val ' + (openCount === 0 ? 'green' : openCount >= 4 ? 'red' : 'yellow');
+
+  // Render open positions with live mark price + unrealized PnL
+  const openBody = document.getElementById('open-trades-body');
+  if (openArr.length) {
+    let totalPnl = 0;
+    openBody.innerHTML = openArr.map(t => {
+      const pnl = t.unrealized_pnl || 0;
+      const pnlPct = t.unrealized_pct || 0;
+      totalPnl += pnl;
+      const pnlColor = pnl > 0 ? '#22c55e' : pnl < 0 ? '#ef4444' : '#6b7280';
+      const mark = t.mark_price || 0;
+      const slDist = t.sl_distance_pct || 0;
+      const tpDist = t.tp_distance_pct || 0;
+      return `<tr>
+        <td style="white-space:nowrap;color:#6b7280;font-size:0.78rem">${toIST(t.ts)}</td>
+        <td><b>${t.symbol}</b></td>
+        <td>${badge('regime', t.regime || '')}</td>
+        <td>${badge('dir', t.direction)}</td>
+        <td>${(+t.entry).toFixed(4)}</td>
+        <td style="font-weight:600;color:#60a5fa">${mark ? mark.toFixed(4) : '—'}</td>
+        <td>${(+t.stop_loss).toFixed(4)}</td>
+        <td>${(+t.take_profit).toFixed(4)}</td>
+        <td>${(+t.size).toFixed(4)}</td>
+        <td style="color:${pnlColor};font-weight:700">
+          ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          <span style="font-size:0.7rem;font-weight:400"> (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
+        </td>
+        <td style="color:#ef4444;font-size:0.78rem">${slDist.toFixed(2)}%</td>
+        <td style="color:#22c55e;font-size:0.78rem">${tpDist.toFixed(2)}%</td>
+      </tr>`;
+    }).join('');
+    // Total unrealized PnL row
+    const totColor = totalPnl > 0 ? '#22c55e' : totalPnl < 0 ? '#ef4444' : '#6b7280';
+    openBody.innerHTML += `<tr style="border-top:2px solid #2a2d3a">
+      <td colspan="9" style="text-align:right;font-weight:600;color:#6b7280">Total Unrealized</td>
+      <td style="color:${totColor};font-weight:700;font-size:1rem">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} USDT</td>
+      <td colspan="2"></td>
+    </tr>`;
+  } else {
+    openBody.innerHTML = '<tr><td colspan="12" style="color:#4b5563;padding:16px;text-align:center">No open positions</td></tr>';
+  }
 
   // Signal Readiness panel
   if (readiness && readiness.length) {
@@ -2119,15 +2335,30 @@ async function refreshTradelog() {
     : '<tr><td colspan="7" style="color:#4b5563">no signals yet</td></tr>';
 
   document.getElementById('trades-body').innerHTML = trades.length
-    ? trades.map(t => `<tr>
-        <td style="white-space:nowrap">${toIST(t.ts)}</td><td>${t.symbol}</td>
-        <td>${badge('regime', t.regime || '')}</td>
-        <td>${badge('dir', t.direction)}</td>
-        <td>${(+t.entry).toFixed(2)}</td><td>${(+t.stop_loss).toFixed(2)}</td>
-        <td>${(+t.take_profit).toFixed(2)}</td><td>${(+t.size).toFixed(4)}</td>
-        <td style="color:${t.pnl_usdt>0?'#22c55e':t.pnl_usdt<0?'#ef4444':'#6b7280'}">${t.pnl_usdt!=null?(+t.pnl_usdt).toFixed(2):'open'}</td>
-        <td>${t.status}</td>
-      </tr>`).join('')
+    ? trades.map(t => {
+        const isOpen = t.status === 'OPEN';
+        const pnlVal = t.pnl_usdt != null && !isOpen ? (+t.pnl_usdt).toFixed(2) : '';
+        const pnlColor = t.pnl_usdt > 0 ? '#22c55e' : t.pnl_usdt < 0 ? '#ef4444' : '#6b7280';
+        let statusBadge;
+        if (isOpen) {
+          statusBadge = '<span style="background:#1e3a5f;color:#93c5fd;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600">OPEN</span>';
+        } else if (t.pnl_usdt > 0) {
+          statusBadge = `<span class="badge badge-WIN">WIN</span>`;
+        } else if (t.pnl_usdt < 0) {
+          statusBadge = `<span class="badge badge-LOSS">LOSS</span>`;
+        } else {
+          statusBadge = `<span style="color:#6b7280;font-size:0.75rem">${t.status}</span>`;
+        }
+        return `<tr${isOpen ? ' style="background:#0d1520"' : ''}>
+          <td style="white-space:nowrap">${toIST(t.ts)}</td><td>${t.symbol}</td>
+          <td>${badge('regime', t.regime || '')}</td>
+          <td>${badge('dir', t.direction)}</td>
+          <td>${(+t.entry).toFixed(4)}</td><td>${(+t.stop_loss).toFixed(4)}</td>
+          <td>${(+t.take_profit).toFixed(4)}</td><td>${(+t.size).toFixed(4)}</td>
+          <td style="color:${pnlColor};font-weight:${isOpen?'400':'600'}">${isOpen ? '<span style="color:#4b5563;font-size:0.75rem">see above</span>' : pnlVal}</td>
+          <td>${statusBadge}</td>
+        </tr>`;
+      }).join('')
     : '<tr><td colspan="10" style="color:#4b5563">no trades yet</td></tr>';
 
   document.getElementById('hdr-right').textContent = 'updated ' + new Date().toLocaleTimeString();
@@ -3028,6 +3259,169 @@ async function loadDebug() {
     </tr>
     ${sigRows || '<tr><td colspan="6" style="color:#4b5563;padding:8px">No signals in DB yet</td></tr>'}
   </table>`;
+}
+
+// ── Exchanges tab ───────────────────────────────────────────────────────────
+
+function exExchangeChanged() {
+  const v = document.getElementById('ex-exchange').value;
+  const row = document.getElementById('ex-passphrase-row');
+  const lbl = row.querySelector('label');
+  if (v === 'okx' || v === 'bitget') {
+    row.style.display = '';
+    if (lbl) lbl.textContent = v === 'okx' ? 'Passphrase (OKX)' : 'Passphrase (Bitget)';
+  } else {
+    row.style.display = 'none';
+  }
+}
+
+async function exLoadMode() {
+  try {
+    const r = await fetch('/api/trading-mode');
+    const d = await r.json();
+    const lbl = document.getElementById('ex-mode-label');
+    const det = document.getElementById('ex-mode-detail');
+    if (d.paper_mode) {
+      lbl.textContent = 'PAPER';
+      lbl.style.background = '#713f12'; lbl.style.color = '#fef3c7';
+      det.textContent = 'No real orders placed. Set PAPER_MODE=0 to go live.';
+    } else if (d.active_exchange) {
+      const tn = d.testnet ? ' (TESTNET)' : '';
+      lbl.textContent = 'LIVE' + tn;
+      lbl.style.background = d.testnet ? '#1e3a5f' : '#14532d';
+      lbl.style.color = d.testnet ? '#93c5fd' : '#86efac';
+      det.textContent = `Trading on ${d.active_exchange} (${d.exchange_type})`;
+    } else if (d.has_env_keys) {
+      lbl.textContent = 'LIVE (env)';
+      lbl.style.background = '#14532d'; lbl.style.color = '#86efac';
+      det.textContent = 'Using BINANCE_API_KEY from environment variables.';
+    } else {
+      lbl.textContent = 'NOT CONFIGURED';
+      lbl.style.background = '#7f1d1d'; lbl.style.color = '#fca5a5';
+      det.textContent = 'Add an exchange below or set BINANCE_API_KEY env var.';
+    }
+  } catch(e) {}
+}
+
+async function exLoad() {
+  exLoadMode();
+  const el = document.getElementById('ex-list');
+  try {
+    const r = await fetch('/api/exchanges');
+    const data = await r.json();
+    if (!data.length) {
+      el.innerHTML = '<div style="color:#4b5563;padding:20px;text-align:center">No exchanges configured yet. Add one above.</div>';
+      return;
+    }
+    el.innerHTML = data.map(ex => {
+      const icon = {binance: '&#127312;', bybit: '&#127313;', okx: '&#127314;', bitget: '&#127315;', bingx: '&#127316;'}[ex.exchange] || '&#128176;';
+      const label = {binance: 'Binance Futures', bybit: 'Bybit', okx: 'OKX', bitget: 'Bitget', bingx: 'BingX'}[ex.exchange] || ex.exchange;
+      const activeBadge = ex.active
+        ? '<span style="background:#14532d;color:#86efac;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:600">ACTIVE</span>'
+        : `<button onclick="exActivate('${ex.id}')" style="padding:3px 10px;background:#1a1d27;color:#9ca3af;border:1px solid #2a2d3a;border-radius:4px;font-size:0.72rem;cursor:pointer">Set Active</button>`;
+      const testnetBadge = ex.testnet
+        ? ' <span style="background:#713f12;color:#fef3c7;padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:600">TESTNET</span>' : '';
+      return `<div style="background:#12141e;border:1px solid #2a2d3a;border-radius:8px;padding:14px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap${ex.active?';border-left:3px solid #22c55e':''}">
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:0.9rem;font-weight:600;color:#e0e0e0">${icon} ${ex.name}${testnetBadge}</div>
+          <div style="font-size:0.75rem;color:#6b7280;margin-top:2px">${label} &middot; Key: <code style="background:#1a1d27;padding:1px 4px;border-radius:3px;font-size:0.72rem;color:#60a5fa">${ex.api_key_masked}</code></div>
+          <div style="font-size:0.68rem;color:#4b5563;margin-top:2px">Added: ${ex.created_at || 'unknown'}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${activeBadge}
+          <button onclick="exTest('${ex.id}',this)" style="padding:5px 14px;background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;border-radius:5px;font-size:0.78rem;cursor:pointer;font-weight:600">&#9889; Test</button>
+          <button onclick="exDelete('${ex.id}')" style="padding:5px 14px;background:#3b0f0f;color:#fca5a5;border:1px solid #7f1d1d;border-radius:5px;font-size:0.78rem;cursor:pointer;font-weight:600">&#128465; Delete</button>
+          <span class="ex-test-result" data-id="${ex.id}" style="font-size:0.78rem;min-width:120px"></span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;padding:12px">Error loading exchanges: ${e.message}</div>`;
+  }
+}
+
+async function exAdd() {
+  const name = document.getElementById('ex-name').value.trim();
+  const exchange = document.getElementById('ex-exchange').value;
+  const api_key = document.getElementById('ex-apikey').value.trim();
+  const api_secret = document.getElementById('ex-secret').value.trim();
+  const passphrase = document.getElementById('ex-passphrase').value.trim();
+  const testnet = document.getElementById('ex-testnet').checked;
+  const status = document.getElementById('ex-add-status');
+  if (!name || !api_key || !api_secret) {
+    status.textContent = 'Please fill in name, API key, and secret.';
+    status.style.color = '#ef4444';
+    return;
+  }
+  if ((exchange === 'okx' || exchange === 'bitget') && !passphrase) {
+    status.textContent = exchange.toUpperCase() + ' requires a passphrase.';
+    status.style.color = '#ef4444';
+    return;
+  }
+  status.textContent = 'Adding...';
+  status.style.color = '#6b7280';
+  try {
+    const r = await fetch('/api/exchanges', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, exchange, api_key, api_secret, passphrase, testnet})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      status.textContent = 'Added!';
+      status.style.color = '#22c55e';
+      document.getElementById('ex-name').value = '';
+      document.getElementById('ex-apikey').value = '';
+      document.getElementById('ex-secret').value = '';
+      document.getElementById('ex-passphrase').value = '';
+      document.getElementById('ex-testnet').checked = false;
+      exLoad();
+    } else {
+      status.textContent = d.error || 'Failed';
+      status.style.color = '#ef4444';
+    }
+  } catch (e) {
+    status.textContent = e.message;
+    status.style.color = '#ef4444';
+  }
+}
+
+async function exTest(id, btn) {
+  const el = document.querySelector(`.ex-test-result[data-id="${id}"]`);
+  el.textContent = 'Testing...';
+  el.style.color = '#fbbf24';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/exchanges/${id}/test`, {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = `<span style="color:#22c55e">&#10003; Connected &middot; $${d.balance} USDT</span>`;
+    } else {
+      el.innerHTML = `<span style="color:#ef4444">&#10007; ${d.message}</span>`;
+    }
+  } catch (e) {
+    el.innerHTML = `<span style="color:#ef4444">&#10007; ${e.message}</span>`;
+  }
+  btn.disabled = false;
+}
+
+async function exDelete(id) {
+  if (!confirm('Delete this exchange configuration?')) return;
+  try {
+    await fetch(`/api/exchanges/${id}`, {method: 'DELETE'});
+    exLoad();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+async function exActivate(id) {
+  try {
+    await fetch(`/api/exchanges/${id}/activate`, {method: 'POST'});
+    exLoad();
+  } catch (e) {
+    alert('Activate failed: ' + e.message);
+  }
 }
 </script>
 </body>

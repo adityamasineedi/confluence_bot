@@ -450,9 +450,9 @@ async def score(symbol: str, cache) -> list[dict]:
             "score":     score_val,
             "signals":   signals,
             "fire":      True,
-            "br_stop":   round(stop, 6),
-            "br_tp":     round(tp,   6),
-            "br_flip":   round(flip, 6),
+            "br_stop":   round(stop,  8),
+            "br_tp":     round(tp,    8),
+            "br_flip":   round(entry, 8),
         }]
 
     # ── STATE: IDLE — look for range + breakout ──────────────────────

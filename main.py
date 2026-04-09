@@ -14,7 +14,18 @@ import os
 import signal
 import sys
 import threading
+import traceback
 import yaml
+
+# Global crash handler — logs full traceback before exit
+def _crash_handler(exc_type, exc_val, exc_tb):
+    os.makedirs("logs", exist_ok=True)
+    with open("logs/crash.log", "a") as f:
+        f.write(f"\n{'='*60}\n")
+        f.write(f"CRASH at {__import__('datetime').datetime.now().isoformat()}\n")
+        traceback.print_exception(exc_type, exc_val, exc_tb, file=f)
+    sys.__excepthook__(exc_type, exc_val, exc_tb)
+sys.excepthook = _crash_handler
 
 # Load .env before anything else reads environment variables
 try:
@@ -182,16 +193,22 @@ async def _main_inner() -> None:
     symbols: list[str]  = cfg.get("symbols",              ["BTCUSDT", "ETHUSDT"])
     loop_interval: float = cfg.get("loop_interval_seconds", 60.0)
     metrics_host: str   = cfg["logging"]["metrics_host"]
-    metrics_port: int   = cfg["logging"]["metrics_port"]
+    metrics_port: int   = int(os.environ.get("METRICS_PORT", cfg["logging"]["metrics_port"]))
 
     log.info("Starting confluence_bot  |  PAPER_MODE=%s  |  symbols=%s", PAPER_MODE, symbols)
+
+    # 0. Apply exchange credentials from exchange manager (if configured via UI)
+    from core.exchange_manager import apply_active_exchange
+    active_ex = apply_active_exchange()
+    if active_ex:
+        log.info("Trading via exchange manager: %s (%s)", active_ex["name"], active_ex["exchange"])
 
     # 1. Cache
     cache = DataCache()
 
     # Prime circuit breaker — fetch real balance before first eval tick
     try:
-        from data.binance_rest import get_account_balance as _fetch_bal
+        from data.exchange_router import get_account_balance as _fetch_bal
         _init_balance = await _fetch_bal()
         if _init_balance > 0:
             cache.set_account_balance(_init_balance)
@@ -216,7 +233,7 @@ async def _main_inner() -> None:
 
     # 3. Configure leverage + margin type on exchange
     if not PAPER_MODE:
-        from data.binance_rest import setup_symbols
+        from data.exchange_router import setup_symbols
         _leverage    = cfg["risk"]["leverage"]
         _margin_type = cfg["risk"].get("margin_type", "ISOLATED")
         await setup_symbols(symbols, _leverage, _margin_type)
