@@ -81,20 +81,23 @@ def _query_daily_stats() -> tuple[float, int]:
                 "ORDER BY closed_ts DESC LIMIT 20"
             ).fetchall()
 
-            # Fallback min-win when risk_usdt is 0 / NULL
-            # Use $1.00 as absolute minimum — a trade that made > $1 is a real win
+            # Fallback min-win when risk_usdt is 0 / NULL on legacy rows.
+            # Real win = PnL >= 10% of risked capital.  $1 absolute floor.
             balance = _get_balance()
             fallback_min_win = max(balance * _RISK_PER_TRADE * _MIN_WIN_RATIO, 1.0)
 
             consec = 0
             for pnl_val, risk_val in rows:
                 pnl  = float(pnl_val) if pnl_val else 0.0
-                if pnl > 0:
-                    break   # any positive PnL (including breakeven) = streak ends
-                if pnl == 0.0:
-                    continue  # breakeven — not a loss, skip
-                # pnl < 0 — real loss
-                consec += 1
+                risk = float(risk_val) if risk_val else 0.0
+                # Threshold for "real" win/loss — scratch trades in between
+                # do not affect the streak in either direction.
+                threshold = (risk * _MIN_WIN_RATIO) if risk > 0 else fallback_min_win
+                if pnl >= threshold:
+                    break          # genuine win — streak ends
+                if pnl > -threshold:
+                    continue       # near-breakeven scratch (e.g. max_hold timeout)
+                consec += 1        # genuine loss
 
         return daily_pnl, consec
     except Exception as exc:

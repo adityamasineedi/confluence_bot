@@ -704,20 +704,23 @@ async def place_order(
                 log.error("place_order entry rejected %s %s: %s", side, symbol, result)
                 return {}
 
-            # Determine actual filled quantity for bracket orders
-            orig_qty   = float(result.get("origQty",     quantity))
-            filled_qty = float(result.get("executedQty", 0))
+            # Determine actual filled quantity for bracket orders.
+            # Round both sides to the same lot-size precision so we don't
+            # log false partial-fill warnings caused purely by rounding
+            # (e.g. DOGEUSDT with 0 decimals: 100.4 reported vs 100 rounded).
+            orig_qty    = _round_qty(symbol, float(result.get("origQty",     quantity)))
+            filled_qty  = float(result.get("executedQty", 0))
+            bracket_qty = _round_qty(symbol, filled_qty)
 
             if filled_qty <= 0:
                 log.warning("Entry unfilled for %s %s (executedQty=0) — skipping bracket",
                             side, symbol)
                 return result
 
-            if filled_qty < orig_qty * 0.95:
+            if bracket_qty < orig_qty * 0.95:
                 log.warning("Partial fill %s %s: filled %.4f of %.4f requested",
-                            side, symbol, filled_qty, orig_qty)
+                            side, symbol, bracket_qty, orig_qty)
 
-            bracket_qty = _round_qty(symbol, filled_qty)
             result["executedQty"] = filled_qty
 
             sl_params = _make_sl_params(symbol, close_side, bracket_qty, stop)
@@ -853,26 +856,32 @@ async def _get_order_detail(symbol: str, order_id: int) -> dict:
         return {}
 
 
-async def place_limit_then_market(
+async def place_market_with_bracket(
     symbol: str,
     side: str,
     quantity: float,
-    limit_price: float,
     stop: float,
     take_profit: float | None,
-    timeout_s: float = 30.0,
+    **_legacy,
 ) -> dict:
-    """Place entry order with full protection against ghost trades.
+    """Place a MARKET entry, verify the position exists, then attach SL+TP.
 
     Flow:
-      1. Place LIMIT at limit_price
-      2. Wait timeout_s (default 30s)
-      3. Check fill → if unfilled, cancel LIMIT and try MARKET
-      4. Verify position actually exists on exchange
-      5. Only then place SL + TP bracket orders
-      6. If anything fails → cancel ALL orders for this symbol (cleanup)
+      1. Place MARKET entry
+      2. Wait briefly for the exchange to settle
+      3. Verify the position exists on exchange (catches phantom fills)
+      4. Place SL via 3-tier fallback (algo → STOP_MARKET → abort+flatten)
+      5. Place TP via algo order (soft failure — software TP covers it)
 
-    Returns order dict with executedQty > 0 on success, or {} on failure.
+    Demo testnet (and occasionally mainnet) sometimes reports a fill on a
+    LIMIT order that never actually opened a position; we therefore use
+    MARKET entries exclusively to make the fill→position relationship
+    deterministic.  See git history for the ghost-trade investigation.
+
+    `**_legacy` swallows old keyword arguments (limit_price, timeout_s)
+    so existing callers don't break.
+
+    Returns order dict with executedQty > 0 on success, {} on failure.
     """
     headers    = {"X-MBX-APIKEY": _API_KEY}
     close_side = "SELL" if side == "BUY" else "BUY"
@@ -881,7 +890,7 @@ async def place_limit_then_market(
     result: dict = {}
 
     async with aiohttp.ClientSession(timeout=_REQUEST_TIMEOUT) as session:
-        # ── Step 1: place LIMIT entry ─────────────────────────────────────
+        # ── Step 1: place MARKET entry ────────────────────────────────────
         try:
             entry_params: dict = {
                 "symbol": symbol, "side": side, "type": "MARKET",
@@ -891,54 +900,32 @@ async def place_limit_then_market(
                 resp.raise_for_status()
                 result = await resp.json()
             if isinstance(result.get("code"), int) and result["code"] < 0:
-                log.error("LIMIT entry rejected %s %s: %s", side, symbol, result)
+                log.error("MARKET entry rejected %s %s: %s", side, symbol, result)
                 return {}
-            order_id = result.get("orderId")
-            log.info("LIMIT entry placed %s %s @ %.4f orderId=%s",
-                     side, symbol, limit_price, order_id)
+            order_id   = result.get("orderId")
+            filled_qty = float(result.get("executedQty", 0))
+            result["executedQty"] = filled_qty
+            log.info("MARKET entry %s %s qty=%.4f orderId=%s",
+                     side, symbol, filled_qty, order_id)
         except Exception as exc:
-            log.error("LIMIT entry failed (%s %s): %s", side, symbol, exc)
+            log.error("MARKET entry failed (%s %s): %s", side, symbol, exc)
             return {}
 
-        # ── Step 2: wait for fill (market = instant)
-        await asyncio.sleep(2)
+        # ── Step 2: settle delay so position registers on exchange ────────
+        await asyncio.sleep(1)
 
-        # ── Step 3: check fill status ─────────────────────────────────────
-        order_detail = await _get_order_detail(symbol, order_id)
-        status     = order_detail.get("status", "")
-        filled_qty = float(order_detail.get("executedQty", 0))
-        result["executedQty"] = filled_qty
+        # ── Step 3: verify the position is real ───────────────────────────
+        if filled_qty <= 0:
+            # The order acknowledgement may not include executedQty — ask
+            # the exchange directly via /fapi/v1/order before giving up.
+            order_detail = await _get_order_detail(symbol, order_id)
+            filled_qty   = float(order_detail.get("executedQty", 0))
+            result["executedQty"] = filled_qty
 
-        if status not in ("FILLED", "PARTIALLY_FILLED"):
-            # Cancel unfilled LIMIT and try MARKET
-            await cancel_order(symbol, order_id)
-            log.info("LIMIT unfilled after %.0fs (%s) — MARKET fallback (%s %s)",
-                     timeout_s, status, side, symbol)
-            try:
-                mkt_params: dict = {
-                    "symbol": symbol, "side": side, "type": "MARKET",
-                    "quantity": quantity,
-                }
-                async with session.post(url, params=_sign(mkt_params), headers=headers) as resp:
-                    resp.raise_for_status()
-                    result = await resp.json()
-                if isinstance(result.get("code"), int) and result["code"] < 0:
-                    log.error("MARKET rejected %s %s: %s", side, symbol, result)
-                    return {}
-                filled_qty = float(result.get("executedQty", 0))
-                result["executedQty"] = filled_qty
-                log.info("MARKET filled %s %s qty=%.4f", side, symbol, filled_qty)
-            except Exception as exc:
-                log.error("MARKET failed (%s %s): %s", side, symbol, exc)
-                return {}
-
-        # ── Step 4: verify fill is real ───────────────────────────────────
         if filled_qty <= 0:
             log.warning("Entry qty=0 for %s %s — no trade", side, symbol)
             return {}
 
-        # Double-check: does the position actually exist on the exchange?
-        await asyncio.sleep(1)  # small delay for exchange to settle
         try:
             pos_amt = await get_position_amt(symbol)
             if abs(pos_amt) < 0.0001:
@@ -950,12 +937,14 @@ async def place_limit_then_market(
         except Exception as exc:
             log.debug("Position verify failed %s: %s — proceeding", symbol, exc)
 
+        # Round both sides to lot-size precision so the partial-fill check
+        # is comparing apples to apples (DOGE/XRP have integer-only qty).
         bracket_qty = _round_qty(symbol, filled_qty)
-        result["executedQty"] = filled_qty
+        orig_qty    = _round_qty(symbol, quantity)
 
-        if filled_qty < quantity * 0.95:
+        if bracket_qty < orig_qty * 0.95:
             log.warning("Partial fill %s %s: %.4f of %.4f",
-                        side, symbol, filled_qty, quantity)
+                        side, symbol, bracket_qty, orig_qty)
 
         # ── Step 5: place SL — three-tier with emergency abort ────────
         algo_url = f"{_BINANCE_BASE}/fapi/v1/algoOrder"
@@ -1063,6 +1052,12 @@ async def place_limit_then_market(
         result["tp_placed_on_exchange"] = tp_placed
 
     return result
+
+
+# Backwards-compat alias — historical name from when the function was meant
+# to place a LIMIT first then fall back to MARKET.  All callers should
+# migrate to place_market_with_bracket().
+place_limit_then_market = place_market_with_bracket
 
 
 async def cancel_order(symbol: str, order_id: int) -> dict:

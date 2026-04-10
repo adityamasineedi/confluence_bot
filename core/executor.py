@@ -204,6 +204,12 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
     direction = score_dict["direction"]
     regime    = score_dict["regime"]
 
+    # Force fresh committed-risk read before sizing.  Without this, two
+    # signals firing within the 10s cache window can both see stale
+    # equity and oversize relative to the actual margin available.
+    from core.rr_calculator import invalidate_committed_cache as _inv_cc
+    _inv_cc()
+
     # Gate: DB-level open trade check — cross-process safe (catches duplicate instances)
     # Also blocks opposite direction on same symbol (prevents hedged positions)
     import sqlite3 as _sqlite3
@@ -433,12 +439,11 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
                 )
                 # effective_tp remains at 5× tp computed above
 
-        from data.exchange_router import place_limit_then_market
-        order = await place_limit_then_market(
+        from data.exchange_router import place_market_with_bracket
+        order = await place_market_with_bracket(
             symbol      = symbol,
             side        = side,
             quantity    = qty,
-            limit_price = entry,
             stop        = stop,
             take_profit = effective_tp,   # None when trailing placed, 5× on fallback
         )

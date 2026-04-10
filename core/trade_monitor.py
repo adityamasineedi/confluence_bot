@@ -391,7 +391,12 @@ async def _check_live_order(
 
 def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:
     """
-    In paper mode, simulate TP/SL by comparing current price to trade levels.
+    In paper mode, simulate TP/SL by scanning every 1m bar's high/low since
+    the trade opened.  Without this, the 30s monitor poll only sees the
+    *current* price and misses any TP/SL touched between polls — which
+    would cause paper-mode WR to systematically lag the backtest WR
+    (backtest scans every bar's h/l against the levels).
+
     Returns ('TP', exit_price) | ('SL', exit_price) | None (not hit yet).
     """
     symbol    = trade["symbol"]
@@ -399,20 +404,48 @@ def _check_paper_order(trade: dict, cache) -> tuple[str, float] | None:
     sl        = float(trade["stop_loss"])
     tp        = float(trade["take_profit"])
 
-    price = cache.get_last_price(symbol)
-    if not price or price <= 0:
+    # Scan recent 1m bars (15 = roughly twice the poll interval)
+    bars_1m = cache.get_ohlcv(symbol, window=15, tf="1m")
+    if not bars_1m:
+        # Fallback to last-price check if cache empty
+        price = cache.get_last_price(symbol)
+        if not price or price <= 0:
+            return None
+        if direction == "LONG":
+            if price >= tp: return ("TP", tp)
+            if price <= sl: return ("SL", sl)
+        else:
+            if price <= tp: return ("TP", tp)
+            if price >= sl: return ("SL", sl)
         return None
 
-    if direction == "LONG":
-        if price >= tp:
-            return ("TP", tp)
-        if price <= sl:
-            return ("SL", sl)
-    else:  # SHORT
-        if price <= tp:
-            return ("TP", tp)
-        if price >= sl:
-            return ("SL", sl)
+    # Determine entry timestamp so we only scan post-entry bars
+    open_ts_ms = 0
+    open_ts_iso = trade.get("ts")
+    if open_ts_iso:
+        try:
+            open_dt = datetime.fromisoformat(open_ts_iso.replace("Z", "+00:00"))
+            if open_dt.tzinfo is None:
+                open_dt = open_dt.replace(tzinfo=timezone.utc)
+            open_ts_ms = open_dt.timestamp() * 1000
+        except Exception:
+            open_ts_ms = 0
+
+    for bar in bars_1m:
+        if bar.get("ts", 0) < open_ts_ms:
+            continue   # bar predates entry — can't have triggered SL/TP
+        h = bar.get("h", 0)
+        l = bar.get("l", 0)
+        if h <= 0 or l <= 0:
+            continue
+        if direction == "LONG":
+            # If a single bar touches both SL and TP, conservatively assume
+            # SL hit first (can't tell intra-bar order without tick data).
+            if l <= sl: return ("SL", sl)
+            if h >= tp: return ("TP", tp)
+        else:
+            if h >= sl: return ("SL", sl)
+            if l <= tp: return ("TP", tp)
 
     return None
 
@@ -642,18 +675,30 @@ def _regime_conflicts(trade: dict, cache) -> bool:
     return False
 
 
-async def _force_regime_close(trade: dict, session: aiohttp.ClientSession, cache) -> bool:
-    """Place a market close order and update the DB for a regime-flip exit.
+async def _force_regime_close(
+    trade: dict, session: aiohttp.ClientSession, cache,
+) -> tuple[bool, float]:
+    """Place a market close order and update the DB.
 
-    Returns True if the close was successfully recorded.
+    Returns (row_claimed, fill_price).
+    Refuses to write the DB if the exchange rejected the close — the trade
+    must remain OPEN so the next monitor tick retries, otherwise we'd
+    create a ghost position (DB closed, exchange still open).
+
+    In paper mode there is no exchange call: we close the DB row at the
+    cached last price (or entry as a last-resort fallback).
     """
-    symbol    = trade["symbol"]
-    direction = trade["direction"]
-    headers   = {"X-MBX-APIKEY": _API_KEY}
+    symbol     = trade["symbol"]
+    direction  = trade["direction"]
     close_side = "SELL" if direction == "LONG" else "BUY"
+    price      = cache.get_last_price(symbol) or 0.0
 
-    price = cache.get_last_price(symbol) or 0.0
+    if _PAPER_MODE:
+        fill_price = price or float(trade["entry"])
+        ok = await asyncio.to_thread(_close_trade_db, trade, fill_price)
+        return ok, fill_price
 
+    headers = {"X-MBX-APIKEY": _API_KEY}
     try:
         qty = float(trade["size"])
         qty = int(qty) if qty == int(qty) else qty
@@ -669,16 +714,23 @@ async def _force_regime_close(trade: dict, session: aiohttp.ClientSession, cache
             params=close_params, headers=headers,
         ) as resp:
             close_resp = await resp.json()
-        if close_resp.get("orderId"):
-            fill_price = float(close_resp.get("avgPrice") or price or trade["entry"])
-        else:
-            log.warning("Regime flip market close rejected for %s: %s", symbol, close_resp)
-            fill_price = price or float(trade["entry"])
     except Exception as exc:
-        log.warning("Regime flip market close error %s: %s", symbol, exc)
-        fill_price = price or float(trade["entry"])
+        log.error(
+            "Force close exchange error %s: %s — leaving trade OPEN, will retry next tick",
+            symbol, exc,
+        )
+        return False, 0.0
 
-    return await asyncio.to_thread(_close_trade_db, trade, fill_price)
+    if not close_resp.get("orderId"):
+        log.error(
+            "Force close REJECTED %s: %s — leaving trade OPEN, will retry next tick",
+            symbol, close_resp,
+        )
+        return False, 0.0
+
+    fill_price = float(close_resp.get("avgPrice") or price or trade["entry"])
+    ok = await asyncio.to_thread(_close_trade_db, trade, fill_price)
+    return ok, fill_price
 
 
 # ── PnL ───────────────────────────────────────────────────────────────────────
@@ -917,31 +969,28 @@ async def monitor_trades(cache) -> None:
                             _cfg.get(str(trade.get("regime", "")).lower(), {}).get("max_hold_hours"),
                         )
                         _closing_trade_ids.add(trade_id)
-                        exit_px = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
+                        row_claimed, exit_px = await _force_regime_close(trade, session, cache)
+                        if not row_claimed:
+                            # Exchange rejected the close — leave trade OPEN, retry next tick.
+                            # Drop the closing-id guard so the next tick re-attempts.
+                            _closing_trade_ids.discard(trade_id)
+                            continue
 
-                        if _PAPER_MODE:
-                            row_claimed = await asyncio.to_thread(
-                                _close_trade_db, trade, exit_px,
-                            )
-                        else:
-                            row_claimed = await _force_regime_close(trade, session, cache)
-
-                        if row_claimed:
-                            from core.executor import close_deal
-                            close_deal(trade["symbol"], trade["direction"])
-                            if not _PAPER_MODE:
-                                from data.exchange_router import refresh_account_balance
-                                await refresh_account_balance()
-                            pnl = _calc_net_pnl(trade, exit_px)
-                            log.info(
-                                "Max-hold closed: %s %s  exit=%.6f  pnl=%+.2f USDT",
-                                trade["direction"], trade["symbol"], exit_px, pnl,
-                            )
-                            try:
-                                from notifications.telegram import send_trade_close
-                                await send_trade_close(trade, "MAX_HOLD", exit_px, pnl)
-                            except Exception:
-                                pass
+                        from core.executor import close_deal
+                        close_deal(trade["symbol"], trade["direction"])
+                        if not _PAPER_MODE:
+                            from data.exchange_router import refresh_account_balance
+                            await refresh_account_balance()
+                        pnl = _calc_net_pnl(trade, exit_px)
+                        log.info(
+                            "Max-hold closed: %s %s  exit=%.6f  pnl=%+.2f USDT",
+                            trade["direction"], trade["symbol"], exit_px, pnl,
+                        )
+                        try:
+                            from notifications.telegram import send_trade_close
+                            await send_trade_close(trade, "MAX_HOLD", exit_px, pnl)
+                        except Exception:
+                            pass
                         continue
 
                     if not _PAPER_MODE:
@@ -955,26 +1004,28 @@ async def monitor_trades(cache) -> None:
                                 trade["direction"], trade["symbol"],
                             )
                             _closing_trade_ids.add(trade_id)
-                            row_claimed = await _force_regime_close(trade, session, cache)
-                            if row_claimed:
-                                from core.executor import close_deal
-                                close_deal(trade["symbol"], trade["direction"])
-                                if not _PAPER_MODE:
-                                    from data.exchange_router import refresh_account_balance
-                                    await refresh_account_balance()
-                                # Use actual market price, not entry — entry gives ~$0 PnL
-                                flip_exit = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
-                                pnl = _calc_net_pnl(trade, flip_exit)
-                                log.info(
-                                    "Regime flip closed: %s %s  pnl≈%+.2f USDT",
-                                    trade["direction"], trade["symbol"], pnl,
-                                )
-                                try:
-                                    from notifications.telegram import send_trade_close
-                                    await send_trade_close(trade, "REGIME_FLIP",
-                                                           float(trade["entry"]), pnl)
-                                except Exception:
-                                    pass
+                            row_claimed, flip_exit = await _force_regime_close(
+                                trade, session, cache,
+                            )
+                            if not row_claimed:
+                                _closing_trade_ids.discard(trade_id)
+                                continue
+
+                            from core.executor import close_deal
+                            close_deal(trade["symbol"], trade["direction"])
+                            if not _PAPER_MODE:
+                                from data.exchange_router import refresh_account_balance
+                                await refresh_account_balance()
+                            pnl = _calc_net_pnl(trade, flip_exit)
+                            log.info(
+                                "Regime flip closed: %s %s  exit=%.6f  pnl=%+.2f USDT",
+                                trade["direction"], trade["symbol"], flip_exit, pnl,
+                            )
+                            try:
+                                from notifications.telegram import send_trade_close
+                                await send_trade_close(trade, "REGIME_FLIP", flip_exit, pnl)
+                            except Exception:
+                                pass
                             continue
 
                     if _PAPER_MODE:

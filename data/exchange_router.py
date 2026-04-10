@@ -253,23 +253,39 @@ async def fetch_all_positions() -> list[dict]:
         return []
 
 
-async def place_limit_then_market(
+async def place_market_with_bracket(
     symbol: str,
     side: str,
     quantity: float,
-    limit_price: float,
     stop: float,
     take_profit: float | None,
+    *,
+    limit_price: float | None = None,
     timeout_s: float = 30.0,
 ) -> dict:
-    """Place entry (LIMIT → fallback MARKET) + SL/TP bracket.
+    """Place entry + SL/TP bracket.
+
+    Binance path: MARKET entry only (see binance_rest.place_market_with_bracket
+    docstring for the ghost-fill rationale).
+    ccxt path: LIMIT at limit_price, fall back to MARKET on timeout — these
+    exchanges don't have the demo-fill quirks Binance had.
 
     Returns dict with executedQty > 0 on success, {} on failure.
     """
     if _use_binance():
-        from data.binance_rest import place_limit_then_market as _place
-        return await _place(symbol, side, quantity, limit_price, stop,
-                            take_profit, timeout_s)
+        from data.binance_rest import place_market_with_bracket as _place
+        return await _place(symbol, side, quantity, stop, take_profit)
+    # Default ccxt limit_price to the current ticker if caller didn't supply one
+    if limit_price is None:
+        try:
+            ticker = await _ex().fetch_ticker(_to_ccxt(symbol))
+            limit_price = float(ticker.get("last") or ticker.get("close") or 0)
+        except Exception as exc:
+            log.warning("ccxt ticker fetch failed for %s: %s", symbol, exc)
+            limit_price = 0.0
+        if limit_price <= 0:
+            log.error("ccxt cannot determine limit_price for %s — aborting entry", symbol)
+            return {}
 
     ex = _ex()
     csym = _to_ccxt(symbol)
@@ -391,6 +407,24 @@ async def place_limit_then_market(
     log.info("ccxt order placed: %s %s qty=%.4f on %s",
              side, symbol, filled_qty, _ACTIVE_EXCHANGE)
     return result
+
+
+# Backwards-compat alias — historical name.  New code should call
+# place_market_with_bracket() directly.
+async def place_limit_then_market(
+    symbol: str,
+    side: str,
+    quantity: float,
+    limit_price: float,
+    stop: float,
+    take_profit: float | None,
+    timeout_s: float = 30.0,
+) -> dict:
+    return await place_market_with_bracket(
+        symbol=symbol, side=side, quantity=quantity,
+        stop=stop, take_profit=take_profit,
+        limit_price=limit_price, timeout_s=timeout_s,
+    )
 
 
 async def place_trailing_stop(

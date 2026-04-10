@@ -1546,6 +1546,9 @@ def run_breakout_retest(symbol, data, btc_data,
     _max_ent_30m  = int(_br_cfg.get("max_entries_per_30min", 2))
     _btc_confirm  = bool(_br_cfg.get("btc_confirm_for_alts", True))
     _choppy_mult  = float(_br_cfg.get("choppy_atr_mult", 2.0))
+    # Max-hold mirrors live trade_monitor (_max_hold_exceeded).  4h = 48 × 5M bars.
+    _max_hold_h    = float(_br_cfg.get("max_hold_hours", 4.0))
+    _max_hold_5m   = max(1, int(_max_hold_h * 12))
     # Live-matching features
     _risk_cfg     = _CFG.get("risk", {})
     _max_open     = int(_risk_cfg.get("max_open_positions", 5))
@@ -1725,8 +1728,8 @@ def run_breakout_retest(symbol, data, btc_data,
             stop = entry_sl + sd; tp = entry_sl - sd*rr_ratio
         if stop <= 0 or tp <= 0:
             i += 1; continue
-        fut = b5m[eb+1: eb+49]
-        outcome="TIMEOUT"; pnl=0.0; xb=eb+48; hold_5m=48
+        fut = b5m[eb+1: eb+1+_max_hold_5m]
+        outcome="TIMEOUT"; pnl=0.0; xb=eb+_max_hold_5m; hold_5m=_max_hold_5m
         for k, f in enumerate(fut):
             if direction == "LONG":
                 if f[L] <= stop: outcome="SL"; pnl=-1.0; xb=eb+1+k; hold_5m=k+1; break
