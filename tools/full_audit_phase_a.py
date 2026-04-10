@@ -406,6 +406,160 @@ def report_per_regime(symbol: str, trades, contexts):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def run_audit(from_date: str = "2023-01-01",
+              to_date:   str = "2026-04-01",
+              mc_iters:  int = 10000,
+              coins:     list[str] | None = None) -> dict:
+    """Run the full Phase A audit and return a structured result dict.
+
+    This is the function the dashboard /api/audit/run endpoint calls.
+    Returns a dict with keys: per_coin, btc_stats, eth_stats, btc_features,
+    eth_features, btc_regimes, eth_regimes, generated_at.
+    """
+    if coins is None:
+        coins = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+                 "XRPUSDT", "LINKUSDT", "DOGEUSDT", "SUIUSDT"]
+
+    # Per-coin summary
+    per_coin = []
+    for sym in coins:
+        trades, _ = build_trade_features(sym, from_date, to_date)
+        if not trades:
+            continue
+        n = len(trades)
+        wins = sum(1 for t in trades if t.outcome == "TP")
+        losses = sum(1 for t in trades if t.outcome == "SL")
+        gw = sum(t.pnl_r for t in trades if t.pnl_r > 0)
+        gl = sum(-t.pnl_r for t in trades if t.pnl_r < 0)
+        pf = gw / gl if gl > 0 else 999.0
+        wr = wins / n * 100
+        net_r = gw - gl
+        pnl_seq = [t.pnl_r for t in trades]
+        _, dd_pct, _, max_streak = equity_curve(pnl_seq)
+        per_coin.append({
+            "symbol":     sym,
+            "n":          n,
+            "wr":         round(wr, 1),
+            "pf":         round(pf, 2),
+            "net_r":      round(net_r, 1),
+            "net_usdt":   round(net_r * 50, 0),
+            "max_dd_pct": round(dd_pct, 1),
+            "max_streak": max_streak,
+        })
+
+    # BTC + ETH deep dive
+    btc_trades, btc_ctx = build_trade_features("BTCUSDT", from_date, to_date)
+    eth_trades, eth_ctx = build_trade_features("ETHUSDT", from_date, to_date)
+
+    def _stats_with_mc(trades, ctx):
+        if not trades:
+            return None
+        pnl = [t.pnl_r for t in trades]
+        _, dd_pct, _, max_streak = equity_curve(pnl)
+        mc = monte_carlo_drawdown(pnl, iterations=mc_iters)
+        n = len(trades)
+        wins = [t for t in trades if t.outcome == "TP"]
+        losses = [t for t in trades if t.outcome == "SL"]
+        wr = len(wins) / n
+        avg_win_r = statistics.mean(t.pnl_r for t in wins) if wins else 0
+        avg_loss_r = statistics.mean(-t.pnl_r for t in losses) if losses else 0
+        E = wr * avg_win_r - (1 - wr) * avg_loss_r
+        gw = sum(t.pnl_r for t in trades if t.pnl_r > 0)
+        gl = sum(-t.pnl_r for t in trades if t.pnl_r < 0)
+        pf = gw / gl if gl > 0 else 999.0
+        return {
+            "n":            n,
+            "wr":           round(wr * 100, 1),
+            "pf":           round(pf, 2),
+            "avg_win_r":    round(avg_win_r, 2),
+            "avg_loss_r":   round(avg_loss_r, 2),
+            "expectancy_r": round(E, 3),
+            "expectancy_usdt": round(E * 50, 2),
+            "hist_max_dd_pct": round(dd_pct, 1),
+            "hist_max_streak": max_streak,
+            "mc_dd_p50":    round(mc["dd_p50"], 1),
+            "mc_dd_p90":    round(mc["dd_p90"], 1),
+            "mc_dd_p95":    round(mc["dd_p95"], 1),
+            "mc_dd_p99":    round(mc["dd_p99"], 1),
+            "mc_dd_max":    round(mc["dd_max"], 1),
+            "mc_streak_p50": mc["streak_p50"],
+            "mc_streak_p90": mc["streak_p90"],
+            "mc_streak_p99": mc["streak_p99"],
+            "mc_streak_max": mc["streak_max"],
+        }
+
+    def _features(trades, contexts):
+        if not trades or not contexts:
+            return None
+        win_ctx = [c for t, c in zip(trades, contexts) if t.outcome == "TP"]
+        los_ctx = [c for t, c in zip(trades, contexts) if t.outcome == "SL"]
+        if not win_ctx or not los_ctx:
+            return None
+        out = {"n_winners": len(win_ctx), "n_losers": len(los_ctx), "rows": []}
+        feats = ["adx", "atr_pct", "vol_ratio", "range_pct", "btc_mom_1h",
+                 "hour", "hold", "mae", "mfe"]
+        for f in feats:
+            wv = [c[f] for c in win_ctx if c[f] is not None]
+            lv = [c[f] for c in los_ctx if c[f] is not None]
+            if not wv or not lv:
+                continue
+            mw = statistics.mean(wv)
+            ml = statistics.mean(lv)
+            d = cohen_d(wv, lv)
+            _, p = welch_ttest(wv, lv)
+            out["rows"].append({
+                "feature":  f,
+                "win_mean": round(mw, 3),
+                "los_mean": round(ml, 3),
+                "diff":     round(mw - ml, 3),
+                "cohen_d":  round(d, 3),
+                "p_value":  round(p, 4),
+                "signif":   "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "",
+            })
+        return out
+
+    def _regimes(trades, contexts):
+        if not trades or not contexts:
+            return []
+        from collections import defaultdict
+        by = defaultdict(list)
+        for t, c in zip(trades, contexts):
+            by[c["regime"]].append(t)
+        out = []
+        for reg, tr in sorted(by.items(), key=lambda x: -len(x[1])):
+            if len(tr) < 10:
+                continue
+            n = len(tr)
+            wins = sum(1 for t in tr if t.outcome == "TP")
+            gw = sum(t.pnl_r for t in tr if t.pnl_r > 0)
+            gl = sum(-t.pnl_r for t in tr if t.pnl_r < 0)
+            pf = gw / gl if gl > 0 else 999.0
+            net_r = gw - gl
+            out.append({
+                "regime":     reg,
+                "n":          n,
+                "wr":         round(wins / n * 100, 1),
+                "pf":         round(pf, 2),
+                "net_r":      round(net_r, 1),
+                "expectancy": round(net_r / n, 4),
+            })
+        return out
+
+    return {
+        "from_date":      from_date,
+        "to_date":        to_date,
+        "mc_iters":       mc_iters,
+        "generated_at":   datetime.now(timezone.utc).isoformat(),
+        "per_coin":       per_coin,
+        "btc_stats":      _stats_with_mc(btc_trades, btc_ctx),
+        "eth_stats":      _stats_with_mc(eth_trades, eth_ctx),
+        "btc_features":   _features(btc_trades, btc_ctx),
+        "eth_features":   _features(eth_trades, eth_ctx),
+        "btc_regimes":    _regimes(btc_trades, btc_ctx),
+        "eth_regimes":    _regimes(eth_trades, eth_ctx),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from-date", default="2023-01-01")

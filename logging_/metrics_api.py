@@ -902,6 +902,7 @@ async def dashboard() -> HTMLResponse:
     <button class="tab" onclick="showTab('strategies',this)">&#128218; Strategies</button>
     <button class="tab" onclick="showTab('gates',this)">&#128683; Gates</button>
     <button class="tab" onclick="showTab('exchanges',this)">&#128279; Exchanges</button>
+    <button class="tab" onclick="showTab('audit',this)">&#129514; Audit</button>
   </nav>
   <span id="cvd-warmup" style="font-size:0.75rem;margin-left:8px">…</span>
   <span class="hdr-right" id="hdr-right">loading…</span>
@@ -2068,6 +2069,66 @@ async def dashboard() -> HTMLResponse:
   </div>
 </div>
 
+<!-- ── AUDIT (Phase A statistical audit) ─────────────────── -->
+<div id="panel-audit" class="panel">
+  <div style="padding:20px;max-width:1200px;margin:0 auto">
+    <h2 style="margin:0 0 6px 0;color:#a78bfa;font-size:1rem">&#129514; Phase A Statistical Audit</h2>
+    <p style="color:#9ca3af;font-size:0.82rem;margin:0 0 16px 0">
+      Walks the full backtest, computes equity curve metrics, runs a Monte Carlo simulation
+      and a winners-vs-losers feature comparison.  Takes ~60-90 seconds.
+    </p>
+
+    <!-- Run controls -->
+    <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:0.78rem;color:#9ca3af">From
+        <input id="audit-from" type="date" value="2023-01-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem;margin-left:4px">
+      </label>
+      <label style="font-size:0.78rem;color:#9ca3af">To
+        <input id="audit-to" type="date" value="2026-04-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem;margin-left:4px">
+      </label>
+      <label style="font-size:0.78rem;color:#9ca3af">MC iter
+        <input id="audit-mc" type="number" value="5000" min="500" max="20000" step="500" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:4px 8px;font-size:0.78rem;width:80px;margin-left:4px">
+      </label>
+      <button id="audit-run-btn" onclick="auditRun()" style="padding:7px 22px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600">&#9654; Run Audit</button>
+      <span id="audit-status" style="font-size:0.78rem;color:#6b7280">idle</span>
+    </div>
+
+    <!-- Results sections -->
+    <div id="audit-results" style="display:none">
+
+      <!-- Per-coin summary -->
+      <section style="margin-bottom:16px">
+        <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;padding:0 4px 6px">Per-coin summary (8 coins)</h3>
+        <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;overflow-x:auto">
+          <table style="font-size:0.82rem">
+            <thead><tr><th>Symbol</th><th>n</th><th>WR%</th><th>PF</th><th>Net R</th><th>Net $</th><th>Max DD%</th><th>Max losing streak</th></tr></thead>
+            <tbody id="audit-per-coin"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- BTC + ETH stat blocks -->
+      <section style="margin-bottom:16px">
+        <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;padding:0 4px 6px">BTC + ETH deep stats</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px" id="audit-stats-grid"></div>
+      </section>
+
+      <!-- Winners vs losers feature comparison -->
+      <section style="margin-bottom:16px">
+        <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;padding:0 4px 6px">Winners vs losers (Welch t-test + Cohen's d)</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px" id="audit-features-grid"></div>
+      </section>
+
+      <!-- Per-regime expectancy -->
+      <section style="margin-bottom:16px">
+        <h3 style="font-size:0.78rem;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;padding:0 4px 6px">Per-regime expectancy</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px" id="audit-regimes-grid"></div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
 <script>
 const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT','ADAUSDT','AVAXUSDT','TAOUSDT'];
 
@@ -2094,6 +2155,7 @@ function showTab(name, btn) {
   if (name === 'backtest' && !btLoaded) { btLoaded = true; loadBacktest(); }
   if (name === 'gates') { loadGates(); loadRiskMode(); }
   if (name === 'exchanges') { exLoad(); }
+  if (name === 'audit') { auditPollOnce(); }
 }
 
 (function initHash() {
@@ -3514,6 +3576,185 @@ async function exActivate(id) {
     alert('Activate failed: ' + e.message);
   }
 }
+
+// ── Phase A audit ─────────────────────────────────────────────────────────────
+let auditPollTimer = null;
+
+async function auditRun() {
+  const btn = document.getElementById('audit-run-btn');
+  const st  = document.getElementById('audit-status');
+  btn.disabled = true; btn.style.opacity = 0.5;
+  st.textContent = 'starting...'; st.style.color = '#9ca3af';
+  document.getElementById('audit-results').style.display = 'none';
+  try {
+    const body = {
+      from_date: document.getElementById('audit-from').value || '2023-01-01',
+      to_date:   document.getElementById('audit-to').value   || '2026-04-01',
+      mc_iters:  parseInt(document.getElementById('audit-mc').value, 10) || 5000,
+    };
+    const r = await fetch('/api/audit/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + (d.error || 'unknown');
+      st.style.color = '#ef4444';
+      btn.disabled = false; btn.style.opacity = 1;
+      return;
+    }
+    if (auditPollTimer) clearInterval(auditPollTimer);
+    auditPollTimer = setInterval(auditPollOnce, 2000);
+    auditPollOnce();
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = '#ef4444';
+    btn.disabled = false; btn.style.opacity = 1;
+  }
+}
+
+async function auditPollOnce() {
+  try {
+    const d = await fetchJSON('/api/audit/status');
+    const st = document.getElementById('audit-status');
+    const btn = document.getElementById('audit-run-btn');
+    if (d.status === 'idle') {
+      st.textContent = 'idle — click Run Audit';
+      st.style.color = '#9ca3af';
+    } else if (d.status === 'running') {
+      st.textContent = 'running... (~60-90s)';
+      st.style.color = '#fbbf24';
+      btn.disabled = true; btn.style.opacity = 0.5;
+    } else if (d.status === 'ready') {
+      st.textContent = `ready (${d.elapsed_s}s) — generated ${new Date(d.finished_at).toLocaleString()}`;
+      st.style.color = '#22c55e';
+      btn.disabled = false; btn.style.opacity = 1;
+      if (auditPollTimer) { clearInterval(auditPollTimer); auditPollTimer = null; }
+      auditRender(d.result);
+    } else if (d.status === 'error') {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#ef4444';
+      btn.disabled = false; btn.style.opacity = 1;
+      if (auditPollTimer) { clearInterval(auditPollTimer); auditPollTimer = null; }
+    }
+  } catch(e) {
+    console.error('audit poll:', e);
+  }
+}
+
+function auditRender(r) {
+  if (!r) return;
+  document.getElementById('audit-results').style.display = 'block';
+
+  // Per-coin
+  const pcBody = document.getElementById('audit-per-coin');
+  pcBody.innerHTML = (r.per_coin || []).map(c => {
+    const pfColor = c.pf >= 2.5 ? '#22c55e' : c.pf >= 2.0 ? '#fbbf24' : '#ef4444';
+    return `<tr>
+      <td style="font-weight:600">${c.symbol}</td>
+      <td>${c.n}</td>
+      <td>${c.wr}%</td>
+      <td style="color:${pfColor};font-weight:700">${c.pf}</td>
+      <td>${c.net_r > 0 ? '+' : ''}${c.net_r}</td>
+      <td style="color:${c.net_usdt > 0 ? '#22c55e' : '#ef4444'}">$${c.net_usdt > 0 ? '+' : ''}${c.net_usdt.toLocaleString()}</td>
+      <td>${c.max_dd_pct}%</td>
+      <td>${c.max_streak}</td>
+    </tr>`;
+  }).join('');
+
+  // BTC + ETH stats
+  const sg = document.getElementById('audit-stats-grid');
+  sg.innerHTML = '';
+  for (const [sym, key] of [['BTCUSDT','btc_stats'],['ETHUSDT','eth_stats']]) {
+    const s = r[key];
+    if (!s) continue;
+    sg.innerHTML += `
+      <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:14px">
+        <div style="font-weight:700;color:#a78bfa;font-size:0.88rem;margin-bottom:8px">${sym}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.78rem">
+          <div><span style="color:#6b7280">trades</span> <b>${s.n}</b></div>
+          <div><span style="color:#6b7280">WR</span> <b>${s.wr}%</b></div>
+          <div><span style="color:#6b7280">PF</span> <b style="color:${s.pf >= 2.0 ? '#22c55e':'#fbbf24'}">${s.pf}</b></div>
+          <div><span style="color:#6b7280">avg win</span> <b>+${s.avg_win_r}R</b></div>
+          <div><span style="color:#6b7280">avg loss</span> <b>-${s.avg_loss_r}R</b></div>
+          <div><span style="color:#6b7280">expectancy</span> <b style="color:${s.expectancy_r > 0 ? '#22c55e':'#ef4444'}">+${s.expectancy_r}R</b></div>
+          <div><span style="color:#6b7280">$ per trade</span> <b style="color:${s.expectancy_usdt > 0 ? '#22c55e':'#ef4444'}">$${s.expectancy_usdt}</b></div>
+          <div><span style="color:#6b7280">hist max DD</span> <b>${s.hist_max_dd_pct}%</b></div>
+        </div>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #2a2d3a">
+          <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Monte Carlo (${r.mc_iters} runs)</div>
+          <div style="font-size:0.78rem;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px">
+            <div><span style="color:#6b7280">DD p50</span> <b>${s.mc_dd_p50}%</b></div>
+            <div><span style="color:#6b7280">DD p90</span> <b>${s.mc_dd_p90}%</b></div>
+            <div><span style="color:#6b7280">DD p95</span> <b style="color:#fbbf24">${s.mc_dd_p95}%</b></div>
+            <div><span style="color:#6b7280">DD p99</span> <b style="color:#ef4444">${s.mc_dd_p99}%</b></div>
+            <div><span style="color:#6b7280">streak p50</span> <b>${s.mc_streak_p50}</b></div>
+            <div><span style="color:#6b7280">streak p90</span> <b>${s.mc_streak_p90}</b></div>
+            <div><span style="color:#6b7280">streak p99</span> <b style="color:#ef4444">${s.mc_streak_p99}</b></div>
+            <div><span style="color:#6b7280">streak max</span> <b>${s.mc_streak_max}</b></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Features (winners vs losers)
+  const fg = document.getElementById('audit-features-grid');
+  fg.innerHTML = '';
+  for (const [sym, key] of [['BTCUSDT','btc_features'],['ETHUSDT','eth_features']]) {
+    const f = r[key];
+    if (!f) continue;
+    const rows = (f.rows || []).map(row => {
+      const dCol = Math.abs(row.cohen_d) >= 0.5 ? '#22c55e' :
+                   Math.abs(row.cohen_d) >= 0.2 ? '#fbbf24' : '#6b7280';
+      return `<tr>
+        <td style="font-weight:600">${row.feature}</td>
+        <td>${row.win_mean}</td>
+        <td>${row.los_mean}</td>
+        <td style="color:${dCol};font-weight:700">${row.cohen_d > 0 ? '+' : ''}${row.cohen_d}</td>
+        <td>${row.p_value}</td>
+        <td style="color:#a78bfa;font-weight:700">${row.signif}</td>
+      </tr>`;
+    }).join('');
+    fg.innerHTML += `
+      <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:14px">
+        <div style="font-weight:700;color:#a78bfa;font-size:0.88rem;margin-bottom:8px">${sym}
+          <span style="color:#6b7280;font-weight:400;font-size:0.72rem;margin-left:8px">winners ${f.n_winners} vs losers ${f.n_losers}</span>
+        </div>
+        <table style="font-size:0.74rem">
+          <thead><tr><th>feature</th><th>win mean</th><th>los mean</th><th>Cohen d</th><th>p</th><th>sig</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // Per-regime
+  const regGrid = document.getElementById('audit-regimes-grid');
+  regGrid.innerHTML = '';
+  for (const [sym, key] of [['BTCUSDT','btc_regimes'],['ETHUSDT','eth_regimes']]) {
+    const regs = r[key];
+    if (!regs || !regs.length) continue;
+    const rows = regs.map(reg => {
+      const eCol = reg.expectancy >= 0.5 ? '#22c55e' : reg.expectancy >= 0.0 ? '#fbbf24' : '#ef4444';
+      return `<tr>
+        <td style="font-weight:600">${reg.regime}</td>
+        <td>${reg.n}</td>
+        <td>${reg.wr}%</td>
+        <td>${reg.pf}</td>
+        <td>${reg.net_r > 0 ? '+' : ''}${reg.net_r}R</td>
+        <td style="color:${eCol};font-weight:700">${reg.expectancy > 0 ? '+' : ''}${reg.expectancy}R</td>
+      </tr>`;
+    }).join('');
+    regGrid.innerHTML += `
+      <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:14px">
+        <div style="font-weight:700;color:#a78bfa;font-size:0.88rem;margin-bottom:8px">${sym}</div>
+        <table style="font-size:0.78rem">
+          <thead><tr><th>regime</th><th>n</th><th>WR%</th><th>PF</th><th>net R</th><th>E/trade</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+}
 </script>
 </body>
 </html>""")
@@ -3528,6 +3769,85 @@ def backtest_results() -> JSONResponse:
             return JSONResponse(json.load(f))
     except FileNotFoundError:
         return JSONResponse({"error": "No backtest results yet. Run: python -m backtest.run"}, status_code=404)
+
+
+# ── Phase A audit (run on demand from dashboard) ─────────────────────────────
+# Backed by tools/full_audit_phase_a.run_audit().  Runs in a background thread
+# so the request returns immediately; the dashboard polls /api/audit/status.
+import threading as _audit_threading
+_audit_state: dict = {
+    "status":      "idle",      # idle / running / ready / error
+    "started_at":  None,
+    "finished_at": None,
+    "result":      None,
+    "error":       None,
+    "elapsed_s":   None,
+}
+_audit_lock = _audit_threading.Lock()
+
+
+def _audit_worker(from_date: str, to_date: str, mc_iters: int):
+    import time as _t
+    started = _t.time()
+    try:
+        # Make repo root importable for tools.full_audit_phase_a
+        import sys, os
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from tools.full_audit_phase_a import run_audit
+        result = run_audit(from_date=from_date, to_date=to_date, mc_iters=mc_iters)
+        with _audit_lock:
+            _audit_state["status"]      = "ready"
+            _audit_state["result"]      = result
+            _audit_state["finished_at"] = result.get("generated_at")
+            _audit_state["elapsed_s"]   = round(_t.time() - started, 1)
+            _audit_state["error"]       = None
+    except Exception as exc:
+        import traceback
+        with _audit_lock:
+            _audit_state["status"]    = "error"
+            _audit_state["error"]     = f"{type(exc).__name__}: {exc}"
+            _audit_state["elapsed_s"] = round(_t.time() - started, 1)
+        print("Audit worker failed:", traceback.format_exc())
+
+
+@app.post("/api/audit/run")
+async def audit_run(request: Request) -> JSONResponse:
+    """Kick off a Phase A audit in a background thread.  Returns immediately."""
+    import datetime as _dt
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from_date = str(body.get("from_date") or "2023-01-01")
+    to_date   = str(body.get("to_date")   or "2026-04-01")
+    mc_iters  = int(body.get("mc_iters")  or 5000)
+
+    with _audit_lock:
+        if _audit_state["status"] == "running":
+            return JSONResponse({"ok": False, "error": "audit already running"})
+        _audit_state["status"]      = "running"
+        _audit_state["started_at"]  = _dt.datetime.utcnow().isoformat() + "Z"
+        _audit_state["finished_at"] = None
+        _audit_state["result"]      = None
+        _audit_state["error"]       = None
+        _audit_state["elapsed_s"]   = None
+
+    th = _audit_threading.Thread(
+        target=_audit_worker,
+        args=(from_date, to_date, mc_iters),
+        daemon=True,
+    )
+    th.start()
+    return JSONResponse({"ok": True, "status": "running"})
+
+
+@app.get("/api/audit/status")
+def audit_status() -> JSONResponse:
+    """Return the current audit state.  Includes the full result when ready."""
+    with _audit_lock:
+        return JSONResponse(dict(_audit_state))
 
 
 @app.get("/api/weekly-gate")
