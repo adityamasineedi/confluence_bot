@@ -11,6 +11,10 @@ exchanges.json         # exchange API keys — never commit
 *.sqlite
 *.sqlite3
 
+# ── Runtime scorer state (rebuilt by bot) ─────────────────────
+br_state.json
+br_state.json.tmp
+
 # ── Python runtime ────────────────────────────────────────────
 **/__pycache__/
 *.pyc

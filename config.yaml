@@ -135,7 +135,8 @@ risk:
     RANGE: 0.0002
     CRASH: 0.001
     PUMP: 0.0008
-    BREAKOUT: 0.0005
+    BREAKOUT: 0.0002       # match backtest SLIP_FRAC (0.02%) — was 0.0005
+    BREAKOUT_RETEST: 0.0002  # explicit override for breakout_retest scorer
   extreme_vol_gate:
     enabled: true
     lookback_bars: 50

@@ -62,6 +62,67 @@ _daily_trades: dict[str, tuple[str, int]] = {}
 # list of (timestamp, direction)
 _recent_entries: list[tuple[float, str]] = []
 
+# ── State persistence (survives bot restarts) ────────────────────────────
+# Without this, _state / _recent_entries / _daily_trades reset to empty on
+# every restart, which breaks anti-correlation, daily-cap, and AWAITING_RETEST
+# tracking.  This was the #1 source of live PF lagging backtest PF.
+import json as _json
+
+_STATE_FILE = os.environ.get(
+    "BR_STATE_FILE",
+    os.path.join(os.path.dirname(__file__), "..", "br_state.json"),
+)
+_state_dirty = False
+
+
+def _save_state() -> None:
+    """Persist scorer state to disk. Best-effort, logs errors."""
+    global _state_dirty
+    try:
+        payload = {
+            "state":          _state,
+            "daily_trades":   {k: list(v) for k, v in _daily_trades.items()},
+            "recent_entries": _recent_entries,
+        }
+        tmp = _STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(payload, f)
+        os.replace(tmp, _STATE_FILE)
+        _state_dirty = False
+    except Exception as exc:
+        log.warning("BR state save failed: %s", exc)
+
+
+def _set_state(symbol: str, new_state: dict) -> None:
+    """Mutation helper that marks state dirty for persistence."""
+    global _state_dirty
+    _state[symbol] = new_state
+    _state_dirty = True
+
+
+def _load_state() -> None:
+    """Load scorer state from disk on import. Silent if file missing."""
+    if not os.path.exists(_STATE_FILE):
+        return
+    try:
+        with open(_STATE_FILE) as f:
+            payload = _json.load(f)
+        _state.update(payload.get("state", {}) or {})
+        for k, v in (payload.get("daily_trades") or {}).items():
+            if isinstance(v, list) and len(v) == 2:
+                _daily_trades[k] = (v[0], v[1])
+        for item in payload.get("recent_entries", []) or []:
+            if isinstance(item, list) and len(item) == 2:
+                _recent_entries.append((float(item[0]), str(item[1])))
+        log.info("BR state restored: %d symbols, %d daily, %d recent entries",
+                 len(_state), len(_daily_trades), len(_recent_entries))
+    except Exception as exc:
+        log.warning("BR state load failed: %s", exc)
+
+
+# Load on module import — runs once at bot startup
+_load_state()
+
 
 def _utc_hour() -> int:
     return datetime.now(timezone.utc).hour
@@ -80,10 +141,12 @@ def _daily_count(symbol: str) -> int:
 
 
 def _increment_daily(symbol: str) -> None:
+    global _state_dirty
     today = _today_str()
     rec = _daily_trades.get(symbol, ("", 0))
     count = rec[1] + 1 if rec[0] == today else 1
     _daily_trades[symbol] = (today, count)
+    _state_dirty = True
 
 
 def _atr(bars: list[dict], period: int = 14) -> float:
@@ -161,11 +224,13 @@ def _too_many_recent_entries(direction: str) -> bool:
 
 def _record_entry(direction: str) -> None:
     """Record an entry for anti-correlation tracking."""
+    global _state_dirty
     import time as _t
     _recent_entries.append((_t.time(), direction))
     # Clean old entries
     cutoff = _t.time() - 3600
     _recent_entries[:] = [(ts, d) for ts, d in _recent_entries if ts > cutoff]
+    _state_dirty = True
 
 
 def _btc_confirms_direction(direction: str, cache) -> bool:
@@ -270,6 +335,23 @@ def _detect_range(bars_5m: list[dict],
 async def score(symbol: str, cache) -> list[dict]:
     """Score symbol for breakout_retest setup on 5m bars.
 
+    Wrapper around _score_inner that persists scorer state to disk after
+    each evaluation, so AWAITING_RETEST setups, daily-cap counters, and
+    anti-correlation tracking survive bot restarts.
+    Saves only when a state-machine transition happened during this call,
+    detected by snapshotting the symbol's state before/after.
+    """
+    snap_before = _state.get(symbol)
+    try:
+        return await _score_inner(symbol, cache)
+    finally:
+        if _state_dirty or _state.get(symbol) != snap_before:
+            _save_state()
+
+
+async def _score_inner(symbol: str, cache) -> list[dict]:
+    """Score symbol for breakout_retest setup on 5m bars.
+
     State machine:
       IDLE             → check for range + breakout on current bar
       AWAITING_RETEST  → check if price retested flip level
@@ -295,6 +377,17 @@ async def score(symbol: str, cache) -> list[dict]:
     if not bars_5m or len(bars_5m) < 30:
         log.info("BR %s: insufficient 5m bars (%d)",
                   symbol, len(bars_5m) if bars_5m else 0)
+        return []
+
+    # Stale-bar guard — refuse to score on data older than 6 minutes (one
+    # 5M bar + 1m grace).  Prevents scoring on stale cache after a WS
+    # disconnect, which would emit signals on yesterday's bars.
+    import time as _t
+    last_ts_ms = bars_5m[-1].get("ts", 0)
+    age_s = _t.time() - (last_ts_ms / 1000.0) if last_ts_ms else 9999
+    if age_s > 360:
+        log.warning("BR %s: stale 5m bars (last bar %.0fs old) — skipping",
+                    symbol, age_s)
         return []
 
     # Heartbeat -- shows the scorer is running each tick
