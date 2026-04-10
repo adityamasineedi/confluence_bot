@@ -575,6 +575,35 @@ async def _check_breakeven(trade: dict, session: aiohttp.ClientSession, cache) -
         return False
 
 
+# ── Max-hold timeout (matches backtest TIMEOUT exit) ──────────────────────────
+
+def _max_hold_exceeded(trade: dict) -> bool:
+    """Return True if a trade has been open longer than its strategy's max_hold_hours.
+
+    Backtest forces TIMEOUT exit at 4h for breakout_retest (engine.py:1728).
+    Without this check, live trades drift forever and PF diverges from backtest.
+    Per-strategy override via <strategy>.max_hold_hours in config.yaml.
+    """
+    strategy = str(trade.get("regime", "")).lower()
+    strat_cfg = _cfg.get(strategy, {})
+    max_hold_hours = float(strat_cfg.get("max_hold_hours", 0) or 0)
+    if max_hold_hours <= 0:
+        return False
+
+    open_ts_iso = trade.get("ts")
+    if not open_ts_iso:
+        return False
+    try:
+        open_dt = datetime.fromisoformat(open_ts_iso.replace("Z", "+00:00"))
+        if open_dt.tzinfo is None:
+            open_dt = open_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+
+    age_hours = (datetime.now(timezone.utc) - open_dt).total_seconds() / 3600.0
+    return age_hours >= max_hold_hours
+
+
 # ── Regime-flip exit ───────────────────────────────────────────────────────────
 
 def _regime_conflicts(trade: dict, cache) -> bool:
@@ -582,11 +611,24 @@ def _regime_conflicts(trade: dict, cache) -> bool:
 
     LONG trades should be closed if regime flips to CRASH.
     SHORT trades should be closed if regime flips to PUMP.
+
+    Skips strategies listed in risk.regime_flip_disabled_strategies whose
+    backtests do NOT simulate regime-flip exits — applying it live would
+    cause live results to diverge from validated backtest PF.
     """
     from core.regime_detector import _detector
 
     symbol    = trade["symbol"]
     direction = trade["direction"]
+    strategy  = str(trade.get("regime", "")).lower()
+
+    _risk_cfg = _cfg.get("risk", {})
+    _flip_disabled = set(
+        s.lower()
+        for s in _risk_cfg.get("regime_flip_disabled_strategies", [])
+    )
+    if strategy in _flip_disabled:
+        return False
 
     try:
         regime = str(_detector.detect(symbol, cache))
@@ -864,6 +906,42 @@ async def monitor_trades(cache) -> None:
                     # Skip if already being closed this session (prevents duplicate
                     # close alerts when multiple DB rows exist for the same position)
                     if trade_id in _closing_trade_ids:
+                        continue
+
+                    # ── Max-hold timeout (matches backtest TIMEOUT exit) ──
+                    # Runs in BOTH paper and live so PF stays aligned with backtest.
+                    if _max_hold_exceeded(trade):
+                        log.warning(
+                            "Max-hold timeout: %s %s open > %sh — closing at market",
+                            trade["direction"], trade["symbol"],
+                            _cfg.get(str(trade.get("regime", "")).lower(), {}).get("max_hold_hours"),
+                        )
+                        _closing_trade_ids.add(trade_id)
+                        exit_px = cache.get_last_price(trade["symbol"]) or float(trade["entry"])
+
+                        if _PAPER_MODE:
+                            row_claimed = await asyncio.to_thread(
+                                _close_trade_db, trade, exit_px,
+                            )
+                        else:
+                            row_claimed = await _force_regime_close(trade, session, cache)
+
+                        if row_claimed:
+                            from core.executor import close_deal
+                            close_deal(trade["symbol"], trade["direction"])
+                            if not _PAPER_MODE:
+                                from data.exchange_router import refresh_account_balance
+                                await refresh_account_balance()
+                            pnl = _calc_net_pnl(trade, exit_px)
+                            log.info(
+                                "Max-hold closed: %s %s  exit=%.6f  pnl=%+.2f USDT",
+                                trade["direction"], trade["symbol"], exit_px, pnl,
+                            )
+                            try:
+                                from notifications.telegram import send_trade_close
+                                await send_trade_close(trade, "MAX_HOLD", exit_px, pnl)
+                            except Exception:
+                                pass
                         continue
 
                     if not _PAPER_MODE:

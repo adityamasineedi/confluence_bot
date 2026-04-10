@@ -121,6 +121,12 @@ risk:
   breakeven_disabled_strategies:
   - breakout_retest
   - microrange
+  # Strategies whose backtests do NOT simulate regime-flip exits.
+  # Live bot will skip _regime_conflicts() force-close for these so live
+  # exits match backtest exit logic (TP / SL / max_hold only).
+  regime_flip_disabled_strategies:
+  - breakout_retest
+  - microrange
   atr_spike_gate_enabled: true
   atr_spike_gate_mult: 3.0
   slippage_atr_scale: true
@@ -385,6 +391,9 @@ breakout_retest:
   max_entries_per_30min: 2
   btc_confirm_for_alts: false
   choppy_atr_mult: 2.0
+  # Live bot force-closes any breakout_retest trade older than this many hours
+  # (4h = 48 × 5M bars, mirroring backtest TIMEOUT exit at engine.py:1728).
+  max_hold_hours: 4
 long_short_ratio:
   crowded_long_threshold: 1.8
   crowded_short_threshold: 0.6
