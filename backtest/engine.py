@@ -1726,7 +1726,7 @@ def run_breakout_retest(symbol, data, btc_data,
         av = float(at5[eb]) if eb < len(at5) else 0.0
         if av <= 0:
             i += 1; continue
-        sd = max(av*1.3, flip*0.001)
+        sd = max(av*1.3, flip*0.001)   # 0.1% floor — matches the validated baseline (PF 2.38)
         # Apply slippage to entry
         if direction == "LONG":
             entry_sl = flip * (1.0 + SLIP_FRAC)

@@ -534,7 +534,7 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
             return []
 
         entry   = flip
-        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.005)  # 0.5% min floor
+        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.001)  # 0.1% floor — matches validated backtest (PF 2.38)
 
         if direction == "LONG":
             stop = entry - sl_dist
