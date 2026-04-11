@@ -903,6 +903,7 @@ async def dashboard() -> HTMLResponse:
     <button class="tab" onclick="showTab('gates',this)">&#128683; Gates</button>
     <button class="tab" onclick="showTab('exchanges',this)">&#128279; Exchanges</button>
     <button class="tab" onclick="showTab('audit',this)">&#129514; Audit</button>
+    <button class="tab" onclick="showTab('filter-lab',this)">&#128300; Filter Lab</button>
   </nav>
   <span id="cvd-warmup" style="font-size:0.75rem;margin-left:8px">…</span>
   <span class="hdr-right" id="hdr-right">loading…</span>
@@ -2129,6 +2130,66 @@ async def dashboard() -> HTMLResponse:
   </div>
 </div>
 
+<!-- ── FILTER LAB (interactive filter ablation) ───────────── -->
+<div id="panel-filter-lab" class="panel">
+  <div style="padding:20px;max-width:1200px;margin:0 auto">
+    <h2 style="margin:0 0 6px 0;color:#a78bfa;font-size:1rem">&#128300; Filter Lab</h2>
+    <p style="color:#9ca3af;font-size:0.82rem;margin:0 0 8px 0">
+      Interactively test which filters help vs hurt the breakout_retest strategy.
+      Compares: <b>Baseline</b> (no filters) vs <b>Baseline + your selection</b> vs <b>Production</b> (current config.yaml).
+    </p>
+    <div style="background:#1e293b;border-left:3px solid #fbbf24;border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:0.78rem;color:#d1d5db">
+      &#9888; <b>Safety</b>: This is a sandbox.  Filter changes are <b>in-memory only</b>, never written to <code>config.yaml</code>.
+      Live trading uses the on-disk config and is unaffected.  Each run takes ~30-60s on 2 coins, longer on 8 coins.
+    </div>
+
+    <!-- Controls -->
+    <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:16px;margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div>
+          <label style="font-size:0.72rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Coins to test</label>
+          <div id="fl-coins" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+            <!-- Coin checkboxes injected by JS -->
+          </div>
+        </div>
+        <div>
+          <label style="font-size:0.72rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Date range</label>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <input id="fl-from" type="date" value="2024-01-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:5px 8px;font-size:0.78rem">
+            <span style="color:#6b7280;font-size:0.78rem">→</span>
+            <input id="fl-to"   type="date" value="2026-04-01" style="background:#12141e;color:#e0e0e0;border:1px solid #2a2d3a;border-radius:4px;padding:5px 8px;font-size:0.78rem">
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <label style="font-size:0.72rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Filters to ENABLE on top of baseline</label>
+        <div id="fl-filters" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <!-- Filter checkboxes injected by JS -->
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="fl-run-btn" onclick="filterLabRun()" style="padding:7px 22px;background:#4c1d95;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600">&#9654; Run Filter Lab</button>
+        <button onclick="filterLabSelectAll(true)" style="padding:5px 14px;background:#374151;color:#e0e0e0;border:1px solid #4b5563;border-radius:4px;cursor:pointer;font-size:0.75rem">Select all</button>
+        <button onclick="filterLabSelectAll(false)" style="padding:5px 14px;background:#374151;color:#e0e0e0;border:1px solid #4b5563;border-radius:4px;cursor:pointer;font-size:0.75rem">Clear all</button>
+        <button onclick="filterLabPresetProduction()" style="padding:5px 14px;background:#374151;color:#e0e0e0;border:1px solid #4b5563;border-radius:4px;cursor:pointer;font-size:0.75rem">Preset: production</button>
+        <button onclick="filterLabPresetSafe()" style="padding:5px 14px;background:#1f3a1f;color:#86efac;border:1px solid #16a34a;border-radius:4px;cursor:pointer;font-size:0.75rem">Preset: walk-forward winners</button>
+        <span id="fl-status" style="font-size:0.78rem;color:#6b7280;margin-left:auto">idle</span>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="fl-results" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px" id="fl-cards"></div>
+
+      <!-- Big delta summary -->
+      <div id="fl-summary" style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:16px;margin-bottom:14px;font-size:0.85rem">
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const ALL_SYMBOLS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','LINKUSDT','DOGEUSDT','SUIUSDT','ADAUSDT','AVAXUSDT','TAOUSDT'];
 
@@ -2156,6 +2217,7 @@ function showTab(name, btn) {
   if (name === 'gates') { loadGates(); loadRiskMode(); }
   if (name === 'exchanges') { exLoad(); }
   if (name === 'audit') { auditPollOnce(); }
+  if (name === 'filter-lab') { filterLabInit(); filterLabPollOnce(); }
 }
 
 (function initHash() {
@@ -3755,6 +3817,210 @@ function auditRender(r) {
       </div>`;
   }
 }
+
+// ── Filter Lab ──────────────────────────────────────────────────────────────
+const FL_FILTERS = [
+  { id: 'breakout_confirm',  label: 'Two-bar breakout confirm',
+    desc: 'Next bar must close beyond level' },
+  { id: 'retest_body_ratio', label: 'Retest body ratio ≥ 0.40',
+    desc: 'Reject indecision/wick retest bars' },
+  { id: 'vol_spike_1.25x',   label: 'Volume ≥ 1.25× avg',
+    desc: 'Real breakouts have volume' },
+  { id: 'exhaustion_4h',     label: '4H exhaustion gate (2.5%)',
+    desc: 'Skip if 4H already moved 2.5%+' },
+  { id: 'boundary_touches',  label: 'Boundary touches ≤ 4',
+    desc: 'Reject churning ranges' },
+  { id: 'atr_regime_3x',     label: 'ATR regime ≤ 3× avg',
+    desc: 'Reject ATR-spike bars' },
+  { id: 'choppy_2x',         label: 'Choppy 1H ATR ≤ 2× 24h avg',
+    desc: 'Skip volatile chaos' },
+  { id: 'crash_cooldown',    label: 'Crash cooldown 1.5%/4h',
+    desc: 'Block LONGs after BTC dump' },
+  { id: 'range_width_gate',  label: 'Range width 0.1-2%',
+    desc: 'Reject too-tight or too-wide ranges' },
+  { id: 'btc_confirm_alts',  label: 'BTC confirm for alts',
+    desc: 'Require BTC to agree on alt LONGs' },
+  { id: 'anti_correlation',  label: 'Anti-correlation (max 2/30min)',
+    desc: 'Throttle same-direction entries' },
+];
+
+let flPollTimer = null;
+
+function filterLabInit() {
+  // Build coin checkboxes (idempotent)
+  const coinsBox = document.getElementById('fl-coins');
+  if (coinsBox && coinsBox.children.length === 0) {
+    coinsBox.innerHTML = ALL_SYMBOLS.slice(0,8).map(s =>
+      `<label style="display:inline-flex;align-items:center;gap:4px;background:#12141e;border:1px solid #2a2d3a;padding:4px 8px;border-radius:4px;font-size:0.75rem;cursor:pointer">
+        <input type="checkbox" value="${s}" ${(s==='BTCUSDT'||s==='ETHUSDT')?'checked':''} class="fl-coin" style="accent-color:#a78bfa">
+        <span>${s.replace('USDT','')}</span>
+      </label>`
+    ).join('');
+  }
+  // Build filter checkboxes (idempotent)
+  const fbox = document.getElementById('fl-filters');
+  if (fbox && fbox.children.length === 0) {
+    fbox.innerHTML = FL_FILTERS.map(f =>
+      `<label style="display:flex;align-items:start;gap:8px;background:#12141e;border:1px solid #2a2d3a;padding:8px 10px;border-radius:6px;font-size:0.78rem;cursor:pointer">
+        <input type="checkbox" value="${f.id}" class="fl-filter" style="accent-color:#a78bfa;margin-top:2px">
+        <div>
+          <div style="font-weight:600;color:#e0e0e0">${f.label}</div>
+          <div style="color:#6b7280;font-size:0.7rem;margin-top:2px">${f.desc}</div>
+        </div>
+      </label>`
+    ).join('');
+  }
+}
+
+function filterLabSelectAll(state) {
+  document.querySelectorAll('.fl-filter').forEach(cb => cb.checked = state);
+}
+
+function filterLabPresetProduction() {
+  // Current production: all filters except btc_confirm_alts (false in config)
+  const enabled = ['breakout_confirm','retest_body_ratio','vol_spike_1.25x',
+                   'exhaustion_4h','boundary_touches','atr_regime_3x',
+                   'choppy_2x','crash_cooldown','range_width_gate','anti_correlation'];
+  document.querySelectorAll('.fl-filter').forEach(cb => {
+    cb.checked = enabled.includes(cb.value);
+  });
+}
+
+function filterLabPresetSafe() {
+  // Walk-forward winners: only filters that don't lose money OOS
+  // (vol_spike, atr_regime, range_width, anti_correlation = neutral; rest = REMOVE)
+  const enabled = ['vol_spike_1.25x','atr_regime_3x','range_width_gate','anti_correlation'];
+  document.querySelectorAll('.fl-filter').forEach(cb => {
+    cb.checked = enabled.includes(cb.value);
+  });
+}
+
+async function filterLabRun() {
+  const btn = document.getElementById('fl-run-btn');
+  const st  = document.getElementById('fl-status');
+  const coins = Array.from(document.querySelectorAll('.fl-coin:checked')).map(c => c.value);
+  const filters = Array.from(document.querySelectorAll('.fl-filter:checked')).map(c => c.value);
+  if (coins.length === 0) {
+    st.textContent = 'Pick at least one coin';
+    st.style.color = '#ef4444';
+    return;
+  }
+  btn.disabled = true; btn.style.opacity = 0.5;
+  st.textContent = 'starting...'; st.style.color = '#9ca3af';
+  document.getElementById('fl-results').style.display = 'none';
+  try {
+    const body = {
+      coins: coins,
+      from_date: document.getElementById('fl-from').value || '2024-01-01',
+      to_date:   document.getElementById('fl-to').value   || '2026-04-01',
+      filters:   filters,
+    };
+    const r = await fetch('/api/filter-lab/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      st.textContent = 'Error: ' + (d.error || 'unknown');
+      st.style.color = '#ef4444';
+      btn.disabled = false; btn.style.opacity = 1;
+      return;
+    }
+    if (flPollTimer) clearInterval(flPollTimer);
+    flPollTimer = setInterval(filterLabPollOnce, 2000);
+    filterLabPollOnce();
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = '#ef4444';
+    btn.disabled = false; btn.style.opacity = 1;
+  }
+}
+
+async function filterLabPollOnce() {
+  try {
+    const d = await fetchJSON('/api/filter-lab/status');
+    const st  = document.getElementById('fl-status');
+    const btn = document.getElementById('fl-run-btn');
+    if (d.status === 'idle') {
+      st.textContent = 'idle — click Run';
+      st.style.color = '#9ca3af';
+    } else if (d.status === 'running') {
+      st.textContent = 'running... (~30-90s)';
+      st.style.color = '#fbbf24';
+      btn.disabled = true; btn.style.opacity = 0.5;
+    } else if (d.status === 'ready') {
+      st.textContent = `ready (${d.elapsed_s}s)`;
+      st.style.color = '#22c55e';
+      btn.disabled = false; btn.style.opacity = 1;
+      if (flPollTimer) { clearInterval(flPollTimer); flPollTimer = null; }
+      filterLabRender(d.result);
+    } else if (d.status === 'error') {
+      st.textContent = 'Error: ' + d.error;
+      st.style.color = '#ef4444';
+      btn.disabled = false; btn.style.opacity = 1;
+      if (flPollTimer) { clearInterval(flPollTimer); flPollTimer = null; }
+    }
+  } catch(e) {
+    console.error('filter lab poll:', e);
+  }
+}
+
+function _flCard(title, color, r) {
+  const pfStr = r.pf >= 999 ? 'inf' : r.pf.toFixed(2);
+  return `
+    <div style="background:#1a1d27;border:1px solid ${color};border-left-width:4px;border-radius:10px;padding:14px">
+      <div style="font-weight:700;font-size:0.85rem;color:${color};margin-bottom:8px">${title}</div>
+      <div style="font-size:0.72rem;color:#6b7280;margin-bottom:10px;word-break:break-word">${r.label}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.78rem">
+        <div><span style="color:#6b7280">trades</span> <b>${r.n.toLocaleString()}</b></div>
+        <div><span style="color:#6b7280">WR</span> <b>${r.wr}%</b></div>
+        <div><span style="color:#6b7280">PF</span> <b style="color:${r.pf >= 2.0 ? '#22c55e' : '#fbbf24'}">${pfStr}</b></div>
+        <div><span style="color:#6b7280">net R</span> <b>${r.net_r > 0 ? '+' : ''}${r.net_r}</b></div>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #2a2d3a;font-size:1.1rem;font-weight:700;color:${r.net_usdt > 0 ? '#22c55e' : '#ef4444'}">
+        ${r.net_usdt > 0 ? '+$' : '-$'}${Math.abs(r.net_usdt).toLocaleString()}
+      </div>
+    </div>`;
+}
+
+function filterLabRender(r) {
+  if (!r) return;
+  document.getElementById('fl-results').style.display = 'block';
+
+  const cards = document.getElementById('fl-cards');
+  cards.innerHTML =
+    _flCard('A. BASELINE (no filters)',         '#3b82f6', r.baseline) +
+    _flCard('B. BASELINE + your selection',     '#a78bfa', r.with_filters) +
+    _flCard('C. PRODUCTION (current config)',   '#6b7280', r.production);
+
+  const dvb  = r.delta_vs_baseline;
+  const dvp  = r.delta_vs_production;
+  const dvbColor = dvb > 0 ? '#22c55e' : '#ef4444';
+  const dvpColor = dvp > 0 ? '#22c55e' : '#ef4444';
+  const fmt = v => (v > 0 ? '+$' : '-$') + Math.abs(v).toLocaleString();
+
+  let summary = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
+      <div>
+        <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Your selection vs baseline</div>
+        <div style="font-size:1.4rem;font-weight:700;color:${dvbColor};margin-top:4px">${fmt(dvb)}</div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px">${dvb >= 0 ? 'filters HELP' : 'filters HURT'} on this period</div>
+      </div>
+      <div>
+        <div style="font-size:0.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em">Your selection vs production</div>
+        <div style="font-size:1.4rem;font-weight:700;color:${dvpColor};margin-top:4px">${fmt(dvp)}</div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-top:2px">${dvp >= 0 ? 'better than current' : 'worse than current'} config</div>
+      </div>
+    </div>
+    <div style="font-size:0.78rem;color:#9ca3af;border-top:1px dashed #2a2d3a;padding-top:10px">
+      <b>Setup:</b> ${r.coins.join(', ')} · ${r.from_date} → ${r.to_date} ·
+      ${r.enabled_filters.length} filter(s) enabled<br>
+      <b>Note:</b> $50 fixed risk per trade (uncapped — multiply by 0.2 for realistic ~$10/trade real impact).
+      Backtest doesn't model slippage compounding at higher trade counts.
+    </div>`;
+  document.getElementById('fl-summary').innerHTML = summary;
+}
 </script>
 </body>
 </html>""")
@@ -3848,6 +4114,231 @@ def audit_status() -> JSONResponse:
     """Return the current audit state.  Includes the full result when ready."""
     with _audit_lock:
         return JSONResponse(dict(_audit_state))
+
+
+# ── Filter Lab — interactive filter ablation from dashboard ──────────────────
+# SAFETY:
+#   - Read-only: never writes config.yaml on disk
+#   - In-memory only: mutates _CFG['breakout_retest'] temporarily, restores in finally
+#   - No live trading impact: live scorer reads constants at module-load time, not per-call
+#   - Background thread, mutex-protected (one at a time)
+#   - Auto-restore even on crash via try/finally
+_filter_lab_state: dict = {
+    "status":      "idle",      # idle / running / ready / error
+    "started_at":  None,
+    "finished_at": None,
+    "result":      None,
+    "error":       None,
+    "elapsed_s":   None,
+}
+_filter_lab_lock = _audit_threading.Lock()
+
+
+def _filter_lab_worker(coins: list[str], from_date: str, to_date: str,
+                       enabled_filters: list[str]):
+    """Run baseline + 1 filter combo backtest in a background thread.
+
+    SAFETY: snapshots the original BR config at the start, runs the backtest
+    with overrides, ALWAYS restores the original config in finally.
+    Live trading is unaffected because the scorer caches constants at import.
+    """
+    import copy
+    import time as _t
+    started = _t.time()
+
+    try:
+        import sys, os
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+
+        from backtest.engine import _CFG, run_breakout_retest, load
+        from datetime import datetime, timezone
+
+        def _ms(d: str) -> int:
+            return int(datetime.strptime(d, "%Y-%m-%d")
+                       .replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+        # Filter override map — what each filter SETS when ENABLED
+        FILTER_OVERRIDES = {
+            "breakout_confirm":  {"require_breakout_confirm": True},
+            "retest_body_ratio": {"min_retest_body_ratio": 0.40},
+            "vol_spike_1.25x":   {"vol_spike_mult": 1.25},
+            "exhaustion_4h":     {"exhaustion_pct": 0.025},
+            "boundary_touches":  {"max_boundary_touches": 4},
+            "atr_regime_3x":     {"atr_mult_max": 3.0},
+            "choppy_2x":         {"choppy_atr_mult": 2.0},
+            "crash_cooldown":    {"crash_cooldown_pct": 1.5},
+            "range_width_gate":  {"min_width_pct": 0.001, "max_width_pct": 0.02},
+            "btc_confirm_alts":  {"btc_confirm_for_alts": True},
+            "anti_correlation":  {"max_entries_per_30min": 2},
+        }
+
+        # Baseline = ALL optional filters OFF (only core retest logic)
+        BASELINE = {
+            "require_breakout_confirm": False,
+            "min_retest_body_ratio":    0.0,
+            "vol_spike_mult":           1.0,
+            "exhaustion_pct":           0.10,
+            "exhaustion_bars":          6,
+            "max_boundary_touches":     99,
+            "atr_mult_max":             99.0,
+            "choppy_atr_mult":          99.0,
+            "crash_cooldown_pct":       99.0,
+            "min_width_pct":            0.0001,
+            "max_width_pct":            0.50,
+            "btc_confirm_for_alts":     False,
+            "max_entries_per_30min":    999,
+            "max_trades_per_day":       999,
+            "cooldown_mins":            0,
+        }
+
+        # SNAPSHOT original BR config
+        original_br = copy.deepcopy(_CFG.get("breakout_retest", {}))
+
+        try:
+            from_ms = _ms(from_date)
+            to_ms   = _ms(to_date)
+
+            def _backtest_with_config(label: str, cfg_overrides: dict) -> dict:
+                """Apply cfg_overrides directly to _CFG['breakout_retest']
+                (REPLACING the current state) and run the backtest."""
+                _CFG["breakout_retest"].clear()
+                _CFG["breakout_retest"].update(cfg_overrides)
+
+                btc_data = load("BTCUSDT")
+                all_trades = []
+                for sym in coins:
+                    data = btc_data if sym == "BTCUSDT" else load(sym)
+                    if data is None:
+                        continue
+                    trades = run_breakout_retest(sym, data, btc_data, from_ms, to_ms)
+                    all_trades.extend(trades)
+
+                if not all_trades:
+                    return {"label": label, "n": 0, "wr": 0, "pf": 0,
+                            "net_r": 0, "net_usdt": 0}
+                n = len(all_trades)
+                wins = sum(1 for t in all_trades if t.outcome == "TP")
+                gw = sum(t.pnl_r for t in all_trades if t.pnl_r > 0)
+                gl = sum(-t.pnl_r for t in all_trades if t.pnl_r < 0)
+                pf = (gw / gl) if gl > 0 else 999.0
+                wr = wins / n * 100
+                net_r = gw - gl
+                return {
+                    "label":    label,
+                    "n":        n,
+                    "wins":     wins,
+                    "wr":       round(wr, 1),
+                    "pf":       round(pf, 2),
+                    "net_r":    round(net_r, 1),
+                    "net_usdt": round(net_r * 50, 0),
+                }
+
+            # Run 1: BASELINE = original_br with all optional filters relaxed
+            baseline_cfg = dict(original_br)
+            baseline_cfg.update(BASELINE)
+            baseline = _backtest_with_config("BASELINE", baseline_cfg)
+
+            # Run 2: BASELINE + user-selected filters
+            combined_cfg = dict(baseline_cfg)
+            for f in enabled_filters:
+                if f in FILTER_OVERRIDES:
+                    combined_cfg.update(FILTER_OVERRIDES[f])
+            combined_label = "+".join(enabled_filters) if enabled_filters else "(no filters)"
+            with_filters = _backtest_with_config(combined_label, combined_cfg)
+
+            # Run 3: PRODUCTION = the original config.yaml as-is (all filters ON)
+            production = _backtest_with_config("PRODUCTION (current config)", dict(original_br))
+
+            # Build result
+            delta_vs_baseline = with_filters["net_usdt"] - baseline["net_usdt"]
+            delta_vs_prod     = with_filters["net_usdt"] - production["net_usdt"]
+
+            from datetime import datetime as _dt2, timezone as _tz2
+            result = {
+                "from_date":      from_date,
+                "to_date":        to_date,
+                "coins":          coins,
+                "enabled_filters": enabled_filters,
+                "baseline":       baseline,
+                "with_filters":   with_filters,
+                "production":     production,
+                "delta_vs_baseline": delta_vs_baseline,
+                "delta_vs_production": delta_vs_prod,
+                "generated_at":   _dt2.now(_tz2.utc).isoformat(),
+            }
+
+            with _filter_lab_lock:
+                _filter_lab_state["status"]      = "ready"
+                _filter_lab_state["result"]      = result
+                _filter_lab_state["finished_at"] = result["generated_at"]
+                _filter_lab_state["elapsed_s"]   = round(_t.time() - started, 1)
+                _filter_lab_state["error"]       = None
+
+        finally:
+            # ALWAYS restore original config — even on crash
+            _CFG["breakout_retest"].clear()
+            _CFG["breakout_retest"].update(original_br)
+
+    except Exception as exc:
+        import traceback
+        with _filter_lab_lock:
+            _filter_lab_state["status"]    = "error"
+            _filter_lab_state["error"]     = f"{type(exc).__name__}: {exc}"
+            _filter_lab_state["elapsed_s"] = round(_t.time() - started, 1)
+        print("Filter Lab worker failed:", traceback.format_exc())
+
+
+@app.post("/api/filter-lab/run")
+async def filter_lab_run(request: Request) -> JSONResponse:
+    """Kick off a Filter Lab backtest in a background thread.
+
+    Body: {
+      "coins": ["BTCUSDT", "ETHUSDT", ...],
+      "from_date": "2024-01-01",
+      "to_date": "2026-04-01",
+      "filters": ["exhaustion_4h", "retest_body_ratio", ...]
+    }
+    """
+    import datetime as _dt
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    coins = body.get("coins") or ["BTCUSDT", "ETHUSDT"]
+    if not isinstance(coins, list) or not coins:
+        coins = ["BTCUSDT", "ETHUSDT"]
+    from_date = str(body.get("from_date") or "2024-01-01")
+    to_date   = str(body.get("to_date")   or "2026-04-01")
+    filters   = body.get("filters") or []
+    if not isinstance(filters, list):
+        filters = []
+
+    with _filter_lab_lock:
+        if _filter_lab_state["status"] == "running":
+            return JSONResponse({"ok": False, "error": "filter lab already running"})
+        _filter_lab_state["status"]      = "running"
+        _filter_lab_state["started_at"]  = _dt.datetime.utcnow().isoformat() + "Z"
+        _filter_lab_state["finished_at"] = None
+        _filter_lab_state["result"]      = None
+        _filter_lab_state["error"]       = None
+        _filter_lab_state["elapsed_s"]   = None
+
+    th = _audit_threading.Thread(
+        target=_filter_lab_worker,
+        args=(coins, from_date, to_date, filters),
+        daemon=True,
+    )
+    th.start()
+    return JSONResponse({"ok": True, "status": "running"})
+
+
+@app.get("/api/filter-lab/status")
+def filter_lab_status() -> JSONResponse:
+    """Return current filter lab state.  Includes full result when ready."""
+    with _filter_lab_lock:
+        return JSONResponse(dict(_filter_lab_state))
 
 
 @app.get("/api/weekly-gate")
