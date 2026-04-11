@@ -3905,14 +3905,25 @@ async function filterLabRun() {
     st.style.color = '#ef4444';
     return;
   }
+  // Date range validation — must be at least 30 days apart
+  const fromVal = document.getElementById('fl-from').value || '2024-01-01';
+  const toVal   = document.getElementById('fl-to').value   || '2026-04-01';
+  const fromMs  = new Date(fromVal).getTime();
+  const toMs    = new Date(toVal).getTime();
+  const diffDays = (toMs - fromMs) / (1000 * 60 * 60 * 24);
+  if (isNaN(diffDays) || diffDays < 30) {
+    st.textContent = `Date range too short (${Math.round(diffDays)} days). Need 30+ days.`;
+    st.style.color = '#ef4444';
+    return;
+  }
   btn.disabled = true; btn.style.opacity = 0.5;
   st.textContent = 'starting...'; st.style.color = '#9ca3af';
   document.getElementById('fl-results').style.display = 'none';
   try {
     const body = {
       coins: coins,
-      from_date: document.getElementById('fl-from').value || '2024-01-01',
-      to_date:   document.getElementById('fl-to').value   || '2026-04-01',
+      from_date: fromVal,
+      to_date:   toVal,
       filters:   filters,
     };
     const r = await fetch('/api/filter-lab/run', {
@@ -3993,6 +4004,24 @@ function filterLabRender(r) {
     _flCard('A. BASELINE (no filters)',         '#3b82f6', r.baseline) +
     _flCard('B. BASELINE + your selection',     '#a78bfa', r.with_filters) +
     _flCard('C. PRODUCTION (current config)',   '#6b7280', r.production);
+
+  // Warn if all runs returned 0 trades — almost always a date range bug
+  if (r.baseline.n === 0 && r.with_filters.n === 0 && r.production.n === 0) {
+    document.getElementById('fl-summary').innerHTML = `
+      <div style="background:#7f1d1d;border-left:3px solid #dc2626;border-radius:4px;padding:14px 16px;font-size:0.85rem;color:#fecaca">
+        <div style="font-weight:700;margin-bottom:6px">⚠ All runs returned 0 trades</div>
+        <div style="color:#fca5a5;font-size:0.78rem">
+          Your date range is <code style="background:#450a0a;padding:1px 5px;border-radius:3px">${r.from_date} → ${r.to_date}</code>
+          which produced no trades.  Most likely cause: <b>From and To dates are the same (0-day window)</b>
+          or <b>the date range falls outside your local backtest data</b>.
+          <br><br>
+          <b>Fix</b>: set From to <code style="background:#450a0a;padding:1px 5px;border-radius:3px">2024-01-01</code>
+          and To to <code style="background:#450a0a;padding:1px 5px;border-radius:3px">2026-04-01</code>
+          (or any range with at least a few months of data).
+        </div>
+      </div>`;
+    return;
+  }
 
   const dvb  = r.delta_vs_baseline;
   const dvp  = r.delta_vs_production;
