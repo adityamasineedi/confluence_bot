@@ -496,6 +496,37 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
             _state[symbol] = st  # keep waiting, don't reset
             return []
 
+        # ── RE-CHECK anti-correlation at FIRE time ──────────────────
+        # The gate is also checked at breakout-detection time, but between
+        # breakout and retest multiple symbols can all enter AWAITING_RETEST
+        # simultaneously and then fire in the same 30s tick.  Without this
+        # second check, max_entries_per_30min is silently violated.
+        if _too_many_recent_entries(direction):
+            log.info("BR %s %s — too many recent %s entries at fire time, reset",
+                     symbol, direction, direction)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
+        # ── RE-CHECK post-crash cooldown at FIRE time (LONGs only) ──
+        if direction == "LONG" and _btc_crashed_recently(cache):
+            log.info("BR %s LONG — BTC crashed recently at fire time, reset", symbol)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
+        # ── RE-CHECK choppy market gate at FIRE time ─────────────────
+        if _market_too_choppy(cache, symbol):
+            log.info("BR %s %s — market too choppy at fire time, reset",
+                     symbol, direction)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
+        # ── RE-CHECK daily trade limit at FIRE time ──────────────────
+        if _daily_count(symbol) >= _MAX_DAY_TRADES:
+            log.info("BR %s %s — daily cap reached at fire time, reset",
+                     symbol, direction)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
         # ── RETEST CONFIRMED — build signal ──────────────────────────
         atr_val = _atr(bars_5m)
         if atr_val <= 0:

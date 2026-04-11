@@ -1713,6 +1713,16 @@ def run_breakout_retest(symbol, data, btc_data,
         # Exhaustion re-check at retest confirmation time
         if _exhausted_4h(b4h, b5m[eb, TS], direction, _exh_pct, _exh_bars):
             i += 1; continue
+        # Anti-correlation re-check at FIRE (retest-confirm) time.  Between
+        # the breakout bar and the retest bar other symbols can enter
+        # AWAITING_RETEST and fire first, so without this re-check the 30-min
+        # cap can be silently violated.  Use the entry bar timestamp as the
+        # reference and count entries recorded in _recent_dir_ts.
+        eb_ts = float(b5m[eb, TS])
+        eb_cutoff = eb_ts - 1_800_000
+        _rdts = [(t, d) for t, d in _recent_dir_ts if t > eb_cutoff]
+        if sum(1 for _, d in _rdts if d == direction) >= _max_ent_30m:
+            i += 1; continue
         av = float(at5[eb]) if eb < len(at5) else 0.0
         if av <= 0:
             i += 1; continue
