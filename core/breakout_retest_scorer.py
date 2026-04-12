@@ -527,18 +527,10 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
             _state[symbol] = {"state": "IDLE"}
             return []
 
-        # ── RE-CHECK volume at FIRE time ─────────────────────────────
-        # Volume at breakout-detection time may have been partial (bar
-        # still forming).  By fire time, more bars have closed so volume
-        # data is more complete.  Re-check using closed bars only.
-        fire_bars = bars_5m[:-1] if len(bars_5m) > 1 else bars_5m
-        fire_vm = _vol_ma(fire_bars)
-        fire_bar = fire_bars[-1] if fire_bars else None
-        if fire_bar and fire_vm > 0 and fire_bar["v"] < fire_vm * _VOL_MULT:
-            log.info("BR %s %s — volume too low at fire time (%.1f < %.1f×avg), reset",
-                     symbol, direction, fire_bar["v"], _VOL_MULT)
-            _state[symbol] = {"state": "IDLE"}
-            return []
+        # NOTE: No volume re-check at fire time.  The breakout detection
+        # already validates volume on the breakout bar (the high-volume bar).
+        # Retests are by nature low-volume pullbacks — requiring high volume
+        # on the retest bar blocks nearly every valid signal.
 
         # ── RETEST CONFIRMED — build signal ──────────────────────────
         atr_val = _atr(bars_5m)
@@ -547,7 +539,7 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
             return []
 
         entry   = flip
-        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.001)  # 0.1% floor — matches validated backtest (PF 2.38)
+        sl_dist = max(atr_val * _SL_ATR_MULT, entry * 0.005)  # 0.5% floor — fee-viable at $1000 notional
 
         if direction == "LONG":
             stop = entry - sl_dist
