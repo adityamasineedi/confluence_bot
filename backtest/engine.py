@@ -28,10 +28,44 @@ _BT_CFG       = _CFG.get("backtest", {})
 _TAKER_FEE    = float(_BT_CFG.get("taker_fee_pct", 0.0005))    # 0.05% per side
 _SLIPPAGE     = float(_BT_CFG.get("slippage_pct", 0.0002))     # 0.02% per side
 _FUNDING_8H   = float(_BT_CFG.get("funding_cost_per_8h", 0.0001))  # 0.01% per 8h
-FEE_RT        = (_TAKER_FEE + _SLIPPAGE) * 2   # round-trip: entry + exit
-SLIP_FRAC     = _SLIPPAGE                       # applied to entry/exit prices
-FUNDING_PER_BAR_1H = _FUNDING_8H / 8.0          # funding cost per 1H bar held
-FUNDING_PER_BAR_5M = _FUNDING_8H / 96.0         # funding cost per 5M bar held
+# FEE_RT_NOTIONAL is in price-percent units (fraction of NOTIONAL value).
+# To convert to R-multiples: divide by sl_pct (= sl_dist / entry).
+# This was the dimensional bug — the old FEE_RT was subtracted directly from
+# pnl_r (R-multiples) regardless of SL distance, drastically under-charging
+# fees on tight-stop trades.  The live bot charges fees on notional, so the
+# backtest must too.
+FEE_RT_NOTIONAL    = (_TAKER_FEE * 2)           # 2 sides taker = 0.10% notional round-trip
+SLIP_FRAC          = _SLIPPAGE                   # applied to entry price (already in entry math)
+FUNDING_8H_NOTIONAL = _FUNDING_8H                # notional fraction per 8h
+FUNDING_PER_5M     = _FUNDING_8H / 96.0          # notional fraction per 5M bar
+FUNDING_PER_1H     = _FUNDING_8H / 8.0           # notional fraction per 1H bar
+# DEPRECATED — kept for any legacy callers; do not use in new code
+FEE_RT             = FEE_RT_NOTIONAL             # dimensionally same, just different name
+FUNDING_PER_BAR_1H = FUNDING_PER_1H
+FUNDING_PER_BAR_5M = FUNDING_PER_5M
+
+
+def _costs_in_R(sl_dist: float, entry: float, hold_bars: int,
+                bar_minutes: int = 5) -> float:
+    """Return the total cost (fees + funding) in R-multiples for a single trade.
+
+    Dimensional reasoning:
+      fee_dollars     = FEE_RT_NOTIONAL × notional
+      risk_dollars    = sl_dist / entry × notional   (= sl_pct × notional)
+      fee_in_R        = fee_dollars / risk_dollars = FEE_RT_NOTIONAL / sl_pct
+
+    Same for funding.  This matches how the live bot's _calc_net_pnl() applies
+    notional-based taker fees to actual trades.
+    """
+    if entry <= 0 or sl_dist <= 0:
+        return 0.0
+    sl_pct = sl_dist / entry
+    if sl_pct <= 0:
+        return 0.0
+    fee_in_r = FEE_RT_NOTIONAL / sl_pct
+    funding_per_bar = _FUNDING_8H / (8 * 60 / bar_minutes)
+    funding_in_r = (funding_per_bar * hold_bars) / sl_pct
+    return fee_in_r + funding_in_r
 
 # numpy column indices
 O, H, L, C, V, TS = 0, 1, 2, 3, 4, 5
@@ -728,9 +762,8 @@ def simulate(entry_idx: np.ndarray, bars: np.ndarray,
             pnl_r = (ep - entry) / sl_dist if direction == "LONG" \
                      else (entry - ep) / sl_dist
 
-        # Deduct fees + funding
-        funding_cost = FUNDING_PER_BAR_1H * hold_bars
-        pnl_r = pnl_r - FEE_RT - funding_cost
+        # Deduct fees + funding (notional-based, dimensionally correct)
+        pnl_r = pnl_r - _costs_in_R(sl_dist, entry, hold_bars, bar_minutes=60)
 
         trades.append(Trade(
             symbol, strategy, direction, idx,
@@ -819,9 +852,8 @@ def simulate_sweep(entry_idx: np.ndarray, bars: np.ndarray,
             pnl_r = ((ep - entry) / sl_dist if direction == "LONG"
                      else (entry - ep) / sl_dist)
 
-        # Deduct fees + funding
-        funding_cost = FUNDING_PER_BAR_1H * hold_bars
-        pnl_r = pnl_r - FEE_RT - funding_cost
+        # Deduct fees + funding (notional-based, dimensionally correct)
+        pnl_r = pnl_r - _costs_in_R(sl_dist, entry, hold_bars, bar_minutes=60)
 
         trades.append(Trade(symbol, "liq_sweep", direction,
                             idx, entry, stop, tp, outcome, round(pnl_r, 4),
@@ -1750,9 +1782,8 @@ def run_breakout_retest(symbol, data, btc_data,
         if outcome == "TIMEOUT":
             lp = fut[-1,C] if len(fut) > 0 else entry_sl
             pnl = ((lp-entry_sl)/sd if direction=="LONG" else (entry_sl-lp)/sd)
-        # Deduct fees + funding (5M bars)
-        funding_cost = FUNDING_PER_BAR_5M * hold_5m
-        pnl = pnl - FEE_RT - funding_cost
+        # Deduct fees + funding (notional-based, dimensionally correct)
+        pnl = pnl - _costs_in_R(sd, entry_sl, hold_5m, bar_minutes=5)
         trades.append(Trade(symbol=symbol, strategy="breakout_retest",
                             direction=direction, bar_idx=eb,
                             entry=entry_sl, stop=stop, tp=tp,

@@ -397,20 +397,20 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
 
     bars_4h = cache.get_ohlcv(symbol, window=25, tf="4h")
 
-    # Patch last 4H bar close with live price — prevents stale EMA
-    # during intra-candle drops (4H bar only updates on close, so mid-candle
-    # the scorer sees the previous close, not the current price)
-    if bars_4h:
-        live_closes = cache.get_closes(symbol, window=1, tf="1m")
-        if live_closes:
-            bars_4h[-1] = {**bars_4h[-1], "c": live_closes[-1]}
+    # NOTE: We deliberately do NOT patch the last 4H bar with live 1m price.
+    # The old patch (removed in this commit) caused mid-bar trend flips that
+    # let counter-trend entries slip through.  The trade validator audit found
+    # 6/8 losses were COUNTER_TREND entries caused by this patch.  Using only
+    # closed 1H bars matches the backtest and gives stable HTF direction.
 
-    # HTF EMA20 direction (1H — matches backtest engine, more responsive than 4H)
+    # HTF EMA20 direction (1H) — uses CLOSED bars only, matches backtest engine
     bars_1h = cache.get_ohlcv(symbol, window=25, tf="1h")
     htf_bull = True
     htf_bear = True
-    if bars_1h and len(bars_1h) >= 21:
-        closes_1h = [b["c"] for b in bars_1h]
+    if bars_1h and len(bars_1h) >= 22:
+        # Use bars_1h[:-1] to exclude the current (partial) 1H bar
+        closed_1h = bars_1h[:-1]
+        closes_1h = [b["c"] for b in closed_1h]
         ema20_1h  = _ema(closes_1h, 20)
         htf_bull  = closes_1h[-1] > ema20_1h
         htf_bear  = closes_1h[-1] < ema20_1h
@@ -527,6 +527,19 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
             _state[symbol] = {"state": "IDLE"}
             return []
 
+        # ── RE-CHECK volume at FIRE time ─────────────────────────────
+        # Volume at breakout-detection time may have been partial (bar
+        # still forming).  By fire time, more bars have closed so volume
+        # data is more complete.  Re-check using closed bars only.
+        fire_bars = bars_5m[:-1] if len(bars_5m) > 1 else bars_5m
+        fire_vm = _vol_ma(fire_bars)
+        fire_bar = fire_bars[-1] if fire_bars else None
+        if fire_bar and fire_vm > 0 and fire_bar["v"] < fire_vm * _VOL_MULT:
+            log.info("BR %s %s — volume too low at fire time (%.1f < %.1f×avg), reset",
+                     symbol, direction, fire_bar["v"], _VOL_MULT)
+            _state[symbol] = {"state": "IDLE"}
+            return []
+
         # ── RETEST CONFIRMED — build signal ──────────────────────────
         atr_val = _atr(bars_5m)
         if atr_val <= 0:
@@ -585,8 +598,15 @@ async def _score_inner(symbol: str, cache) -> list[dict]:
     if not range_ok:
         return []
 
-    bar    = bars_5m[-1]
-    vm_val = _vol_ma(bars_5m)
+    # Use the LAST CLOSED bar ([-2]) for breakout detection, not the
+    # current partial bar ([-1]).  The current bar's "close" is just the
+    # latest tick — not the actual candle close.  Using it causes false
+    # breakouts when price pokes beyond the range mid-bar then retracts.
+    # Backtest always uses closed bars; this makes live match.
+    if len(bars_5m) < 3:
+        return []
+    bar    = bars_5m[-2]   # last CLOSED 5m bar
+    vm_val = _vol_ma(bars_5m[:-1])   # volume avg also on closed bars only
     vol_ok = bar["v"] >= vm_val * _VOL_MULT if vm_val > 0 else True
 
     # Fix 3: In RANGE regime, only allow HTF-confirmed direction
