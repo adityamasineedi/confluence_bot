@@ -506,6 +506,8 @@ strategy_routing:
     - cme_gap
     - breakout_retest
     RANGE:
+    - fvg
+    - liq_sweep
     - wyckoff_spring_v2
     - cme_gap
     - breakout_retest
@@ -528,6 +530,9 @@ strategy_routing:
     - wyckoff_spring_v2
     - breakout_retest
     RANGE:
+    - fvg
+    - liq_sweep
+    - wyckoff_spring_v2
     - breakout_retest
     BREAKOUT:
     - fvg
@@ -545,6 +550,8 @@ strategy_routing:
     - wyckoff_spring_v2
     - breakout_retest
     RANGE:
+    - fvg
+    - wyckoff_spring_v2
     - breakout_retest
     BREAKOUT:
     - fvg
@@ -563,7 +570,8 @@ strategy_routing:
     - liq_sweep
     - breakout_retest
     RANGE:
-    - microrange
+    - wyckoff_spring_v2
+    - liq_sweep
     - breakout_retest
     BREAKOUT:
     - liq_sweep
@@ -605,6 +613,7 @@ strategy_routing:
     - ema_pullback_short
     - breakout_retest
     RANGE:
+    - liq_sweep
     - breakout_retest
     BREAKOUT:
     - liq_sweep
@@ -623,6 +632,7 @@ strategy_routing:
     - ema_pullback_short_v2
     - breakout_retest
     RANGE:
+    - wyckoff_spring_v2
     - breakout_retest
     BREAKOUT:
     - wyckoff_spring_v2
