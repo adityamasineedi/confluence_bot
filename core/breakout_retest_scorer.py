@@ -281,7 +281,11 @@ def _detect_range(bars_5m: list[dict],
                   symbol, len(bars_5m), _RANGE_BARS + 20)
         return False, 0.0, 0.0
 
-    window   = bars_5m[-(_RANGE_BARS + 1):-1]
+    # Range window ends at [-2] so that the breakout bar ([-2] in live,
+    # which is the last CLOSED bar) is NOT included.  If the breakout bar
+    # were inside the range, its high/low would set rng_high/rng_low and
+    # make breakout detection mathematically impossible (close <= high <= rng_high).
+    window   = bars_5m[-(_RANGE_BARS + 2):-2]
     rng_high = max(b["h"] for b in window)
     rng_low  = min(b["l"] for b in window)
 
