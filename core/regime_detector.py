@@ -182,6 +182,7 @@ class RegimeDetector:
 
     _ADX_PERIOD     = 14
     _4H_WINDOW      = 30   # candles fed to ADX (2*period+1 = 29, use 30 for margin)
+    _1D_ADX_WINDOW  = 40   # daily candles fed to daily ADX (macro range detection)
     _RANGE_4H_BARS  = 20   # candles for range-size check
     _DAILY_WINDOW   = 60   # daily candles for crash / EMA
 
@@ -232,9 +233,17 @@ class RegimeDetector:
                 log.debug("PUMP regime entered for %s", symbol)
             return Regime.PUMP
 
-        # ── Step 3: ADX on 4H ────────────────────────────────────────────────
-        adx_info = self._get_adx(symbol, cache)
-        adx      = adx_info["adx"]
+        # ── Step 3: ADX on 4H + Daily macro override ────────────────────────
+        adx_info  = self._get_adx(symbol, cache)
+        adx       = adx_info["adx"]
+        daily_adx = self._get_daily_adx(symbol, cache)
+
+        # Daily ADX thresholds — when daily ADX < 20 the market has been
+        # sideways for weeks/months.  The 4H ADX can spike on short-term
+        # moves within that range, but the macro picture is still RANGE.
+        daily_range_thr = float(rcfg.get("daily_adx_range_threshold", 20.0))
+        daily_trend_thr = float(rcfg.get("daily_adx_trend_threshold", 25.0))
+        macro_ranging = 0.0 < daily_adx < daily_range_thr
 
         # ── Step 4: ADX hysteresis — track was_ranging BEFORE update ─────────
         was_ranging = self._in_range.get(symbol, False)
@@ -250,15 +259,25 @@ class RegimeDetector:
 
         if dwell_ok:
             if not was_ranging:
-                # Enter RANGE only when all 3 recent readings are below entry threshold
-                if len(history) == 3 and all(v < adx_range_thr for v in history):
+                # Enter RANGE when:
+                # a) 4H ADX hysteresis: all 3 recent readings below threshold, OR
+                # b) Daily ADX macro override: daily ADX confirms multi-week range
+                enter_4h    = len(history) == 3 and all(v < adx_range_thr for v in history)
+                enter_daily = macro_ranging
+                if enter_4h or enter_daily:
                     self._in_range[symbol] = True
                     currently_ranging = True
                     self._regime_dwell[symbol] = 0
+                    if enter_daily and not enter_4h:
+                        log.info("%s: daily ADX %.1f < %.0f — macro RANGE override",
+                                 symbol, daily_adx, daily_range_thr)
             else:
-                # Exit RANGE only when ≥2 of last 3 readings are above trend threshold
-                # (symmetric with entry — prevents single-spike exits)
-                if len(history) >= 2 and sum(v > adx_trend_thr for v in history) >= 2:
+                # Exit RANGE only when BOTH:
+                # a) 4H ADX shows trend (≥2 of 3 readings above threshold), AND
+                # b) Daily ADX also confirms trend (above daily trend threshold)
+                exit_4h    = len(history) >= 2 and sum(v > adx_trend_thr for v in history) >= 2
+                exit_daily = daily_adx > daily_trend_thr or daily_adx == 0.0
+                if exit_4h and exit_daily:
                     self._in_range[symbol] = False
                     currently_ranging = False
                     self._regime_dwell[symbol] = 0
@@ -415,6 +434,23 @@ class RegimeDetector:
         lows   = np.array([c["l"] for c in ohlcv])
         closes = np.array([c["c"] for c in ohlcv])
         return _np_calc_adx(highs, lows, closes, period=self._ADX_PERIOD)
+
+    def _get_daily_adx(self, symbol: str, cache) -> float:
+        """Compute ADX from 1D candles — detects macro ranges (weeks/months).
+
+        The 4H ADX catches short-term trends within a multi-month range,
+        causing false TREND detections.  Daily ADX with 14 periods looks
+        at ~3 weeks of data, correctly identifying sideways markets.
+        Returns 0.0 on insufficient data.
+        """
+        ohlcv = cache.get_ohlcv(symbol, window=self._1D_ADX_WINDOW, tf="1d")
+        if len(ohlcv) < self._ADX_PERIOD * 2 + 1:
+            return 0.0
+        highs  = np.array([c["h"] for c in ohlcv])
+        lows   = np.array([c["l"] for c in ohlcv])
+        closes = np.array([c["c"] for c in ohlcv])
+        info = _np_calc_adx(highs, lows, closes, period=self._ADX_PERIOD)
+        return info["adx"]
 
     # ── ADX history (hysteresis state) ────────────────────────────────────────
 
