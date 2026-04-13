@@ -233,17 +233,16 @@ class RegimeDetector:
                 log.debug("PUMP regime entered for %s", symbol)
             return Regime.PUMP
 
-        # ── Step 3: ADX on 4H + Daily macro override ────────────────────────
-        adx_info  = self._get_adx(symbol, cache)
-        adx       = adx_info["adx"]
-        daily_adx = self._get_daily_adx(symbol, cache)
+        # ── Step 3: ADX on 4H + macro range check ───────────────────────────
+        adx_info = self._get_adx(symbol, cache)
+        adx      = adx_info["adx"]
 
-        # Daily ADX thresholds — when daily ADX < 20 the market has been
-        # sideways for weeks/months.  The 4H ADX can spike on short-term
-        # moves within that range, but the macro picture is still RANGE.
-        daily_range_thr = float(rcfg.get("daily_adx_range_threshold", 20.0))
-        daily_trend_thr = float(rcfg.get("daily_adx_trend_threshold", 25.0))
-        macro_ranging = 0.0 < daily_adx < daily_range_thr
+        # Macro range detection: 30-day price range + net move.
+        # If 30d range is tight (<15%) AND net move is small (<8%),
+        # the market is sideways at the macro level even if 4H ADX spikes.
+        macro_range_pct = float(rcfg.get("macro_range_max_pct", 0.15))
+        macro_move_pct  = float(rcfg.get("macro_move_min_pct",  0.08))
+        macro_ranging   = self._is_macro_range(symbol, cache, macro_range_pct, macro_move_pct)
 
         # ── Step 4: ADX hysteresis — track was_ranging BEFORE update ─────────
         was_ranging = self._in_range.get(symbol, False)
@@ -261,23 +260,23 @@ class RegimeDetector:
             if not was_ranging:
                 # Enter RANGE when:
                 # a) 4H ADX hysteresis: all 3 recent readings below threshold, OR
-                # b) Daily ADX macro override: daily ADX confirms multi-week range
+                # b) Macro range: 30-day price action is sideways
                 enter_4h    = len(history) == 3 and all(v < adx_range_thr for v in history)
-                enter_daily = macro_ranging
-                if enter_4h or enter_daily:
+                enter_macro = macro_ranging
+                if enter_4h or enter_macro:
                     self._in_range[symbol] = True
                     currently_ranging = True
                     self._regime_dwell[symbol] = 0
-                    if enter_daily and not enter_4h:
-                        log.info("%s: daily ADX %.1f < %.0f — macro RANGE override",
-                                 symbol, daily_adx, daily_range_thr)
+                    if enter_macro and not enter_4h:
+                        log.info("%s: 30-day macro RANGE override (4H ADX=%.1f)",
+                                 symbol, adx)
             else:
-                # Exit RANGE only when BOTH:
+                # Exit RANGE when:
                 # a) 4H ADX shows trend (≥2 of 3 readings above threshold), AND
-                # b) Daily ADX also confirms trend (above daily trend threshold)
+                # b) Macro range check no longer confirms sideways
                 exit_4h    = len(history) >= 2 and sum(v > adx_trend_thr for v in history) >= 2
-                exit_daily = daily_adx > daily_trend_thr or daily_adx == 0.0
-                if exit_4h and exit_daily:
+                exit_macro = not macro_ranging
+                if exit_4h and exit_macro:
                     self._in_range[symbol] = False
                     currently_ranging = False
                     self._regime_dwell[symbol] = 0
@@ -424,6 +423,44 @@ class RegimeDetector:
         return self._breakout_direction.get(symbol, "NEUTRAL")
 
     # ── ADX computation ───────────────────────────────────────────────────────
+
+    def _is_macro_range(self, symbol: str, cache,
+                        max_range_pct: float, min_move_pct: float) -> bool:
+        """True when the 30-day price action is sideways.
+
+        Checks two conditions on the last 30 daily bars:
+        1. Total range (highest high - lowest low) / mid < max_range_pct
+           → price is contained in a box
+        2. Net move |close - open| / open < min_move_pct
+           → no clear directional progress
+
+        Both must hold.  This catches multi-week/month sideways markets
+        that the 4H ADX misses (4H ADX spikes on intra-range moves).
+        Returns False on insufficient data (never forces RANGE on gaps).
+        """
+        bars_1d = cache.get_ohlcv(symbol, window=30, tf="1d")
+        if not bars_1d or len(bars_1d) < 20:
+            return False
+
+        highs = [b["h"] for b in bars_1d]
+        lows  = [b["l"] for b in bars_1d]
+        rng_high = max(highs)
+        rng_low  = min(lows)
+        mid = (rng_high + rng_low) / 2.0
+        if mid <= 0:
+            return False
+
+        # 30-day range as % of mid
+        range_pct = (rng_high - rng_low) / mid
+
+        # Net move: first open → last close
+        open_price  = bars_1d[0]["o"]
+        close_price = bars_1d[-1]["c"]
+        if open_price <= 0:
+            return False
+        net_move = abs(close_price - open_price) / open_price
+
+        return range_pct < max_range_pct and net_move < min_move_pct
 
     def _get_adx(self, symbol: str, cache) -> dict:
         """Compute ADX/+DI/-DI from 4H candles.  Returns zeros on data gap."""

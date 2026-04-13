@@ -20,8 +20,8 @@ loop_interval_seconds: 60
 regime:
   adx_range_threshold: 20
   adx_trend_threshold: 25
-  daily_adx_range_threshold: 20
-  daily_adx_trend_threshold: 25
+  macro_range_max_pct: 0.15
+  macro_move_min_pct: 0.08
   regime_min_dwell_bars: 60
   range_size_max_pct: 0.12
   crash_weekly_drop: -0.12
