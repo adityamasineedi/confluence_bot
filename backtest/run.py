@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from backtest.engine import (load, compute_stats, RUNNERS, run_strategy,
-                             _resolve_mc_threshold)
+                             _resolve_mc_threshold, tag_trades_with_regime)
 
 PASS_MARK = "PASS"
 WARN_MARK = "WARN"
@@ -601,6 +601,7 @@ def main() -> None:
                 trades  = run_strategy(symbol, strategy, data, btc_data,
                                        from_ts, to_ts,
                                        mc_threshold=mc_threshold)
+                tag_trades_with_regime(trades, data)
                 s       = compute_stats(trades)
                 elapsed = time.time() - t0
 
@@ -684,7 +685,30 @@ def main() -> None:
             f" {psign}${ds['total_profit']:>8,.0f}"
             f" {psign}{ds['total_return_pct']:>6.1f}%  {verdict(t['pf'])}"
         )
-    print(f"{'='*80}\n")
+    print(f"{'='*80}")
+
+    # -- Regime breakdown ---------------------------------------------------------
+    if all_trades:
+        regime_trades = {}
+        for t in all_trades:
+            r = t.regime or "UNKNOWN"
+            regime_trades.setdefault(r, []).append(t)
+
+        if len(regime_trades) > 1 or (len(regime_trades) == 1 and "UNKNOWN" not in regime_trades):
+            print(f"\n  REGIME BREAKDOWN:")
+            print(f"  {'REGIME':<12} {'N':>5} {'WR':>6} {'PF':>6} {'avgR':>8}  VERDICT")
+            print(f"  {'-'*50}")
+            for regime in ["TREND", "RANGE", "CRASH", "PUMP", "UNKNOWN"]:
+                rt = regime_trades.get(regime, [])
+                if not rt:
+                    continue
+                rs = compute_stats(rt)
+                print(
+                    f"  {regime:<12} {rs['n']:>5} {rs['wr']:>5.1f}%"
+                    f" {rs['pf']:>6.2f} {rs['avg_r']:>+7.3f}  {verdict(rs['pf'])}"
+                )
+            print(f"{'='*80}")
+    print()
 
 
 if __name__ == "__main__":

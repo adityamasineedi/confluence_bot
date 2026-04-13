@@ -687,6 +687,7 @@ class Trade:
     outcome:        str   = "TIMEOUT"
     pnl_r:          float = 0.0
     vol_ratio:      float = 0.0
+    regime:         str   = ""
 
 
 def simulate(entry_idx: np.ndarray, bars: np.ndarray,
@@ -1806,6 +1807,122 @@ def run_breakout_retest(symbol, data, btc_data,
         else:
             _day_trade_count[symbol] = (cur_date, 1)
         last_exit = xb; i = xb + 1
+    return trades
+
+
+# ── Regime classification for backtest trades ────────────────────────────────
+
+def _np_ema_scalar(arr, period):
+    """Return final EMA value for a 1-D array."""
+    if len(arr) < period:
+        return 0.0
+    k = 2.0 / (period + 1)
+    val = float(np.mean(arr[:period]))
+    for v in arr[period:]:
+        val = float(v) * k + val * (1.0 - k)
+    return val
+
+
+def classify_regime_at(bars_4h, bars_1d, idx_4h):
+    """Classify regime at a specific 4H bar index.
+
+    Uses the same logic as the live regime_detector:
+    - CRASH: price < 50D EMA + 7-day drop > 12% + making new lows
+    - PUMP:  price > 50D EMA + 7-day gain > 12% + making new highs
+    - RANGE: 30-day price range < 15% AND net move < 8%  (macro check)
+             OR 4H ADX < 20 with tight range confirmation
+    - TREND: default
+    """
+    rcfg = _CFG.get("regime", {})
+    crash_thr = float(rcfg.get("crash_weekly_drop", -0.12))
+    pump_thr  = float(rcfg.get("pump_weekly_gain", 0.12))
+    macro_range_max = float(rcfg.get("macro_range_max_pct", 0.15))
+    macro_move_min  = float(rcfg.get("macro_move_min_pct", 0.08))
+
+    # Need at least some daily bars for crash/pump/macro checks
+    ts_4h = float(bars_4h[idx_4h, TS]) if idx_4h < len(bars_4h) else 0.0
+    # Find corresponding daily bar index
+    if bars_1d is None or len(bars_1d) < 30:
+        return "TREND"
+
+    idx_1d = int(np.searchsorted(bars_1d[:, TS], ts_4h, side='right')) - 1
+    if idx_1d < 50:
+        return "TREND"
+
+    # ── CRASH check ──────────────────────────────────────────────────
+    closes_1d = bars_1d[:idx_1d + 1, C]
+    if len(closes_1d) >= 51:
+        ema50 = _np_ema_scalar(closes_1d[-60:], 50)
+        price = float(closes_1d[-1])
+        if ema50 > 0 and price < ema50 and len(closes_1d) >= 8:
+            change_7d = (price - float(closes_1d[-8])) / float(closes_1d[-8])
+            if change_7d < crash_thr and len(closes_1d) >= 5:
+                recent_min = float(np.min(closes_1d[-5:-1]))
+                if price < recent_min:
+                    return "CRASH"
+
+    # ── PUMP check ───────────────────────────────────────────────────
+    if len(closes_1d) >= 51:
+        ema50 = _np_ema_scalar(closes_1d[-60:], 50)
+        price = float(closes_1d[-1])
+        if ema50 > 0 and price > ema50 and len(closes_1d) >= 8:
+            change_7d = (price - float(closes_1d[-8])) / float(closes_1d[-8])
+            if change_7d > pump_thr and len(closes_1d) >= 5:
+                recent_max = float(np.max(closes_1d[-5:-1]))
+                if price > recent_max:
+                    return "PUMP"
+
+    # ── Macro RANGE check (30-day price range + net move) ────────────
+    if idx_1d >= 29:
+        window_1d = bars_1d[idx_1d - 29:idx_1d + 1]
+        rng_high = float(np.max(window_1d[:, H]))
+        rng_low  = float(np.min(window_1d[:, L]))
+        mid = (rng_high + rng_low) / 2.0
+        if mid > 0:
+            range_pct = (rng_high - rng_low) / mid
+            open_price  = float(window_1d[0, O])
+            close_price = float(window_1d[-1, C])
+            if open_price > 0:
+                net_move = abs(close_price - open_price) / open_price
+                if range_pct < macro_range_max and net_move < macro_move_min:
+                    return "RANGE"
+
+    return "TREND"
+
+
+def tag_trades_with_regime(trades, data):
+    """Post-process trades to add regime classification.
+
+    Uses 4H and 1D bars from the data dict to classify regime at each
+    trade's entry bar timestamp.
+    """
+    if not trades:
+        return trades
+
+    symbol = trades[0].symbol
+    b1h = data.get(f"{symbol}:1h")
+    b4h = data.get(f"{symbol}:4h")
+    b1d = data.get(f"{symbol}:1d")
+    b5m = data.get(f"{symbol}:5m")
+
+    if b4h is None or b1d is None:
+        return trades
+
+    for t in trades:
+        # Find 4H bar index closest to trade entry time
+        # bar_idx could be from 5m, 1h, or 4h depending on strategy
+        # Use entry price timestamp from whichever bars array matches
+        if b5m is not None and t.bar_idx < len(b5m):
+            ts = float(b5m[t.bar_idx, TS])
+        elif b1h is not None and t.bar_idx < len(b1h):
+            ts = float(b1h[t.bar_idx, TS])
+        else:
+            continue
+
+        idx_4h = int(np.searchsorted(b4h[:, TS], ts, side='right')) - 1
+        if 0 <= idx_4h < len(b4h):
+            t.regime = classify_regime_at(b4h, b1d, idx_4h)
+
     return trades
 
 
