@@ -293,6 +293,15 @@ wyckoff_spring:
   check_interval_secs: 60
   max_positions: 2
   mc_vol_ratio_max: 2.0
+wyckoff_upthrust:
+  enabled: true
+  cooldown_mins: 60
+  rr_ratio: 2.5
+  sl_buffer_pct: 0.001
+  fire_threshold: 0.67
+  check_interval_secs: 60
+  max_positions: 2
+  mc_vol_ratio_max: 2.0
 liq_sweep:
   enabled: true
   cooldown_mins: 30
@@ -509,6 +518,7 @@ strategy_routing:
     - fvg
     - liq_sweep
     - wyckoff_spring_v2
+    - wyckoff_upthrust_v2
     - cme_gap
     - breakout_retest
     BREAKOUT:
@@ -548,10 +558,12 @@ strategy_routing:
     - fvg
     - ema_pullback_short
     - wyckoff_spring_v2
+    - wyckoff_upthrust_v2
     - breakout_retest
     RANGE:
     - fvg
     - wyckoff_spring_v2
+    - wyckoff_upthrust_v2
     - breakout_retest
     BREAKOUT:
     - fvg
@@ -587,33 +599,41 @@ strategy_routing:
     - breakout_retest
   XRPUSDT:
     TREND:
+    - wyckoff_upthrust_v2
     - breakout_retest
     RANGE:
+    - wyckoff_upthrust_v2
     - breakout_retest
     BREAKOUT:
     - breakout_retest
     CRASH:
+    - wyckoff_upthrust_v2
     - breakout_retest
     PUMP: []
   LINKUSDT:
     TREND:
     - ema_pullback_short
+    - wyckoff_upthrust_v2
     - breakout_retest
     RANGE:
+    - wyckoff_upthrust_v2
     - breakout_retest
     BREAKOUT:
     - breakout_retest
     CRASH:
     - ema_pullback_short
+    - wyckoff_upthrust_v2
     - breakout_retest
     PUMP: []
   DOGEUSDT:
     TREND:
     - liq_sweep
     - ema_pullback_short
+    - wyckoff_upthrust_v2
     - breakout_retest
     RANGE:
     - liq_sweep
+    - wyckoff_upthrust_v2
     - breakout_retest
     BREAKOUT:
     - liq_sweep
@@ -630,9 +650,11 @@ strategy_routing:
     TREND:
     - wyckoff_spring_v2
     - ema_pullback_short_v2
+    - wyckoff_upthrust_v2
     - breakout_retest
     RANGE:
     - wyckoff_spring_v2
+    - wyckoff_upthrust_v2
     - breakout_retest
     BREAKOUT:
     - wyckoff_spring_v2

@@ -256,6 +256,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "VWAPBAND":    ("vb_stop",  "vb_tp"),
         "OISPIKE":     ("os_stop",  "os_tp"),
         "WYCKOFF":     ("ws_stop",  "ws_tp"),
+        "WYCKOFF_UPTHRUST": ("wu_stop", "wu_tp"),
         "liq_sweep":       ("ls_stop",  "ls_tp"),
         "cme_gap":         ("cg_stop",  "cg_tp"),
         "BREAKOUT_RETEST": ("br_stop",  "br_tp"),
@@ -272,6 +273,7 @@ async def _execute_signal_inner(score_dict: dict, cache, deal_key: tuple) -> dic
         "VWAPBAND":     1.5,
         "OISPIKE":      2.0,
         "WYCKOFF":      float(_cfg.get("wyckoff_spring", {}).get("rr_ratio", 2.5)),
+        "WYCKOFF_UPTHRUST": float(_cfg.get("wyckoff_upthrust", _cfg.get("wyckoff_spring", {})).get("rr_ratio", 2.5)),
         "liq_sweep":       float(_cfg.get("liq_sweep",       {}).get("rr_ratio", 2.5)),
         "cme_gap":         float(_cfg.get("cme_gap",         {}).get("rr_ratio", 1.5)),
         "BREAKOUT_RETEST": 1.3,   # scorer validates 2.2R from flip level; allow slippage

@@ -4340,6 +4340,12 @@ async def api_backtest_run(request: Request) -> JSONResponse:
         # numpy arrays (need dict→numpy conversion + per-symbol dispatch)
         _GENERIC_ENGINE = {
             "breakout_retest", "breakout_retest_tp1", "breakout_retest_tp2",
+            "wyckoff_upthrust_v2", "cme_gap",
+            "fvg", "liq_sweep", "liq_sweep_short",
+            "wyckoff_spring", "wyckoff_spring_v2",
+            "ema_pullback", "ema_pullback_short", "ema_pullback_short_v2",
+            "vwap_band", "microrange", "wyckoff_range",
+            "dump_hammer", "bull_engulf", "vol_climax",
         }
 
         trades = []

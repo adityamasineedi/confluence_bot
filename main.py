@@ -336,6 +336,14 @@ async def _main_inner() -> None:
         )
         log.info("Wyckoff Spring strategy enabled")
 
+    # 6b6b. Wyckoff upthrust (range high upthrust + rejection — SHORT at resistance)
+    if cfg.get("wyckoff_upthrust", {}).get("enabled", False):
+        from core.wyckoff_upthrust_loop import run_wyckoff_upthrust_loop
+        extra_tasks.append(
+            asyncio.create_task(run_wyckoff_upthrust_loop(symbols, cache))
+        )
+        log.info("Wyckoff Upthrust strategy enabled")
+
     # 6b8. Liquidity sweep (equal highs/lows stop hunt — long + short)
     if cfg.get("liq_sweep", {}).get("enabled", False):
         from core.liq_sweep_loop import run_liq_sweep_loop

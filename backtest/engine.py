@@ -1926,6 +1926,296 @@ def tag_trades_with_regime(trades, data):
     return trades
 
 
+# ── NEW: Data-mined strategies (statistically validated) ─────────────────────
+
+def run_dump_hammer(symbol, data, btc_data,
+                    from_ts=0, to_ts=9999999999999, mc_threshold=0.0):
+    """Dump + Hammer LONG: after 24h drop >3%, enter on 1H hammer candle.
+
+    Pattern: 24-bar return < -3%, lower wick > 50% of range, bullish close.
+    Data scan: 3,060 trades across 8 coins, t-stat +4.0, edge +0.14%/trade.
+    SL = below hammer low - 0.3 ATR, TP = 2.5R.
+    """
+    b1h = data.get(f"{symbol}:1h")
+    if b1h is None or len(b1h) < 200:
+        return []
+
+    n = len(b1h)
+    # ATR(14) on 1H
+    tr = np.maximum(b1h[1:, H] - b1h[1:, L],
+                    np.maximum(np.abs(b1h[1:, H] - b1h[:-1, C]),
+                               np.abs(b1h[1:, L] - b1h[:-1, C])))
+    at = np.full(n, 0.0)
+    at[14] = np.mean(tr[:14])
+    for i in range(15, n):
+        at[i] = (at[i-1] * 13 + tr[i-1]) / 14
+
+    # Weekly gate
+    wk = data.get(f"{symbol}:1w")
+    btc_wk = btc_data.get("BTCUSDT:1w") if btc_data else None
+
+    trades = []
+    cooldown = 0
+    max_hold = 48  # 48 1H bars = 2 days
+
+    for i in range(30, n - max_hold):
+        ts_ms = int(b1h[i, TS])
+        if ts_ms < from_ts or ts_ms > to_ts:
+            continue
+        if cooldown > 0:
+            cooldown -= 1
+            continue
+        if at[i] <= 0:
+            continue
+
+        close = b1h[i, C]
+        if close <= 0:
+            continue
+
+        # 24-bar lookback return
+        ret_24 = (close - b1h[i - 24, C]) / b1h[i - 24, C]
+        if ret_24 >= -0.03:
+            continue  # need >3% dump
+
+        # Hammer detection
+        bar_range = b1h[i, H] - b1h[i, L]
+        if bar_range <= 0:
+            continue
+        body = b1h[i, C] - b1h[i, O]
+        wick_lower = min(b1h[i, O], b1h[i, C]) - b1h[i, L]
+        lower_wick_ratio = wick_lower / bar_range
+
+        if lower_wick_ratio < 0.5:
+            continue  # need strong lower wick
+        if body <= 0:
+            continue  # need bullish close
+
+        # Volume confirmation: above 20-bar avg
+        vol_avg = np.mean(b1h[max(0, i-20):i, V])
+        if vol_avg > 0 and b1h[i, V] < vol_avg * 0.8:
+            continue  # need decent volume
+
+        # Entry at close, SL below hammer low
+        entry_raw = close
+        entry = entry_raw * (1.0 + SLIP_FRAC)
+        sl_dist = max(entry - (b1h[i, L] - at[i] * 0.3), at[i] * 1.0, entry * 0.005)
+        stop = entry - sl_dist
+        tp = entry + sl_dist * 2.5
+
+        if stop <= 0 or tp <= 0:
+            continue
+
+        # Simulate
+        outcome = "TIMEOUT"
+        pnl = 0.0
+        hold = 0
+        for k in range(i + 1, min(i + 1 + max_hold, n)):
+            hold += 1
+            if b1h[k, L] <= stop:
+                outcome = "SL"; pnl = -1.0; break
+            if b1h[k, H] >= tp:
+                outcome = "TP"; pnl = 2.5; break
+        if outcome == "TIMEOUT" and hold > 0:
+            lp = b1h[min(i + max_hold, n - 1), C]
+            pnl = (lp - entry) / sl_dist
+
+        pnl -= _costs_in_R(sl_dist, entry, hold, bar_minutes=60)
+        trades.append(Trade(symbol=symbol, strategy="dump_hammer",
+                            direction="LONG", bar_idx=i,
+                            entry=entry, stop=stop, tp=tp,
+                            outcome=outcome, pnl_r=round(pnl, 4)))
+        cooldown = 6  # 6h cooldown
+
+    return trades
+
+
+def run_bull_engulf(symbol, data, btc_data,
+                    from_ts=0, to_ts=9999999999999, mc_threshold=0.0):
+    """Bullish Engulfing after Drop: 4H candle engulfs previous bearish candle
+    after a 2%+ drop.
+
+    Data scan: 768 trades (1H) / 371 trades (4H), t-stat +3.0, edge +0.37-0.63%.
+    SL = below engulfing low, TP = 2.5R.
+    """
+    b4h = data.get(f"{symbol}:4h")
+    if b4h is None or len(b4h) < 100:
+        return []
+
+    n = len(b4h)
+    # ATR(14) on 4H
+    tr = np.maximum(b4h[1:, H] - b4h[1:, L],
+                    np.maximum(np.abs(b4h[1:, H] - b4h[:-1, C]),
+                               np.abs(b4h[1:, L] - b4h[:-1, C])))
+    at = np.full(n, 0.0)
+    at[14] = np.mean(tr[:14])
+    for i in range(15, n):
+        at[i] = (at[i-1] * 13 + tr[i-1]) / 14
+
+    trades = []
+    cooldown = 0
+    max_hold = 12  # 12 x 4H = 2 days
+
+    for i in range(30, n - max_hold):
+        ts_ms = int(b4h[i, TS])
+        if ts_ms < from_ts or ts_ms > to_ts:
+            continue
+        if cooldown > 0:
+            cooldown -= 1
+            continue
+        if at[i] <= 0:
+            continue
+
+        close = b4h[i, C]
+        if close <= 0:
+            continue
+
+        # 6-bar (24h) lookback return
+        ret_24h = (close - b4h[i - 6, C]) / b4h[i - 6, C]
+        if ret_24h >= -0.02:
+            continue  # need >2% drop
+
+        # Engulfing: prev bar bearish, current bar bullish + body > 1.5x prev
+        prev_body = b4h[i - 1, C] - b4h[i - 1, O]
+        curr_body = b4h[i, C] - b4h[i, O]
+
+        if prev_body >= 0:
+            continue  # prev must be bearish
+        if curr_body <= 0:
+            continue  # current must be bullish
+        if curr_body < abs(prev_body) * 1.2:
+            continue  # must engulf
+
+        # Volume confirmation
+        vol_avg = np.mean(b4h[max(0, i-20):i, V])
+        if vol_avg > 0 and b4h[i, V] < vol_avg * 1.0:
+            continue
+
+        # Entry, SL, TP
+        entry_raw = close
+        entry = entry_raw * (1.0 + SLIP_FRAC)
+        sl_dist = max(entry - b4h[i, L], at[i] * 1.0, entry * 0.005)
+        stop = entry - sl_dist
+        tp = entry + sl_dist * 2.5
+
+        if stop <= 0 or tp <= 0:
+            continue
+
+        outcome = "TIMEOUT"
+        pnl = 0.0
+        hold = 0
+        for k in range(i + 1, min(i + 1 + max_hold, n)):
+            hold += 1
+            if b4h[k, L] <= stop:
+                outcome = "SL"; pnl = -1.0; break
+            if b4h[k, H] >= tp:
+                outcome = "TP"; pnl = 2.5; break
+        if outcome == "TIMEOUT" and hold > 0:
+            lp = b4h[min(i + max_hold, n - 1), C]
+            pnl = (lp - entry) / sl_dist
+
+        pnl -= _costs_in_R(sl_dist, entry, hold, bar_minutes=240)
+        trades.append(Trade(symbol=symbol, strategy="bull_engulf",
+                            direction="LONG", bar_idx=i,
+                            entry=entry, stop=stop, tp=tp,
+                            outcome=outcome, pnl_r=round(pnl, 4)))
+        cooldown = 3  # 12h cooldown
+
+    return trades
+
+
+def run_vol_climax(symbol, data, btc_data,
+                   from_ts=0, to_ts=9999999999999, mc_threshold=0.0):
+    """Volume Climax Bottom: highest volume in 50 bars + bullish reversal
+    candle after a downtrend.
+
+    Data scan: 47 trades (4H), 78.7% WR, t-stat +3.3, edge +2.70%.
+    SL = below climax candle low, TP = 3R.
+    """
+    b4h = data.get(f"{symbol}:4h")
+    if b4h is None or len(b4h) < 100:
+        return []
+
+    n = len(b4h)
+    tr = np.maximum(b4h[1:, H] - b4h[1:, L],
+                    np.maximum(np.abs(b4h[1:, H] - b4h[:-1, C]),
+                               np.abs(b4h[1:, L] - b4h[:-1, C])))
+    at = np.full(n, 0.0)
+    at[14] = np.mean(tr[:14])
+    for i in range(15, n):
+        at[i] = (at[i-1] * 13 + tr[i-1]) / 14
+
+    # Volume MA
+    vol_ma = np.full(n, 0.0)
+    for i in range(20, n):
+        vol_ma[i] = np.mean(b4h[i-20:i, V])
+
+    trades = []
+    cooldown = 0
+    max_hold = 12  # 2 days
+
+    for i in range(55, n - max_hold):
+        ts_ms = int(b4h[i, TS])
+        if ts_ms < from_ts or ts_ms > to_ts:
+            continue
+        if cooldown > 0:
+            cooldown -= 1
+            continue
+        if at[i] <= 0:
+            continue
+
+        close = b4h[i, C]
+        if close <= 0 or vol_ma[i] <= 0:
+            continue
+
+        # Volume climax: highest volume in 50 bars AND > 3x average
+        max_vol_50 = np.max(b4h[max(0, i-50):i, V])
+        if b4h[i, V] <= max_vol_50:
+            continue  # not the highest
+        if b4h[i, V] < vol_ma[i] * 3:
+            continue  # not extreme enough
+
+        # After downtrend: 6-bar return < -3%
+        ret = (close - b4h[i - 6, C]) / b4h[i - 6, C]
+        if ret >= -0.03:
+            continue
+
+        # Bullish reversal: close > open
+        if b4h[i, C] <= b4h[i, O]:
+            continue
+
+        # Entry, SL, TP
+        entry_raw = close
+        entry = entry_raw * (1.0 + SLIP_FRAC)
+        sl_dist = max(entry - b4h[i, L], at[i] * 1.0, entry * 0.005)
+        stop = entry - sl_dist
+        tp = entry + sl_dist * 3.0
+
+        if stop <= 0 or tp <= 0:
+            continue
+
+        outcome = "TIMEOUT"
+        pnl = 0.0
+        hold = 0
+        for k in range(i + 1, min(i + 1 + max_hold, n)):
+            hold += 1
+            if b4h[k, L] <= stop:
+                outcome = "SL"; pnl = -1.0; break
+            if b4h[k, H] >= tp:
+                outcome = "TP"; pnl = 3.0; break
+        if outcome == "TIMEOUT" and hold > 0:
+            lp = b4h[min(i + max_hold, n - 1), C]
+            pnl = (lp - entry) / sl_dist
+
+        pnl -= _costs_in_R(sl_dist, entry, hold, bar_minutes=240)
+        trades.append(Trade(symbol=symbol, strategy="vol_climax",
+                            direction="LONG", bar_idx=i,
+                            entry=entry, stop=stop, tp=tp,
+                            outcome=outcome, pnl_r=round(pnl, 4)))
+        cooldown = 6  # 24h cooldown
+
+    return trades
+
+
 RUNNERS: dict = {
     "fvg":                    run_fvg,
     "ema_pullback":           run_ema_pullback,
@@ -1943,6 +2233,9 @@ RUNNERS: dict = {
     "breakout_retest":        run_breakout_retest,
     "breakout_retest_tp1":    partial(run_breakout_retest, rr_ratio=1.5),
     "breakout_retest_tp2":    partial(run_breakout_retest, rr_ratio=3.0),
+    "dump_hammer":            run_dump_hammer,
+    "bull_engulf":            run_bull_engulf,
+    "vol_climax":             run_vol_climax,
 }
 
 
@@ -1962,6 +2255,9 @@ _STRATEGY_CFG_KEY: dict[str, str] = {
     "wyckoff_upthrust_v2":    "wyckoff_spring",
     "cme_gap":                "fvg",          # no dedicated block — shares fvg default
     "breakout_retest":        "microrange",   # shares microrange config block
+    "dump_hammer":            "fvg",
+    "bull_engulf":            "fvg",
+    "vol_climax":             "fvg",
     "breakout_retest_tp1":    "microrange",
     "breakout_retest_tp2":    "microrange",
 }
