@@ -385,7 +385,7 @@ breakout_retest:
   min_width_pct: 0.001
   max_width_pct: 0.02
   atr_mult_max: 3.0
-  vol_spike_mult: 1.1
+  vol_spike_mult: 1.0          # was 1.1 — VPS logs show vol_ok=False on every breakout in quiet market
   retest_bars: 12
   sl_atr_mult: 1.3
   rr_ratio: 2.2
@@ -393,11 +393,11 @@ breakout_retest:
   max_trades_per_day: 6
   max_positions: 3
   check_interval_secs: 30
-  exhaustion_pct: 0.025
+  exhaustion_pct: 0.10          # was 0.025 — walk-forward proved removing helps OOS (+$198k)
   exhaustion_bars: 6
-  max_boundary_touches: 4
-  require_breakout_confirm: true
-  min_retest_body_ratio: 0.4
+  max_boundary_touches: 99      # was 4 — VPS rejects every tight range as "exhausted" (8/8 touches in 8 bars)
+  require_breakout_confirm: false  # was true — walk-forward proved removing helps OOS (+$105k)
+  min_retest_body_ratio: 0.0    # was 0.4 — walk-forward proved removing helps OOS (+$138k)
   crash_cooldown_pct: 1.5
   crash_cooldown_hours: 4
   max_entries_per_30min: 2
