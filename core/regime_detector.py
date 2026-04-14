@@ -289,8 +289,15 @@ class RegimeDetector:
                 self._range_exit_countdown[symbol] = self._BREAKOUT_WINDOW
                 self._range_bounds_at_exit[symbol] = (float(rng_high), float(rng_low))
 
-        # ── Step 6: Range size confirmation ──────────────────────────────────
-        if currently_ranging and self._is_tight_range(symbol, cache, range_size_max):
+        # ── Step 6: Range size confirmation + ALWAYS set range bounds ───────
+        # Range bounds (range_high/low in cache) are required by wyckoff_spring,
+        # wyckoff_upthrust, and other range scorers regardless of current regime.
+        # Always compute and set them — if 4H is tight, return RANGE; otherwise
+        # set loose bounds so scorers can still find structural levels.
+        tight_ok = self._is_tight_range(symbol, cache, range_size_max)
+        if not tight_ok:
+            self._set_loose_range_bounds(symbol, cache)
+        if currently_ranging and tight_ok:
             return Regime.RANGE
 
         # ── Step 7: Breakout window (only active for _BREAKOUT_WINDOW bars
@@ -423,6 +430,24 @@ class RegimeDetector:
         return self._breakout_direction.get(symbol, "NEUTRAL")
 
     # ── ADX computation ───────────────────────────────────────────────────────
+
+    def _set_loose_range_bounds(self, symbol: str, cache) -> None:
+        """Set range_high/low in cache from 20-bar 4H window without tightness check.
+
+        Used when macro_ranging is True but 4H range exceeds tight threshold.
+        Wyckoff spring/upthrust scorers need range bounds to detect setups —
+        they apply their own depth/volume filters, so a "loose" range is OK
+        as long as the bounds are real recent swing extremes.
+        """
+        ohlcv = cache.get_ohlcv(symbol, window=self._RANGE_4H_BARS, tf="4h")
+        if len(ohlcv) < 10:
+            return
+        rng_high = max(c["h"] for c in ohlcv)
+        rng_low  = min(c["l"] for c in ohlcv)
+        if rng_high > 0 and rng_low > 0 and rng_high > rng_low:
+            cache.set_range_high(symbol, rng_high)
+            cache.set_range_low(symbol, rng_low)
+            cache.set_range_start_timestamp(symbol, ohlcv[0]["ts"])
 
     def _is_macro_range(self, symbol: str, cache,
                         max_range_pct: float, min_move_pct: float) -> bool:
